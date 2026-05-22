@@ -8,7 +8,7 @@
     <style>
         body { overflow: auto; }
         .benchmark-container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
             padding: 20px;
         }
@@ -49,6 +49,31 @@
         .benchmark-actions button.primary:hover {
             background: #3a8fbf;
         }
+        .config-bar {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 12px 15px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+        }
+        .config-bar label {
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+        .config-bar select, .config-bar input {
+            padding: 6px 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 12px;
+        }
+        .config-bar select:focus, .config-bar input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
         .category-tabs {
             display: flex;
             gap: 8px;
@@ -81,7 +106,7 @@
         }
         .benchmark-summary {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
             gap: 15px;
             margin-bottom: 20px;
         }
@@ -90,16 +115,52 @@
             padding: 15px;
             border-radius: 6px;
             text-align: center;
+            position: relative;
         }
+        .summary-card.excellent { border-left: 3px solid var(--accent-green); }
+        .summary-card.good { border-left: 3px solid #63b3ed; }
+        .summary-card.medium { border-left: 3px solid var(--accent-orange); }
+        .summary-card.poor { border-left: 3px solid var(--accent-red); }
         .summary-card .value {
-            font-size: 24px;
+            font-size: 22px;
             font-weight: bold;
-            color: var(--accent-blue);
         }
+        .summary-card.excellent .value { color: var(--accent-green); }
+        .summary-card.good .value { color: #63b3ed; }
+        .summary-card.medium .value { color: var(--accent-orange); }
+        .summary-card.poor .value { color: var(--accent-red); }
         .summary-card .label {
             font-size: 11px;
             color: var(--text-dim);
             margin-top: 4px;
+        }
+        .progress-bar-container {
+            margin-bottom: 20px;
+        }
+        .progress-bar-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            margin-bottom: 6px;
+        }
+        .progress-bar-header .task-name {
+            color: var(--text-dim);
+        }
+        .progress-bar-header .percent {
+            font-weight: bold;
+            color: var(--accent-blue);
+        }
+        .progress-bar {
+            height: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-blue), #63b3ed);
+            border-radius: 4px;
+            transition: width 0.3s ease;
         }
         .task-list {
             border: 1px solid var(--border-color);
@@ -108,42 +169,51 @@
         }
         .task-item {
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             padding: 12px 15px;
             border-bottom: 1px solid var(--border-color);
             background: var(--bg-primary);
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .task-item:hover {
+            background: var(--bg-hover);
         }
         .task-item:last-child {
             border-bottom: none;
         }
         .task-item .status {
-            width: 24px;
-            height: 24px;
+            width: 28px;
+            height: 28px;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             margin-right: 12px;
-            font-size: 12px;
+            font-size: 14px;
+            flex-shrink: 0;
         }
         .task-item .status.pass {
             background: rgba(62, 207, 110, 0.15);
-            color: var(--accent-green);
         }
         .task-item .status.fail {
             background: rgba(239, 95, 95, 0.15);
-            color: var(--accent-red);
         }
         .task-item .info {
             flex: 1;
+            min-width: 0;
         }
         .task-item .task-id {
-            font-size: 12px;
+            font-size: 11px;
             color: var(--text-dim);
+            text-transform: uppercase;
         }
-        .task-item .task-name {
+        .task-item .task-desc {
             font-size: 13px;
             margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         .task-item .task-meta {
             display: flex;
@@ -153,13 +223,54 @@
             color: var(--text-muted);
         }
         .task-item .score {
-            font-size: 16px;
+            font-size: 18px;
             font-weight: bold;
-            margin-right: 20px;
+            margin-left: 15px;
+            flex-shrink: 0;
         }
         .task-item .score.good { color: var(--accent-green); }
         .task-item .score.bad { color: var(--accent-red); }
         .task-item .score.medium { color: var(--accent-orange); }
+        .task-item .expand-icon {
+            margin-left: 10px;
+            font-size: 12px;
+            color: var(--text-dim);
+            transition: transform 0.2s;
+        }
+        .task-item.expanded .expand-icon {
+            transform: rotate(90deg);
+        }
+        .task-detail {
+            display: none;
+            padding: 12px;
+            background: var(--bg-tertiary);
+            border-top: 1px solid var(--border-color);
+        }
+        .task-item.expanded + .task-detail {
+            display: block;
+        }
+        .task-detail-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        .task-detail-section h4 {
+            font-size: 11px;
+            color: var(--text-dim);
+            margin: 0 0 6px 0;
+            text-transform: uppercase;
+        }
+        .task-detail-section pre {
+            background: var(--bg-primary);
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            overflow-x: auto;
+            max-height: 150px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin: 0;
+        }
         .history-section {
             margin-top: 30px;
         }
@@ -185,13 +296,61 @@
         .history-table tr:hover td {
             background: var(--bg-secondary);
         }
+        .pass-rate-bar {
+            width: 60px;
+            height: 6px;
+            background: var(--bg-tertiary);
+            border-radius: 3px;
+            overflow: hidden;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+        .pass-rate-fill {
+            height: 100%;
+            border-radius: 3px;
+        }
+        .compare-section {
+            margin-top: 30px;
+            padding: 20px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+        }
+        .compare-section h2 {
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+        .compare-chart {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        .compare-card {
+            background: var(--bg-tertiary);
+            padding: 15px;
+            border-radius: 6px;
+        }
+        .compare-card .provider {
+            font-size: 13px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .compare-card .metric {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+        .compare-card .metric .value {
+            font-weight: bold;
+        }
         .progress-overlay {
             position: fixed;
             top: 0;
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0,0,0,0.5);
+            background: rgba(0,0,0,0.6);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -202,6 +361,7 @@
             padding: 30px 40px;
             border-radius: 10px;
             text-align: center;
+            min-width: 300px;
         }
         .progress-box .spinner {
             width: 40px;
@@ -213,6 +373,11 @@
             margin: 0 auto 15px;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+        .progress-box .current-task {
+            font-size: 13px;
+            color: var(--text-dim);
+            margin-top: 10px;
+        }
         .toast {
             position: fixed;
             bottom: 20px;
@@ -238,24 +403,67 @@
         <div class="benchmark-header">
             <h1>📊 评估框架</h1>
             <div class="benchmark-actions">
-                <button class="primary" onclick="runAllBenchmarks()">▶ 运行全部</button>
-                <button onclick="runCategory('code')">代码类</button>
-                <button onclick="runCategory('tool_use')">工具类</button>
+                <button class="primary" onclick="runBenchmarks()">▶ 运行评估</button>
                 <button onclick="loadHistory()">刷新历史</button>
             </div>
         </div>
 
+        <div class="config-bar">
+            <div>
+                <label>Provider:</label>
+                <select id="providerSelect">
+                    <option value="">当前配置</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="kimi">Kimi</option>
+                    <option value="minimax">MiniMax</option>
+                    <option value="qwen">Qwen</option>
+                    <option value="glm">GLM</option>
+                </select>
+            </div>
+            <div>
+                <label>Model:</label>
+                <input type="text" id="modelInput" placeholder="留空使用当前配置">
+            </div>
+            <div>
+                <label>分类:</label>
+                <select id="categorySelect">
+                    <option value="">全部</option>
+                    <option value="code">代码</option>
+                    <option value="tool_use">工具使用</option>
+                    <option value="reasoning">推理</option>
+                    <option value="regression">回归</option>
+                </select>
+            </div>
+        </div>
+
         <div class="category-tabs">
-            <button class="active" onclick="selectCategory(null, this)">全部</button>
-            <button onclick="selectCategory('code', this)">代码</button>
-            <button onclick="selectCategory('tool_use', this)">工具使用</button>
-            <button onclick="selectCategory('reasoning', this)">推理</button>
-            <button onclick="selectCategory('regression', this)">回归</button>
+            <button class="active" onclick="filterCategory(null, this)">全部</button>
+            <button onclick="filterCategory('code', this)">代码</button>
+            <button onclick="filterCategory('tool_use', this)">工具使用</button>
+            <button onclick="filterCategory('reasoning', this)">推理</button>
+            <button onclick="filterCategory('regression', this)">回归</button>
         </div>
 
         <div id="resultsSection" class="benchmark-results" style="display:none;">
+            <div class="progress-bar-container" id="progressContainer" style="display:none;">
+                <div class="progress-bar-header">
+                    <span class="task-name" id="progressTaskName">准备中...</span>
+                    <span class="percent" id="progressPercent">0%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-bar-fill" id="progressBarFill" style="width:0%"></div>
+                </div>
+            </div>
+
             <div class="benchmark-summary" id="summaryGrid"></div>
             <div class="task-list" id="taskList"></div>
+        </div>
+
+        <div class="compare-section" id="compareSection" style="display:none;">
+            <h2>📈 Provider 对比</h2>
+            <div class="compare-chart" id="compareChart"></div>
         </div>
 
         <div class="history-section">
@@ -268,6 +476,7 @@
         <div class="progress-box">
             <div class="spinner"></div>
             <div id="progressText">运行中...</div>
+            <div class="current-task" id="currentTaskName"></div>
         </div>
     </div>
 
@@ -276,6 +485,7 @@
     <script>
         let currentCategory = null;
         let currentResult = null;
+        let runningTasks = [];
 
         function showToast(message, type = 'success') {
             const toast = document.getElementById('toast');
@@ -285,8 +495,9 @@
             setTimeout(() => toast.style.display = 'none', 3000);
         }
 
-        function showProgress(text) {
+        function showProgress(text, taskName) {
             document.getElementById('progressText').textContent = text;
+            document.getElementById('currentTaskName').textContent = taskName || '';
             document.getElementById('progressOverlay').style.display = 'flex';
         }
 
@@ -294,65 +505,78 @@
             document.getElementById('progressOverlay').style.display = 'none';
         }
 
-        function selectCategory(cat, btn) {
+        function filterCategory(cat, btn) {
             currentCategory = cat;
             document.querySelectorAll('.category-tabs button').forEach(b => b.classList.remove('active'));
             if (btn) btn.classList.add('active');
         }
 
-        async function runAllBenchmarks() {
-            showProgress('运行 benchmark...');
+        function buildUrl() {
+            const provider = document.getElementById('providerSelect').value;
+            const model = document.getElementById('modelInput').value;
+            const category = currentCategory || document.getElementById('categorySelect').value;
+
+            let params = [];
+            if (provider) params.push(`provider=${provider}`);
+            if (model) params.push(`model=${model}`);
+            if (category) params.push(`category=${category}`);
+
+            return '/api/benchmark' + (params.length ? '?' + params.join('&') : '');
+        }
+
+        async function runBenchmarks() {
+            showProgress('加载 benchmark...', '');
+            runningTasks = [];
+
+            // Show real-time progress
+            document.getElementById('resultsSection').style.display = 'block';
+            document.getElementById('progressContainer').style.display = 'block';
+
             try {
-                const url = currentCategory
-                    ? `/api/benchmark?category=${currentCategory}`
-                    : '/api/benchmark';
+                const url = buildUrl();
                 const res = await fetch(url);
+                if (!res.ok) throw new Error('请求失败');
                 const data = await res.json();
                 currentResult = data;
                 renderResults(data);
-                showToast(`完成: ${data.tasks_passed}/${data.tasks_total} 通过`, 'success');
+                showToast(`完成: ${data.tasks_passed}/${data.tasks_total} 通过 (${(data.pass_rate * 100).toFixed(1)}%)`, 'success');
             } catch (e) {
                 showToast('运行失败: ' + e.message, 'error');
             } finally {
                 hideProgress();
+                document.getElementById('progressContainer').style.display = 'none';
                 loadHistory();
             }
         }
 
-        async function runCategory(cat) {
-            selectCategory(cat, null);
-            showProgress(`运行 ${cat} 类 benchmark...`);
-            try {
-                const res = await fetch(`/api/benchmark?category=${cat}`);
-                const data = await res.json();
-                currentResult = data;
-                renderResults(data);
-                showToast(`完成: ${data.tasks_passed}/${data.tasks_total} 通过`, 'success');
-            } catch (e) {
-                showToast('运行失败: ' + e.message, 'error');
-            } finally {
-                hideProgress();
-                loadHistory();
-            }
+        function updateProgress(taskIndex, taskName, total) {
+            const percent = ((taskIndex / total) * 100).toFixed(0);
+            document.getElementById('progressTaskName').textContent = `任务 ${taskIndex + 1}/${total}: ${taskName}`;
+            document.getElementById('progressPercent').textContent = percent + '%';
+            document.getElementById('progressBarFill').style.width = percent + '%';
         }
 
         function renderResults(data) {
             document.getElementById('resultsSection').style.display = 'block';
 
-            // Summary cards
-            const passRate = (data.pass_rate * 100).toFixed(1);
-            const avgScore = (data.avg_score * 100).toFixed(1);
+            // Summary cards with color coding
+            const passRate = data.pass_rate * 100;
+            const avgScore = data.avg_score * 100;
+
+            let passCardClass = passRate >= 80 ? 'excellent' : passRate >= 60 ? 'good' : passRate >= 40 ? 'medium' : 'poor';
+            let scoreCardClass = avgScore >= 80 ? 'excellent' : avgScore >= 60 ? 'good' : avgScore >= 40 ? 'medium' : 'poor';
+
             document.getElementById('summaryGrid').innerHTML = `
-                <div class="summary-card">
+                <div class="summary-card ${passCardClass}">
                     <div class="value">${data.tasks_passed}/${data.tasks_total}</div>
                     <div class="label">通过任务</div>
                 </div>
-                <div class="summary-card">
-                    <div class="value">${passRate}%</div>
+                <div class="summary-card ${passCardClass}">
+                    <div class="value">${passRate.toFixed(1)}%</div>
                     <div class="label">通过率</div>
                 </div>
-                <div class="summary-card">
-                    <div class="value">${avgScore}%</div>
+                <div class="summary-card ${scoreCardClass}">
+                    <div class="value">${avgScore.toFixed(1)}%</div>
                     <div class="label">平均分</div>
                 </div>
                 <div class="summary-card">
@@ -360,31 +584,56 @@
                     <div class="label">总 Tokens</div>
                 </div>
                 <div class="summary-card">
-                    <div class="value">$${data.total_cost_usd.toFixed(6)}</div>
+                    <div class="value">$${data.total_cost_usd.toFixed(4)}</div>
                     <div class="label">总成本</div>
                 </div>
                 <div class="summary-card">
-                    <div class="value">${(data.total_duration_ms/1000).toFixed(1)}s</div>
+                    <div class="value">${(data.total_duration_ms / 1000).toFixed(1)}s</div>
                     <div class="label">耗时</div>
                 </div>
             `;
 
             // Task list
-            document.getElementById('taskList').innerHTML = data.task_results.map(t => `
-                <div class="task-item">
+            document.getElementById('taskList').innerHTML = data.task_results.map((t, i) => `
+                <div class="task-item" onclick="toggleTaskDetail(this)">
                     <div class="status ${t.passed ? 'pass' : 'fail'}">${t.passed ? '✅' : '❌'}</div>
                     <div class="info">
                         <div class="task-id">${t.task_id}</div>
-                        <div class="task-name">${escapeHtml(t.actual_output.substring(0, 100))}...</div>
+                        <div class="task-desc">${escapeHtml(t.actual_output.substring(0, 80))}...</div>
                         <div class="task-meta">
-                            <span>Steps: ${t.steps_used}</span>
-                            <span>Tokens: ${t.tokens_used.toLocaleString()}</span>
-                            <span>${t.validation_details}</span>
+                            <span>⏱ ${t.duration_ms}ms</span>
+                            <span>📊 ${t.steps_used} 步</span>
+                            <span>🔤 ${t.tokens_used.toLocaleString()} tokens</span>
                         </div>
                     </div>
                     <div class="score ${t.score >= 0.7 ? 'good' : t.score >= 0.4 ? 'medium' : 'bad'}">${(t.score * 100).toFixed(0)}%</div>
+                    <div class="expand-icon">▶</div>
+                </div>
+                <div class="task-detail">
+                    <div class="task-detail-grid">
+                        <div class="task-detail-section">
+                            <h4>验证结果</h4>
+                            <pre>${escapeHtml(t.validation_details)}</pre>
+                        </div>
+                        <div class="task-detail-section">
+                            <h4>实际输出</h4>
+                            <pre>${escapeHtml(t.actual_output.substring(0, 500))}</pre>
+                        </div>
+                        <div class="task-detail-section">
+                            <h4>期望输出</h4>
+                            <pre>${escapeHtml(t.expected_output || 'N/A')}</pre>
+                        </div>
+                        <div class="task-detail-section">
+                            <h4>工具调用</h4>
+                            <pre>${t.tool_calls ? t.tool_calls.map(tc => tc.name).join(' → ') : '无'}</pre>
+                        </div>
+                    </div>
                 </div>
             `).join('');
+        }
+
+        function toggleTaskDetail(item) {
+            item.classList.toggle('expanded');
         }
 
         async function loadHistory() {
@@ -407,27 +656,31 @@
                     <thead>
                         <tr>
                             <th>时间</th>
-                            <th>ID</th>
                             <th>Provider</th>
                             <th>Model</th>
                             <th>任务</th>
-                            <th>通过</th>
                             <th>通过率</th>
                             <th>均分</th>
                             <th>成本</th>
+                            <th>耗时</th>
                         </tr>
                     </thead>
                     <tbody>
                         ${results.map(r => `
                             <tr>
                                 <td>${formatTime(r.timestamp)}</td>
-                                <td>${r.run_id}</td>
                                 <td>${r.provider}</td>
                                 <td>${r.model}</td>
                                 <td>${r.tasks_passed}/${r.tasks_total}</td>
-                                <td style="color:${r.pass_rate >= 0.8 ? 'var(--accent-green)' : r.pass_rate >= 0.5 ? 'var(--accent-orange)' : 'var(--accent-red)'}">${(r.pass_rate * 100).toFixed(1)}%</td>
-                                <td>${(r.avg_score * 100).toFixed(1)}%</td>
-                                <td>$${r.total_cost_usd.toFixed(6)}</td>
+                                <td>
+                                    <div class="pass-rate-bar">
+                                        <div class="pass-rate-fill" style="width:${r.pass_rate * 100}%;background:${getPassRateColor(r.pass_rate)}"></div>
+                                    </div>
+                                    ${(r.pass_rate * 100).toFixed(0)}%
+                                </td>
+                                <td style="color:${getScoreColor(r.avg_score)}">${(r.avg_score * 100).toFixed(1)}%</td>
+                                <td>$${r.total_cost_usd.toFixed(4)}</td>
+                                <td>${((r.total_duration_ms || 0) / 1000).toFixed(1)}s</td>
                             </tr>
                         `).join('')}
                     </tbody>
@@ -435,7 +688,22 @@
             `;
         }
 
+        function getPassRateColor(rate) {
+            if (rate >= 0.8) return 'var(--accent-green)';
+            if (rate >= 0.6) return '#63b3ed';
+            if (rate >= 0.4) return 'var(--accent-orange)';
+            return 'var(--accent-red)';
+        }
+
+        function getScoreColor(score) {
+            if (score >= 0.8) return 'var(--accent-green)';
+            if (score >= 0.6) return '#63b3ed';
+            if (score >= 0.4) return 'var(--accent-orange)';
+            return 'var(--accent-red)';
+        }
+
         function escapeHtml(text) {
+            if (!text) return '';
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
