@@ -1,0 +1,15 @@
+{
+  "id": "prime_check_001",
+  "category": "reasoning",
+  "task": "Write a Python script that checks if a number is prime, then test it with 17 and 18",
+  "expected_output": "17 is prime",
+  "validation": {
+    "type": "contains",
+    "value": "17 is prime"
+  },
+  "metadata": {
+    "difficulty": "medium",
+    "expected_steps": 3,
+    "description": "Math reasoning with code execution"
+  }
+}

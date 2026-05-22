@@ -1,0 +1,16 @@
+{
+  "id": "multi_file_ops_001",
+  "category": "regression",
+  "task": "Create two files: 'a.txt' with 'Hello' and 'b.txt' with 'World', then read both files and print their contents combined",
+  "expected_output": "HelloWorld",
+  "validation": {
+    "type": "tool_calls",
+    "expected": ["write_file", "write_file", "read_file"],
+    "allow_extra": true
+  },
+  "metadata": {
+    "difficulty": "easy",
+    "expected_steps": 5,
+    "description": "Multi-file create and read"
+  }
+}

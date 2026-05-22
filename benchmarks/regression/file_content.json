@@ -1,0 +1,15 @@
+{
+  "id": "file_content_001",
+  "category": "regression",
+  "task": "Write a Python script that creates a file 'data.json' with content {\"name\": \"test\", \"value\": 42}, then read it back and print the values",
+  "expected_output": "test",
+  "validation": {
+    "type": "contains",
+    "value": "test"
+  },
+  "metadata": {
+    "difficulty": "medium",
+    "expected_steps": 4,
+    "description": "JSON file creation and reading"
+  }
+}

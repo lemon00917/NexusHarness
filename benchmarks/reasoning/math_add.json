@@ -1,0 +1,15 @@
+{
+  "id": "math_add_001",
+  "category": "reasoning",
+  "task": "Calculate 123 + 456 + 789, then write the result to a file called 'result.txt' and read it back",
+  "expected_output": "1368",
+  "validation": {
+    "type": "contains",
+    "value": "1368"
+  },
+  "metadata": {
+    "difficulty": "easy",
+    "expected_steps": 3,
+    "description": "Basic arithmetic and file operations"
+  }
+}

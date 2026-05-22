@@ -1,0 +1,15 @@
+{
+  "id": "code_quality_001",
+  "category": "reasoning",
+  "task": "Write a Python function that calculates factorial recursively, then call it with 5 and print the result. Also explain why recursion is useful here.",
+  "expected_output": "120",
+  "validation": {
+    "type": "contains",
+    "value": "120"
+  },
+  "metadata": {
+    "difficulty": "medium",
+    "expected_steps": 3,
+    "description": "Code generation with explanation"
+  }
+}
