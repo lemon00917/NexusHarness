@@ -23,28 +23,38 @@ from typing import Optional
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 from microharness import config
-from microharness.retry import get_retry_executor
-from microharness.harness import HarnessState, build_harness
-from microharness.guard import should_confirm, SKILL_SAFETY_LEVELS, register_skill_safety_levels
-from microharness.memory import load_memories, extract_and_save_memory
-from microharness.prompts import get_system_prompt
-from microharness.skill_manager import load_skills, get_skill_safety_map, get_skills
-from microharness.token_tracker import token_stats, get_cost
-from microharness.audit import log_audit, get_audit_records
-from microharness.config import get_config, save_config
-from microharness.replay_log import get_replay_logger, load_replay_from_disk
+from microharness.agent.retry import get_retry_executor
+from microharness.agent.harness import HarnessState, build_harness
+from microharness.agent.guard import should_confirm, SKILL_SAFETY_LEVELS, register_skill_safety_levels
+from microharness.agent.tools import BUILTIN_SAFETY
+from microharness.memory.memory import load_memories, extract_and_save_memory
+from microharness.memory.replay_log import get_replay_logger, load_replay_from_disk
+from microharness.memory.session_manager import get_session_manager, SessionState
+from microharness.skills.skill_manager import load_skills, get_skill_safety_map, get_skills
+from microharness.observability.token_tracker import token_stats, get_cost
+from microharness.observability.audit import log_audit, get_audit_records
+from microharness.observability.evaluation import BenchmarkRunner, print_benchmark_result
+from microharness.config.config import get_config, save_config
+from microharness.config.prompts import get_system_prompt
+from microharness.rag.rag import rag
+from microharness.rag.rag_config import load_config, save_config, RAGConfig
+from microharness.rag.document_parser import parse_document
+from microharness.agent.tools import TOOLS as TOOLS
 
 # Ensure utf-8 output
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
 app = FastAPI(title="NexusHarness", version="0.1.0")
+
+# Load RAG index at startup
+rag.load_index()
 
 # Mount static files
 static_dir = Path(__file__).parent / "static"
@@ -55,12 +65,6 @@ if static_dir.exists():
 templates_dir = Path(__file__).parent / "templates"
 
 
-# ──────────────────────────────────────────────────
-# Global state for human-in-the-loop
-# ──────────────────────────────────────────────────
-
-from microharness.session_manager import get_session_manager, SessionState
-
 # Per-session approval tracking (approval_id = f"{session_id}_{step}")
 pending_approvals: dict[str, dict] = {}
 approval_results: dict[str, bool] = {}
@@ -70,7 +74,7 @@ disabled_skills: set[str] = set()  # Track disabled skill names
 
 def get_active_tools():
     """Return tools from registry filtered by disabled_skills."""
-    from microharness.tool_registry import get_registry
+    from microharness.agent.tool_registry import get_registry
     registry = get_registry()
     return [t for t in registry.list(include_disabled=False) if t.name not in disabled_skills]
 
@@ -170,7 +174,7 @@ async def run_harness_async(harness, init_state: HarnessState, session_id: str, 
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
 
-            system = SystemMessage(content=get_system_prompt())
+            system = SystemMessage(content=get_system_prompt(task))
             messages = [system] + state["messages"]
 
             llm = config.get_llm(config.MAIN_MODEL).bind_tools(get_active_tools())
@@ -431,6 +435,24 @@ async def serve_benchmark_page():
     return {"error": "benchmark.html not found"}
 
 
+@app.get("/templates/rag.html")
+async def serve_rag_page():
+    """Serve the RAG knowledge base page."""
+    html_path = templates_dir / "rag.html"
+    if html_path.exists():
+        return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+    return {"error": "rag.html not found"}
+
+
+@app.get("/templates/rag_config.html")
+async def serve_rag_config_page():
+    """Serve the RAG configuration page."""
+    html_path = templates_dir / "rag_config.html"
+    if html_path.exists():
+        return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+    return {"error": "rag_config.html not found"}
+
+
 @app.get("/api/run")
 async def run_task_get(session_id: str = "default", task: str = ""):
     """
@@ -483,7 +505,7 @@ async def clear_conversations():
 @app.get("/api/skills")
 async def get_skills_list():
     """Get all installed skills."""
-    from microharness.skill_manager import get_skill_safety_map
+    from microharness.skills.skill_manager import get_skill_safety_map
     skills = get_skills()
     safety_map = get_skill_safety_map()
 
@@ -847,7 +869,7 @@ async def get_replay_step(session_id: str, step: int):
 @app.get("/api/tools")
 async def list_tools():
     """List all registered tools."""
-    from microharness.tool_registry import get_registry
+    from microharness.agent.tool_registry import get_registry
     registry = get_registry()
     tools = []
     for t in registry.list(include_disabled=True):
@@ -863,7 +885,7 @@ async def list_tools():
 @app.get("/api/tools/{name}")
 async def get_tool(name: str):
     """Get tool details."""
-    from microharness.tool_registry import get_registry
+    from microharness.agent.tool_registry import get_registry
     registry = get_registry()
     tool = registry.get(name)
     if not tool:
@@ -881,7 +903,7 @@ async def get_tool(name: str):
 @app.get("/api/tools/{name}/schema")
 async def get_tool_schema(name: str):
     """Get tool JSON schema."""
-    from microharness.tool_registry import get_registry
+    from microharness.agent.tool_registry import get_registry
     registry = get_registry()
     schema = registry.get_schema(name)
     if not schema:
@@ -890,7 +912,12 @@ async def get_tool_schema(name: str):
 
 
 @app.get("/api/benchmark")
-async def run_benchmark(category: str = None, tasks: str = None):
+async def run_benchmark(
+    category: str = None,
+    tasks: str = None,
+    provider: str = None,
+    model: str = None,
+):
     """Run benchmark tasks via web API."""
     from microharness.evaluation import BenchmarkRunner, print_benchmark_result
     import asyncio
@@ -900,12 +927,114 @@ async def run_benchmark(category: str = None, tasks: str = None):
     runner = BenchmarkRunner()
     result = runner.run_benchmark(
         category=category,
-        provider=config.PROVIDER,
-        model=config.MAIN_MODEL,
+        provider=provider or config.PROVIDER,
+        model=model or config.MAIN_MODEL,
         benchmark_ids=task_ids,
     )
 
     return asdict(result)
+
+
+# ──────────────────────────────────────────────────
+# RAG API
+# ──────────────────────────────────────────────────
+
+@app.post("/api/rag/upload")
+async def upload_document(file: UploadFile, description: str = ""):
+    """Upload a document to the knowledge base."""
+    from microharness.rag.rag import rag
+    from microharness.document_parser import parse_document
+
+    # Read file content
+    content = await file.read()
+
+    # Parse document based on extension (handles HTML, PDF, MD, TXT, JSON)
+    text = parse_document(content, file.filename)
+
+    # Add to RAG index
+    metadata = {"description": description, "original_filename": file.filename}
+    doc_id = rag.add_document(text, file.filename, metadata)
+    rag.save_index()
+
+    return {"doc_id": doc_id, "filename": file.filename, "status": "success"}
+
+
+@app.get("/api/rag/documents")
+async def list_rag_documents():
+    """List all documents in the knowledge base."""
+    from microharness.rag.rag import rag
+    return {"documents": rag.list_documents()}
+
+
+@app.delete("/api/rag/documents/{doc_id}")
+async def delete_rag_document(doc_id: str):
+    """Delete a document from the knowledge base."""
+    from microharness.rag.rag import rag
+    success = rag.delete_document(doc_id)
+    if success:
+        rag.save_index()
+        return {"status": "success"}
+    return {"status": "error", "message": "Document not found"}, 404
+
+
+@app.get("/api/rag/search")
+async def search_rag(q: str, top_k: int = 3, vector_weight: float = None, bm25_weight: float = None):
+    """Search the knowledge base."""
+    from microharness.rag.rag import rag
+    from microharness.rag.rag_config import load_config
+
+    config = load_config()
+    # Use query params if provided, otherwise use config values
+    vw = vector_weight if vector_weight is not None else (config.vector_weight if config.search_mode == "hybrid" else 1.0)
+    bw = bm25_weight if bm25_weight is not None else (config.bm25_weight if config.search_mode == "hybrid" else 0.0)
+
+    results = rag.similarity_search(q, top_k, vw, bw)
+    return {
+        "results": [
+            {
+                "doc_id": r.doc_id,
+                "filename": r.filename,
+                "content": r.content,
+                "created_at": r.created_at,
+            }
+            for r in results
+        ]
+    }
+
+
+@app.get("/api/rag/config")
+async def get_rag_config():
+    """Get RAG configuration."""
+    from microharness.rag.rag_config import load_config
+    config = load_config()
+    return config.to_dict()
+
+
+@app.post("/api/rag/config")
+async def update_rag_config(request: Request):
+    """Update RAG configuration."""
+    from microharness.rag.rag_config import load_config, save_config, RAGConfig
+
+    data = await request.json()
+    config = load_config()
+
+    # Update fields
+    for key in ["chunk_mode", "chunk_size", "chunk_overlap", "search_mode", "vector_weight", "bm25_weight"]:
+        if key in data and hasattr(config, key):
+            setattr(config, key, data[key])
+
+    save_config(config)
+    return {"status": "success", "config": config.to_dict()}
+
+
+@app.get("/api/rag/preview_chunk")
+async def preview_chunk(text: str = ""):
+    """Preview how text would be chunked with current config."""
+    from microharness.rag.rag import rag
+    if not text:
+        return {"chunks": []}
+    chunks = rag.preview_chunking(text)
+    return {"chunks": chunks}
 
 
 @app.get("/api/benchmark/history")
@@ -941,7 +1070,7 @@ async def get_benchmark_history():
 @app.delete("/api/tools/{name}")
 async def unregister_tool(name: str):
     """Unregister a tool (built-in tools cannot be unregistered)."""
-    from microharness.tool_registry import get_registry
+    from microharness.agent.tool_registry import get_registry
     from microharness.tools import BUILTIN_SAFETY
     if name in BUILTIN_SAFETY:
         return {"error": "Cannot unregister built-in tool"}, 400
@@ -957,7 +1086,7 @@ async def unregister_tool(name: str):
 @app.post("/api/tools/{name}/enable")
 async def enable_tool(name: str):
     """Enable a tool."""
-    from microharness.tool_registry import get_registry
+    from microharness.agent.tool_registry import get_registry
     registry = get_registry()
     if registry.enable(name):
         disabled_skills.discard(name)
@@ -968,7 +1097,7 @@ async def enable_tool(name: str):
 @app.post("/api/tools/{name}/disable")
 async def disable_tool(name: str):
     """Disable a tool."""
-    from microharness.tool_registry import get_registry
+    from microharness.agent.tool_registry import get_registry
     registry = get_registry()
     if registry.disable(name):
         disabled_skills.add(name)

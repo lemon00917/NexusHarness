@@ -192,6 +192,51 @@ html, body {
     color: var(--accent-blue);
 }
 
+.tool-menu {
+    display: flex;
+    flex-direction: column;
+}
+
+.tool-menu-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 4px 0;
+    user-select: none;
+}
+
+.tool-menu-header:hover {
+    color: var(--text-primary);
+}
+
+.tool-menu-items {
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 0;
+}
+
+.tool-menu-items.open {
+    display: flex;
+}
+
+.tool-item {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-decoration: none;
+    padding: 5px 8px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.tool-item:hover {
+    background: var(--bg-tertiary);
+    color: var(--accent-blue);
+}
+
 .model-badge {
     font-size: 10px;
     padding: 3px 8px;

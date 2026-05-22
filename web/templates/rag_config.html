@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG 配置 - NexusHarness</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body { overflow: auto; }
+        .config-container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .config-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .config-header h1 {
+            font-size: 20px;
+            margin: 0;
+        }
+        .config-section {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .config-section h3 {
+            font-size: 14px;
+            margin: 0 0 15px 0;
+            color: var(--text-primary);
+        }
+        .config-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .config-row:last-child {
+            margin-bottom: 0;
+        }
+        .config-row label {
+            width: 120px;
+            font-size: 13px;
+            color: var(--text-dim);
+        }
+        .config-row input[type="number"] {
+            width: 100px;
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 13px;
+        }
+        .config-row input[type="range"] {
+            flex: 1;
+            max-width: 200px;
+            margin: 0 10px;
+        }
+        .config-row .weight-value {
+            width: 40px;
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+        .radio-group {
+            display: flex;
+            gap: 20px;
+        }
+        .radio-group label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: var(--text-primary);
+            cursor: pointer;
+            width: auto;
+        }
+        .radio-group input[type="radio"] {
+            width: auto;
+        }
+        .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .slider-row span {
+            font-size: 12px;
+            color: var(--text-dim);
+            min-width: 30px;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: var(--accent-blue);
+            color: white;
+        }
+        .btn-primary:hover {
+            opacity: 0.9;
+        }
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+        .btn-secondary:hover {
+            background: var(--border-color);
+        }
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 13px;
+            z-index: 1001;
+            animation: slideIn 0.3s ease;
+        }
+        .toast.success { border-color: var(--accent-green); }
+        .toast.error { border-color: var(--accent-red); }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        .preview-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border-color);
+        }
+        .preview-section textarea {
+            width: 100%;
+            height: 120px;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 13px;
+            resize: vertical;
+            margin-bottom: 10px;
+        }
+        .preview-result {
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            padding: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .preview-chunk {
+            padding: 8px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 12px;
+        }
+        .preview-chunk:last-child {
+            border-bottom: none;
+        }
+        .preview-chunk .chunk-info {
+            color: var(--text-dim);
+            margin-bottom: 4px;
+        }
+        .preview-chunk .chunk-content {
+            color: var(--text-primary);
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <div class="config-container">
+        <div class="config-header">
+            <h1>⚙️ RAG 配置</h1>
+            <button onclick="loadConfig()" style="padding:8px 16px;border:none;border-radius:6px;background:var(--bg-tertiary);cursor:pointer;">🔄 刷新</button>
+        </div>
+
+        <div class="config-section">
+            <h3>📄 文档分块</h3>
+            <div class="config-row">
+                <label>分块模式</label>
+                <div class="radio-group">
+                    <label><input type="radio" name="chunk_mode" value="length"> 按长度</label>
+                    <label><input type="radio" name="chunk_mode" value="chapter"> 按章节</label>
+                </div>
+            </div>
+            <div class="config-row" id="chunk_size_row">
+                <label>Chunk 大小</label>
+                <input type="number" id="chunk_size" min="500" max="5000" step="100" value="1500">
+                <span style="font-size:12px;color:var(--text-dim);margin-left:8px;">字符</span>
+            </div>
+            <div class="config-row" id="chunk_overlap_row">
+                <label>重叠长度</label>
+                <input type="number" id="chunk_overlap" min="0" max="500" step="50" value="200">
+                <span style="font-size:12px;color:var(--text-dim);margin-left:8px;">字符</span>
+            </div>
+        </div>
+
+        <div class="config-section">
+            <h3>🔍 检索模式</h3>
+            <div class="config-row">
+                <label>检索模式</label>
+                <div class="radio-group">
+                    <label><input type="radio" name="search_mode" value="vector"> 纯向量</label>
+                    <label><input type="radio" name="search_mode" value="hybrid"> 混合检索</label>
+                </div>
+            </div>
+            <div class="config-row" id="weights_row" style="display:none;">
+                <label>向量权重</label>
+                <div class="slider-row">
+                    <input type="range" id="vector_weight" min="0" max="1" step="0.1" value="0.7">
+                    <span id="vector_weight_val">0.7</span>
+                </div>
+            </div>
+            <div class="config-row" id="bm25_weights_row" style="display:none;">
+                <label>BM25权重</label>
+                <div class="slider-row">
+                    <input type="range" id="bm25_weight" min="0" max="1" step="0.1" value="0.3">
+                    <span id="bm25_weight_val">0.3</span>
+                </div>
+            </div>
+        </div>
+
+        <div style="display:flex;gap:10px;">
+            <button onclick="saveConfig()" class="btn btn-primary">💾 保存配置</button>
+            <button onclick="resetConfig()" class="btn btn-secondary">🔄 重置默认</button>
+        </div>
+
+        <div class="config-section preview-section">
+            <h3>🔬 分块预览</h3>
+            <textarea id="preview_text" placeholder="输入文本预览分块效果..."></textarea>
+            <div style="display:flex;gap:10px;margin-bottom:10px;">
+                <button onclick="previewChunks()" class="btn btn-secondary">预览分块</button>
+            </div>
+            <div class="preview-result" id="preview_result" style="display:none;">
+                <div id="preview_chunks"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast" style="display:none;"></div>
+
+    <script>
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast ${type}`;
+            toast.style.display = 'block';
+            setTimeout(() => toast.style.display = 'none', 3000);
+        }
+
+        async function loadConfig() {
+            try {
+                const res = await fetch('/api/rag/config');
+                const data = await res.json();
+                applyConfig(data);
+            } catch (e) {
+                showToast('加载配置失败: ' + e.message, 'error');
+            }
+        }
+
+        function applyConfig(config) {
+            // Chunk mode
+            document.querySelector(`input[name="chunk_mode"][value="${config.chunk_mode}"]`).checked = true;
+
+            // Chunk size/overlap
+            document.getElementById('chunk_size').value = config.chunk_size || 1500;
+            document.getElementById('chunk_overlap').value = config.chunk_overlap || 200;
+
+            // Search mode
+            document.querySelector(`input[name="search_mode"][value="${config.search_mode}"]`).checked = true;
+
+            // Weights
+            const vw = config.vector_weight || 0.7;
+            const bw = config.bm25_weight || 0.3;
+            document.getElementById('vector_weight').value = vw;
+            document.getElementById('bm25_weight').value = bw;
+            document.getElementById('vector_weight_val').textContent = vw;
+            document.getElementById('bm25_weight_val').textContent = bw;
+
+            // Show/hide weight inputs
+            toggleWeightInputs(config.search_mode);
+        }
+
+        function toggleWeightInputs(mode) {
+            const weightsRow = document.getElementById('weights_row');
+            const bm25Row = document.getElementById('bm25_weights_row');
+            if (mode === 'hybrid') {
+                weightsRow.style.display = 'flex';
+                bm25Row.style.display = 'flex';
+            } else {
+                weightsRow.style.display = 'none';
+                bm25Row.style.display = 'none';
+            }
+        }
+
+        async function saveConfig() {
+            const config = {
+                chunk_mode: document.querySelector('input[name="chunk_mode"]:checked').value,
+                chunk_size: parseInt(document.getElementById('chunk_size').value),
+                chunk_overlap: parseInt(document.getElementById('chunk_overlap').value),
+                search_mode: document.querySelector('input[name="search_mode"]:checked').value,
+                vector_weight: parseFloat(document.getElementById('vector_weight').value),
+                bm25_weight: parseFloat(document.getElementById('bm25_weight').value)
+            };
+
+            try {
+                const res = await fetch('/api/rag/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(config)
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    showToast('配置已保存', 'success');
+                } else {
+                    showToast('保存失败', 'error');
+                }
+            } catch (e) {
+                showToast('保存失败: ' + e.message, 'error');
+            }
+        }
+
+        function resetConfig() {
+            applyConfig({
+                chunk_mode: 'length',
+                chunk_size: 1500,
+                chunk_overlap: 200,
+                search_mode: 'vector',
+                vector_weight: 0.7,
+                bm25_weight: 0.3
+            });
+        }
+
+        async function previewChunks() {
+            const text = document.getElementById('preview_text').value.trim();
+            if (!text) {
+                showToast('请输入文本', 'error');
+                return;
+            }
+
+            try {
+                const res = await fetch(`/api/rag/preview_chunk?text=${encodeURIComponent(text)}`);
+                const data = await res.json();
+
+                const resultDiv = document.getElementById('preview_result');
+                const chunksDiv = document.getElementById('preview_chunks');
+
+                if (data.chunks && data.chunks.length > 0) {
+                    resultDiv.style.display = 'block';
+                    chunksDiv.innerHTML = data.chunks.map(chunk => `
+                        <div class="preview-chunk">
+                            <div class="chunk-info">Chunk ${chunk.chunk_index} - ${chunk.char_count} 字符</div>
+                            <div class="chunk-content">${escapeHtml(chunk.preview)}</div>
+                        </div>
+                    `).join('');
+                } else {
+                    chunksDiv.innerHTML = '<div style="padding:10px;color:var(--text-dim);">无分块结果</div>';
+                }
+            } catch (e) {
+                showToast('预览失败: ' + e.message, 'error');
+            }
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Event listeners
+        document.querySelectorAll('input[name="search_mode"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                toggleWeightInputs(e.target.value);
+            });
+        });
+
+        document.getElementById('vector_weight').addEventListener('input', (e) => {
+            document.getElementById('vector_weight_val').textContent = e.target.value;
+        });
+
+        document.getElementById('bm25_weight').addEventListener('input', (e) => {
+            document.getElementById('bm25_weight_val').textContent = e.target.value;
+        });
+
+        // Load config on page load
+        loadConfig();
+    </script>
+</body>
+</html>

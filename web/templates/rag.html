@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG 知识库 - NexusHarness</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body { overflow: auto; }
+        .rag-container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .rag-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .rag-header h1 {
+            font-size: 20px;
+            margin: 0;
+        }
+        .upload-section {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .upload-section h3 {
+            font-size: 14px;
+            margin: 0 0 15px 0;
+        }
+        .upload-form {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+            flex-wrap: wrap;
+        }
+        .upload-form input[type="file"] {
+            flex: 1;
+            min-width: 200px;
+        }
+        .upload-form input[type="text"] {
+            flex: 1;
+            min-width: 200px;
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+        }
+        .doc-list {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .doc-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .doc-item:last-child {
+            border-bottom: none;
+        }
+        .doc-item .doc-icon {
+            width: 32px;
+            height: 32px;
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 12px;
+            font-size: 14px;
+        }
+        .doc-item .doc-info {
+            flex: 1;
+        }
+        .doc-item .doc-name {
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .doc-item .doc-meta {
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+        .doc-item .doc-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .doc-item button {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+        .doc-item .delete-btn {
+            background: rgba(239, 95, 95, 0.15);
+            color: var(--accent-red);
+        }
+        .doc-item .delete-btn:hover {
+            background: rgba(239, 95, 95, 0.25);
+        }
+        .search-section {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .search-section h3 {
+            font-size: 14px;
+            margin: 0 0 15px 0;
+        }
+        .search-form {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .search-form input {
+            flex: 1;
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 13px;
+        }
+        .search-form button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            background: var(--accent-blue);
+            color: white;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .search-results {
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .search-result-item {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-primary);
+        }
+        .search-result-item:last-child {
+            border-bottom: none;
+        }
+        .search-result-item .filename {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-bottom: 6px;
+        }
+        .search-result-item .content {
+            font-size: 13px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            max-height: 150px;
+            overflow-y: auto;
+            background: var(--bg-tertiary);
+            padding: 10px;
+            border-radius: 6px;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-dim);
+        }
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 13px;
+            z-index: 1001;
+            animation: slideIn 0.3s ease;
+        }
+        .toast.success { border-color: var(--accent-green); }
+        .toast.error { border-color: var(--accent-red); }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="rag-container">
+        <div class="rag-header">
+            <h1>📚 RAG 知识库</h1>
+            <button onclick="loadDocuments()" style="padding:8px 16px;border:none;border-radius:6px;background:var(--bg-tertiary);cursor:pointer;">🔄 刷新</button>
+        </div>
+
+        <div class="upload-section">
+            <h3>上传文档</h3>
+            <div class="upload-form">
+                <input type="file" id="fileInput" accept=".txt,.md,.json,.py,.js,.html,.css">
+                <input type="text" id="descInput" placeholder="文档描述（可选）">
+                <button onclick="uploadDocument()" style="padding:10px 20px;border:none;border-radius:6px;background:var(--accent-blue);color:white;cursor:pointer;">上传</button>
+            </div>
+            <p style="font-size:11px;color:var(--text-dim);margin-top:10px;">支持格式: txt, md, json, py, js, html, css</p>
+        </div>
+
+        <div class="doc-list" id="docList">
+            <div class="empty-state" id="emptyState">加载中...</div>
+        </div>
+
+        <div class="search-section">
+            <h3>🔍 搜索知识库</h3>
+            <div class="search-form">
+                <input type="text" id="searchInput" placeholder="输入搜索关键词...">
+                <button onclick="searchDocs()">搜索</button>
+            </div>
+            <div class="search-results" id="searchResults" style="display:none;"></div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast" style="display:none;"></div>
+
+    <script>
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast ${type}`;
+            toast.style.display = 'block';
+            setTimeout(() => toast.style.display = 'none', 3000);
+        }
+
+        async function loadDocuments() {
+            try {
+                const res = await fetch('/api/rag/documents');
+                const data = await res.json();
+                renderDocuments(data.documents || []);
+            } catch (e) {
+                showToast('加载失败: ' + e.message, 'error');
+            }
+        }
+
+        function renderDocuments(docs) {
+            const list = document.getElementById('docList');
+            const empty = document.getElementById('emptyState');
+
+            if (!docs.length) {
+                list.innerHTML = '<div class="empty-state">暂无索引文档，请上传文件</div>';
+                return;
+            }
+
+            list.innerHTML = docs.map(doc => `
+                <div class="doc-item">
+                    <div class="doc-icon">📄</div>
+                    <div class="doc-info">
+                        <div class="doc-name">${escapeHtml(doc.filename)}</div>
+                        <div class="doc-meta">ID: ${doc.doc_id} | ${doc.created_at ? doc.created_at.substring(0, 10) : 'N/A'}</div>
+                    </div>
+                    <div class="doc-actions">
+                        <button class="delete-btn" onclick="deleteDoc('${doc.doc_id}')">删除</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function uploadDocument() {
+            const fileInput = document.getElementById('fileInput');
+            const descInput = document.getElementById('descInput');
+
+            if (!fileInput.files.length) {
+                showToast('请选择文件', 'error');
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('description', descInput.value || '');
+
+            try {
+                const res = await fetch('/api/rag/upload', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    showToast('上传成功: ' + data.filename, 'success');
+                    fileInput.value = '';
+                    descInput.value = '';
+                    loadDocuments();
+                } else {
+                    showToast('上传失败', 'error');
+                }
+            } catch (e) {
+                showToast('上传失败: ' + e.message, 'error');
+            }
+        }
+
+        async function deleteDoc(docId) {
+            if (!confirm('确定删除此文档？')) return;
+
+            try {
+                const res = await fetch(`/api/rag/documents/${docId}`, { method: 'DELETE' });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    showToast('删除成功', 'success');
+                    loadDocuments();
+                } else {
+                    showToast('删除失败', 'error');
+                }
+            } catch (e) {
+                showToast('删除失败: ' + e.message, 'error');
+            }
+        }
+
+        async function searchDocs() {
+            const input = document.getElementById('searchInput');
+            const query = input.value.trim();
+
+            if (!query) {
+                showToast('请输入搜索关键词', 'error');
+                return;
+            }
+
+            try {
+                // Get current config for search weights
+                const configRes = await fetch('/api/rag/config');
+                const config = await configRes.json();
+
+                const vectorWeight = config.search_mode === 'hybrid' ? config.vector_weight : 1.0;
+                const bm25Weight = config.search_mode === 'hybrid' ? config.bm25_weight : 0.0;
+
+                const res = await fetch(`/api/rag/search?q=${encodeURIComponent(query)}&vector_weight=${vectorWeight}&bm25_weight=${bm25Weight}`);
+                const data = await res.json();
+                renderSearchResults(data.results || []);
+            } catch (e) {
+                showToast('搜索失败: ' + e.message, 'error');
+            }
+        }
+
+        function renderSearchResults(results) {
+            const container = document.getElementById('searchResults');
+            container.style.display = 'block';
+
+            if (!results.length) {
+                container.innerHTML = '<div class="search-result-item"><div style="color:var(--text-dim)">未找到相关文档</div></div>';
+                return;
+            }
+
+            container.innerHTML = results.map(r => `
+                <div class="search-result-item">
+                    <div class="filename">📄 ${escapeHtml(r.filename)}</div>
+                    <div class="content">${escapeHtml(r.content)}</div>
+                </div>
+            `).join('');
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Handle Enter key in search
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') searchDocs();
+        });
+
+        // Load documents on page load
+        loadDocuments();
+    </script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "chunk_mode": "length",
+  "chunk_size": 1500,
+  "chunk_overlap": 200,
+  "search_mode": "hybrid",
+  "vector_weight": 0.7,
+  "bm25_weight": 0.3
+}

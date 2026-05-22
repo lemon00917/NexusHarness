@@ -175,7 +175,6 @@ async function loadConv(sessionId) {
     }
 
     clearLocalSession();
-    await loadConversations().then(renderConversationList);
 }
 
 window.loadConv = loadConv;

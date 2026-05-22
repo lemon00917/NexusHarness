@@ -42,8 +42,17 @@
             </div>
 
             <div class="sidebar-footer">
-                <div class="footer-links">
-                    <a href="/templates/benchmark.html" target="_blank" class="footer-link">📊 评估框架</a>
+                <div class="tool-menu" style="display:flex;flex-direction:column;">
+                    <div class="tool-menu-header" onclick="toggleToolMenu()" style="cursor:pointer;">
+                        <span>🛠️ 工具</span>
+                        <span id="toolMenuArrow">▼</span>
+                    </div>
+                    <div class="tool-menu-items" id="toolMenuItems" style="display:none;">
+                        <a href="/templates/rag.html" target="_blank" class="tool-item">📚 知识库</a>
+                        <a href="/templates/rag_config.html" target="_blank" class="tool-item">⚙️ RAG配置</a>
+                        <a href="/templates/benchmark.html" target="_blank" class="tool-item">📊 评估框架</a>
+                        <a href="/templates/replay.html" target="_blank" class="tool-item">🔄 回放调试</a>
+                    </div>
                 </div>
                 <div class="footer-info">
                     <span class="model-badge" id="modelBadge">MiniMax-M2</span>
@@ -274,6 +283,19 @@
         </div>
     </div>
 
+    <script>
+        function toggleToolMenu() {
+            const items = document.getElementById('toolMenuItems');
+            const arrow = document.getElementById('toolMenuArrow');
+            if (items.style.display === 'none' || items.style.display === '') {
+                items.style.display = 'flex';
+                arrow.textContent = '▲';
+            } else {
+                items.style.display = 'none';
+                arrow.textContent = '▼';
+            }
+        }
+    </script>
     <script src="/static/js/app.js?v=05202102"></script>
 </body>
 </html>
