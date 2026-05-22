@@ -1,0 +1,15 @@
+{
+  "id": "fibonacci_001",
+  "category": "code",
+  "task": "Write a Python script that prints Fibonacci numbers up to 100, then run it",
+  "expected_output": "89",
+  "validation": {
+    "type": "contains",
+    "value": "89"
+  },
+  "metadata": {
+    "difficulty": "easy",
+    "expected_steps": 3,
+    "description": "Basic code generation and execution"
+  }
+}

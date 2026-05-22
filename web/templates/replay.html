@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Replay - NexusHarness</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body { overflow: auto; }
+        .replay-container {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+        .replay-timeline {
+            width: 320px;
+            flex-shrink: 0;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            overflow-y: auto;
+            padding: 16px;
+        }
+        .replay-timeline-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .replay-timeline-header h2 {
+            font-size: 14px;
+            color: var(--text-primary);
+        }
+        .back-btn {
+            padding: 6px 12px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .back-btn:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+        .step-record {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px;
+            border-radius: var(--radius-card);
+            cursor: pointer;
+            margin-bottom: 6px;
+            transition: all 0.15s;
+            border: 1px solid transparent;
+        }
+        .step-record:hover {
+            background: var(--bg-tertiary);
+        }
+        .step-record.active {
+            background: var(--accent-blue-dim);
+            border-color: var(--accent-blue);
+        }
+        .step-icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+        .step-icon.agent { background: rgba(79, 142, 247, 0.2); color: var(--accent-blue); }
+        .step-icon.tool_call { background: rgba(160, 123, 239, 0.2); color: var(--accent-purple); }
+        .step-icon.tool_result { background: rgba(62, 207, 110, 0.2); color: var(--accent-green); }
+        .step-icon.approval { background: rgba(247, 148, 79, 0.2); color: var(--accent-orange); }
+        .step-icon.interrupt { background: rgba(239, 95, 95, 0.2); color: var(--accent-red); }
+        .step-icon.complete { background: rgba(100, 100, 100, 0.2); color: var(--text-muted); }
+        .step-info { flex: 1; min-width: 0; }
+        .step-title { font-size: 12px; color: var(--text-primary); font-weight: 500; }
+        .step-meta { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
+        .step-summary { font-size: 11px; color: var(--text-secondary); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .replay-detail {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+        }
+        .detail-empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+        .detail-section {
+            margin-bottom: 24px;
+        }
+        .detail-section-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .detail-section-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .detail-badge {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+        .detail-badge.agent { background: rgba(79, 142, 247, 0.2); color: var(--accent-blue); }
+        .detail-badge.tool_call { background: rgba(160, 123, 239, 0.2); color: var(--accent-purple); }
+        .detail-badge.tool_result { background: rgba(62, 207, 110, 0.2); color: var(--accent-green); }
+        .detail-badge.approval { background: rgba(247, 148, 79, 0.2); color: var(--accent-orange); }
+        .detail-badge.interrupt { background: rgba(239, 95, 95, 0.2); color: var(--accent-red); }
+        .detail-badge.complete { background: rgba(100, 100, 100, 0.2); color: var(--text-muted); }
+        .json-tree {
+            background: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+            padding: 12px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 11px;
+            color: var(--text-primary);
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .json-key { color: var(--accent-blue); }
+        .json-string { color: var(--accent-green); }
+        .json-number { color: var(--accent-orange); }
+        .json-boolean { color: var(--accent-purple); }
+        .tool-args-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        .tool-args-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+            vertical-align: top;
+        }
+        .tool-args-table td:first-child {
+            color: var(--text-muted);
+            width: 80px;
+            font-size: 11px;
+        }
+        .approval-approved { color: var(--accent-green); font-weight: 600; }
+        .approval-rejected { color: var(--accent-red); font-weight: 600; }
+        .approval-auto { color: var(--text-secondary); font-weight: 600; }
+        .step-nav {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .step-nav-btn {
+            padding: 6px 14px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.15s;
+        }
+        .step-nav-btn:hover:not(:disabled) {
+            background: var(--accent-blue-dim);
+            color: var(--accent-blue);
+            border-color: var(--accent-blue);
+        }
+        .step-nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+    <div class="replay-container">
+        <div class="replay-timeline">
+            <div class="replay-timeline-header">
+                <h2>📜 执行回放</h2>
+                <button class="back-btn" onclick="window.close()">← 返回</button>
+            </div>
+            <div id="stepList"></div>
+        </div>
+        <div class="replay-detail" id="detailPanel">
+            <div class="detail-empty">点击左侧步骤查看详情</div>
+        </div>
+    </div>
+
+    <script>
+    const sessionId = new URLSearchParams(window.location.search).get('session_id') || '';
+    let records = [];
+    let activeStepIndex = -1;
+
+    async function loadReplay() {
+        if (!sessionId) {
+            document.getElementById('stepList').innerHTML = '<div style="color:var(--text-muted);padding:20px;">无效的 session_id</div>';
+            return;
+        }
+        try {
+            const resp = await fetch(`/api/replay/${sessionId}`);
+            const data = await resp.json();
+            if (data.error || !data.records) {
+                document.getElementById('stepList').innerHTML = '<div style="color:var(--text-muted);padding:20px;">未找到回放数据</div>';
+                return;
+            }
+            records = data.records;
+            renderTimeline();
+            if (records.length > 0) {
+                showStep(0);
+            }
+        } catch (e) {
+            document.getElementById('stepList').innerHTML = '<div style="color:var(--text-muted);padding:20px;">加载失败: ' + e.message + '</div>';
+        }
+    }
+
+    function getTypeIcon(type) {
+        const icons = {
+            'agent': '🤖',
+            'tool_call': '🔧',
+            'tool_result': '✅',
+            'approval': '⚠️',
+            'interrupt': '⏸',
+            'complete': '🏁'
+        };
+        return icons[type] || '📌';
+    }
+
+    function getTypeLabel(type) {
+        const labels = {
+            'agent': 'Agent',
+            'tool_call': 'Tool Call',
+            'tool_result': 'Tool Result',
+            'approval': 'Approval',
+            'interrupt': 'Interrupted',
+            'complete': 'Complete'
+        };
+        return labels[type] || type;
+    }
+
+    function renderTimeline() {
+        const list = document.getElementById('stepList');
+        list.innerHTML = records.map((r, i) => {
+            const icon = getTypeIcon(r.type);
+            const label = getTypeLabel(r.type);
+            let summary = '';
+            if (r.type === 'tool_call' && r.tool_name) summary = r.tool_name;
+            if (r.type === 'tool_result' && r.tool_result) summary = r.tool_result.substring(0, 60);
+            if (r.type === 'agent' && r.llm_output && r.llm_output.content) summary = r.llm_output.content.substring(0, 60);
+            if (r.type === 'approval') summary = r.approval || '';
+            return `
+            <div class="step-record ${i === activeStepIndex ? 'active' : ''}" onclick="showStep(${i})">
+                <div class="step-icon ${r.type}">${icon}</div>
+                <div class="step-info">
+                    <div class="step-title">Step ${r.step} — ${label}</div>
+                    <div class="step-meta">${r.timestamp ? r.timestamp.substring(11, 19) : ''}${r.elapsed_ms ? ' · ' + r.elapsed_ms + 'ms' : ''}</div>
+                    ${summary ? `<div class="step-summary">${escapeHtml(summary)}</div>` : ''}
+                </div>
+            </div>
+            `;
+        }).join('');
+    }
+
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    function showStep(index) {
+        if (index < 0 || index >= records.length) return;
+        activeStepIndex = index;
+        renderTimeline();
+
+        const r = records[index];
+        const panel = document.getElementById('detailPanel');
+        let html = `
+            <div class="step-nav">
+                <button class="step-nav-btn" onclick="showStep(${index - 1})" ${index === 0 ? 'disabled' : ''}>← 上一步</button>
+                <span style="color:var(--text-muted);font-size:12px;line-height:32px;">Step ${index + 1} / ${records.length}</span>
+                <button class="step-nav-btn" onclick="showStep(${index + 1})" ${index === records.length - 1 ? 'disabled' : ''}>下一步 →</button>
+            </div>
+
+            <div class="detail-section">
+                <div class="detail-section-header">
+                    <span class="detail-section-title">步骤信息</span>
+                    <span class="detail-badge ${r.type}">${getTypeIcon(r.type)} ${getTypeLabel(r.type)}</span>
+                </div>
+                <div class="json-tree">
+<span class="json-key">"step"</span>: <span class="json-number">${r.step}</span>,
+<span class="json-key">"timestamp"</span>: <span class="json-string">"${r.timestamp || ''}"</span>,
+<span class="json-key">"type"</span>: <span class="json-string">"${r.type}"</span>${r.elapsed_ms ? `,
+<span class="json-key">"elapsed_ms"</span>: <span class="json-number">${r.elapsed_ms}</span>` : ''}
+                </div>
+            </div>
+        `;
+
+        if (r.llm_input) {
+            html += `
+            <div class="detail-section">
+                <div class="detail-section-header">
+                    <span class="detail-section-title">LLM Input (messages)</span>
+                </div>
+                <div class="json-tree">${formatJson(r.llm_input)}</div>
+            </div>
+            `;
+        }
+
+        if (r.llm_output) {
+            html += `
+            <div class="detail-section">
+                <div class="detail-section-header">
+                    <span class="detail-section-title">LLM Output</span>
+                </div>
+                <div class="json-tree">${formatJson(r.llm_output)}</div>
+            </div>
+            `;
+        }
+
+        if (r.tool_name) {
+            html += `
+            <div class="detail-section">
+                <div class="detail-section-header">
+                    <span class="detail-section-title">Tool Info</span>
+                </div>
+                <table class="tool-args-table">
+                    <tr><td>Name</td><td><strong>${escapeHtml(r.tool_name)}</strong></td></tr>
+                    ${r.tool_args ? `<tr><td>Args</td><td><div class="json-tree">${formatJson(r.tool_args)}</div></td></tr>` : ''}
+                    ${r.tool_result ? `<tr><td>Result</td><td style="color:var(--accent-green);">${escapeHtml(r.tool_result)}</td></tr>` : ''}
+                </table>
+            </div>
+            `;
+        }
+
+        if (r.type === 'approval') {
+            const approvalClass = r.approval === 'approved' ? 'approval-approved' : r.approval === 'rejected' ? 'approval-rejected' : 'approval-auto';
+            const approvalIcon = r.approval === 'approved' ? '✅' : r.approval === 'rejected' ? '❌' : '⚡';
+            html += `
+            <div class="detail-section">
+                <div class="detail-section-header">
+                    <span class="detail-section-title">Approval Decision</span>
+                </div>
+                <div class="json-tree">
+                    <span class="${approvalClass}">${approvalIcon} ${(r.approval || '').toUpperCase()}</span>
+                    ${r.tool_name ? `<br><span class="json-key">"tool"</span>: <span class="json-string">"${escapeHtml(r.tool_name)}"</span>` : ''}
+                </div>
+            </div>
+            `;
+        }
+
+        panel.innerHTML = html;
+    }
+
+    function formatJson(obj) {
+        if (obj === null || obj === undefined) return 'null';
+        const json = JSON.stringify(obj, null, 2);
+        return json
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:')
+            .replace(/: "([^"]*)"/g, ': <span class="json-string">"$1"</span>')
+            .replace(/: (-?\d+\.?\d*)/g, ': <span class="json-number">$1</span>')
+            .replace(/: (true|false)/g, ': <span class="json-boolean">$1</span>')
+            .replace(/: (null)/g, ': <span class="json-boolean">$1</span>');
+    }
+
+    loadReplay();
+    </script>
+</body>
+</html>

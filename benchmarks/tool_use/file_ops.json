@@ -1,0 +1,16 @@
+{
+  "id": "file_ops_001",
+  "category": "tool_use",
+  "task": "Create a file called 'hello.txt' with content 'Hello World', read it back to verify, then delete it",
+  "expected_output": "Hello World",
+  "validation": {
+    "type": "tool_calls",
+    "expected": ["write_file", "read_file", "delete_file"],
+    "allow_extra": false
+  },
+  "metadata": {
+    "difficulty": "easy",
+    "expected_steps": 5,
+    "description": "Multi-step file operations: create, read, delete"
+  }
+}

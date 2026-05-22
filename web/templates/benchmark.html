@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>评估框架 - NexusHarness</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body { overflow: auto; }
+        .benchmark-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .benchmark-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .benchmark-header h1 {
+            font-size: 20px;
+            margin: 0;
+        }
+        .benchmark-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .benchmark-actions button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+        .benchmark-actions button:hover {
+            background: var(--bg-hover);
+        }
+        .benchmark-actions button.primary {
+            background: var(--accent-blue);
+            color: white;
+        }
+        .benchmark-actions button.primary:hover {
+            background: #3a8fbf;
+        }
+        .category-tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+        .category-tabs button {
+            padding: 6px 14px;
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+        .category-tabs button:hover {
+            border-color: var(--accent-blue);
+            color: var(--accent-blue);
+        }
+        .category-tabs button.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+        .benchmark-results {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .benchmark-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .summary-card {
+            background: var(--bg-tertiary);
+            padding: 15px;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .summary-card .value {
+            font-size: 24px;
+            font-weight: bold;
+            color: var(--accent-blue);
+        }
+        .summary-card .label {
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+        .task-list {
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .task-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 15px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-primary);
+        }
+        .task-item:last-child {
+            border-bottom: none;
+        }
+        .task-item .status {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 12px;
+            font-size: 12px;
+        }
+        .task-item .status.pass {
+            background: rgba(62, 207, 110, 0.15);
+            color: var(--accent-green);
+        }
+        .task-item .status.fail {
+            background: rgba(239, 95, 95, 0.15);
+            color: var(--accent-red);
+        }
+        .task-item .info {
+            flex: 1;
+        }
+        .task-item .task-id {
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+        .task-item .task-name {
+            font-size: 13px;
+            margin-top: 2px;
+        }
+        .task-item .task-meta {
+            display: flex;
+            gap: 15px;
+            margin-top: 4px;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        .task-item .score {
+            font-size: 16px;
+            font-weight: bold;
+            margin-right: 20px;
+        }
+        .task-item .score.good { color: var(--accent-green); }
+        .task-item .score.bad { color: var(--accent-red); }
+        .task-item .score.medium { color: var(--accent-orange); }
+        .history-section {
+            margin-top: 30px;
+        }
+        .history-section h2 {
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .history-table th,
+        .history-table td {
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 12px;
+        }
+        .history-table th {
+            color: var(--text-dim);
+            font-weight: normal;
+        }
+        .history-table tr:hover td {
+            background: var(--bg-secondary);
+        }
+        .progress-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .progress-box {
+            background: var(--bg-secondary);
+            padding: 30px 40px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .progress-box .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 13px;
+            z-index: 1001;
+            animation: slideIn 0.3s ease;
+        }
+        .toast.success { border-color: var(--accent-green); }
+        .toast.error { border-color: var(--accent-red); }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="benchmark-container">
+        <div class="benchmark-header">
+            <h1>📊 评估框架</h1>
+            <div class="benchmark-actions">
+                <button class="primary" onclick="runAllBenchmarks()">▶ 运行全部</button>
+                <button onclick="runCategory('code')">代码类</button>
+                <button onclick="runCategory('tool_use')">工具类</button>
+                <button onclick="loadHistory()">刷新历史</button>
+            </div>
+        </div>
+
+        <div class="category-tabs">
+            <button class="active" onclick="selectCategory(null, this)">全部</button>
+            <button onclick="selectCategory('code', this)">代码</button>
+            <button onclick="selectCategory('tool_use', this)">工具使用</button>
+            <button onclick="selectCategory('reasoning', this)">推理</button>
+            <button onclick="selectCategory('regression', this)">回归</button>
+        </div>
+
+        <div id="resultsSection" class="benchmark-results" style="display:none;">
+            <div class="benchmark-summary" id="summaryGrid"></div>
+            <div class="task-list" id="taskList"></div>
+        </div>
+
+        <div class="history-section">
+            <h2>📜 历史记录</h2>
+            <div id="historyTable"></div>
+        </div>
+    </div>
+
+    <div id="progressOverlay" class="progress-overlay" style="display:none;">
+        <div class="progress-box">
+            <div class="spinner"></div>
+            <div id="progressText">运行中...</div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast" style="display:none;"></div>
+
+    <script>
+        let currentCategory = null;
+        let currentResult = null;
+
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast ${type}`;
+            toast.style.display = 'block';
+            setTimeout(() => toast.style.display = 'none', 3000);
+        }
+
+        function showProgress(text) {
+            document.getElementById('progressText').textContent = text;
+            document.getElementById('progressOverlay').style.display = 'flex';
+        }
+
+        function hideProgress() {
+            document.getElementById('progressOverlay').style.display = 'none';
+        }
+
+        function selectCategory(cat, btn) {
+            currentCategory = cat;
+            document.querySelectorAll('.category-tabs button').forEach(b => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+        }
+
+        async function runAllBenchmarks() {
+            showProgress('运行 benchmark...');
+            try {
+                const url = currentCategory
+                    ? `/api/benchmark?category=${currentCategory}`
+                    : '/api/benchmark';
+                const res = await fetch(url);
+                const data = await res.json();
+                currentResult = data;
+                renderResults(data);
+                showToast(`完成: ${data.tasks_passed}/${data.tasks_total} 通过`, 'success');
+            } catch (e) {
+                showToast('运行失败: ' + e.message, 'error');
+            } finally {
+                hideProgress();
+                loadHistory();
+            }
+        }
+
+        async function runCategory(cat) {
+            selectCategory(cat, null);
+            showProgress(`运行 ${cat} 类 benchmark...`);
+            try {
+                const res = await fetch(`/api/benchmark?category=${cat}`);
+                const data = await res.json();
+                currentResult = data;
+                renderResults(data);
+                showToast(`完成: ${data.tasks_passed}/${data.tasks_total} 通过`, 'success');
+            } catch (e) {
+                showToast('运行失败: ' + e.message, 'error');
+            } finally {
+                hideProgress();
+                loadHistory();
+            }
+        }
+
+        function renderResults(data) {
+            document.getElementById('resultsSection').style.display = 'block';
+
+            // Summary cards
+            const passRate = (data.pass_rate * 100).toFixed(1);
+            const avgScore = (data.avg_score * 100).toFixed(1);
+            document.getElementById('summaryGrid').innerHTML = `
+                <div class="summary-card">
+                    <div class="value">${data.tasks_passed}/${data.tasks_total}</div>
+                    <div class="label">通过任务</div>
+                </div>
+                <div class="summary-card">
+                    <div class="value">${passRate}%</div>
+                    <div class="label">通过率</div>
+                </div>
+                <div class="summary-card">
+                    <div class="value">${avgScore}%</div>
+                    <div class="label">平均分</div>
+                </div>
+                <div class="summary-card">
+                    <div class="value">${data.total_tokens.toLocaleString()}</div>
+                    <div class="label">总 Tokens</div>
+                </div>
+                <div class="summary-card">
+                    <div class="value">$${data.total_cost_usd.toFixed(6)}</div>
+                    <div class="label">总成本</div>
+                </div>
+                <div class="summary-card">
+                    <div class="value">${(data.total_duration_ms/1000).toFixed(1)}s</div>
+                    <div class="label">耗时</div>
+                </div>
+            `;
+
+            // Task list
+            document.getElementById('taskList').innerHTML = data.task_results.map(t => `
+                <div class="task-item">
+                    <div class="status ${t.passed ? 'pass' : 'fail'}">${t.passed ? '✅' : '❌'}</div>
+                    <div class="info">
+                        <div class="task-id">${t.task_id}</div>
+                        <div class="task-name">${escapeHtml(t.actual_output.substring(0, 100))}...</div>
+                        <div class="task-meta">
+                            <span>Steps: ${t.steps_used}</span>
+                            <span>Tokens: ${t.tokens_used.toLocaleString()}</span>
+                            <span>${t.validation_details}</span>
+                        </div>
+                    </div>
+                    <div class="score ${t.score >= 0.7 ? 'good' : t.score >= 0.4 ? 'medium' : 'bad'}">${(t.score * 100).toFixed(0)}%</div>
+                </div>
+            `).join('');
+        }
+
+        async function loadHistory() {
+            try {
+                const res = await fetch('/api/benchmark/history');
+                const data = await res.json();
+                renderHistory(data.results || []);
+            } catch (e) {
+                console.error('Failed to load history:', e);
+            }
+        }
+
+        function renderHistory(results) {
+            if (!results.length) {
+                document.getElementById('historyTable').innerHTML = '<p style="color:var(--text-dim);font-size:13px;">暂无历史记录</p>';
+                return;
+            }
+            document.getElementById('historyTable').innerHTML = `
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>ID</th>
+                            <th>Provider</th>
+                            <th>Model</th>
+                            <th>任务</th>
+                            <th>通过</th>
+                            <th>通过率</th>
+                            <th>均分</th>
+                            <th>成本</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${results.map(r => `
+                            <tr>
+                                <td>${formatTime(r.timestamp)}</td>
+                                <td>${r.run_id}</td>
+                                <td>${r.provider}</td>
+                                <td>${r.model}</td>
+                                <td>${r.tasks_passed}/${r.tasks_total}</td>
+                                <td style="color:${r.pass_rate >= 0.8 ? 'var(--accent-green)' : r.pass_rate >= 0.5 ? 'var(--accent-orange)' : 'var(--accent-red)'}">${(r.pass_rate * 100).toFixed(1)}%</td>
+                                <td>${(r.avg_score * 100).toFixed(1)}%</td>
+                                <td>$${r.total_cost_usd.toFixed(6)}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatTime(ts) {
+            if (!ts) return '-';
+            return ts.replace('T', ' ').substring(0, 19);
+        }
+
+        // Load history on page load
+        loadHistory();
+    </script>
+</body>
+</html>

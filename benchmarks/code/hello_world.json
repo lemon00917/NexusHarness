@@ -1,0 +1,15 @@
+{
+  "id": "hello_world_001",
+  "category": "code",
+  "task": "Write a Python script that prints 'Hello World', then run it",
+  "expected_output": "Hello World",
+  "validation": {
+    "type": "contains",
+    "value": "Hello World"
+  },
+  "metadata": {
+    "difficulty": "trivial",
+    "expected_steps": 2,
+    "description": "Simplest possible code generation task"
+  }
+}
