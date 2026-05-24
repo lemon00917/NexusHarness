@@ -55,8 +55,8 @@ def get_config() -> dict:
 
 
 # ── 加载 .env ──────────────────────────────────────────────────────
-# Project root is two levels up from this file (microharness/config.py)
-_env_path = Path(__file__).parent.parent / ".env"
+# Project root is one level up from microharness/ (i.e., the repo root where .env lives)
+_env_path = Path(__file__).parent.parent.parent / ".env"
 if _env_path.exists():
     with open(_env_path, encoding="utf-8") as f:
         for line in f:

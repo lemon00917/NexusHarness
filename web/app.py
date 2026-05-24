@@ -28,7 +28,9 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
-from microharness import config
+from microharness import config as config_module
+from microharness.config.config import get_config, save_config, validate
+from microharness.config.config import PROVIDER, MAIN_MODEL, MEMORY_MODEL, MAX_STEPS, get_llm
 from microharness.agent.retry import get_retry_executor
 from microharness.agent.harness import HarnessState, build_harness
 from microharness.agent.guard import should_confirm, SKILL_SAFETY_LEVELS, register_skill_safety_levels
@@ -40,7 +42,6 @@ from microharness.skills.skill_manager import load_skills, get_skill_safety_map,
 from microharness.observability.token_tracker import token_stats, get_cost
 from microharness.observability.audit import log_audit, get_audit_records
 from microharness.observability.evaluation import BenchmarkRunner, print_benchmark_result
-from microharness.config.config import get_config, save_config
 from microharness.config.prompts import get_system_prompt
 from microharness.rag.rag import rag
 from microharness.rag.rag_config import load_config, save_config, RAGConfig
@@ -115,7 +116,7 @@ async def event_stream(session_id: str, task: str):
 
     # Initialize harness
     try:
-        config.validate()
+        validate()
     except Exception as e:
         yield sse_event("error", {"message": f"Config error: {e}"})
         return
@@ -155,7 +156,7 @@ async def run_harness_async(harness, init_state: HarnessState, session_id: str, 
     # Start replay recording
     replay_logger.start_session(session_id)
 
-    for step in range(1, config.MAX_STEPS + 1):
+    for step in range(1, MAX_STEPS + 1):
         step_start_ms = int(time.time() * 1000)
 
         # Check interrupt signal
@@ -177,11 +178,11 @@ async def run_harness_async(harness, init_state: HarnessState, session_id: str, 
             system = SystemMessage(content=get_system_prompt(task))
             messages = [system] + state["messages"]
 
-            llm = config.get_llm(config.MAIN_MODEL).bind_tools(get_active_tools())
+            llm = get_llm(MAIN_MODEL).bind_tools(get_active_tools())
 
             agent_start_ms = int(time.time() * 1000)
 
-            if config.PROVIDER == "anthropic":
+            if PROVIDER == "anthropic":
                 full_response_content = ""
                 last_chunk = None
                 all_tool_calls = []
@@ -206,8 +207,8 @@ async def run_harness_async(harness, init_state: HarnessState, session_id: str, 
                     usage = last_chunk.usage_metadata or {}
                     input_tokens = usage.get("input_tokens") or 0
                     output_tokens = usage.get("output_tokens") or 0
-                    cost = get_cost(config.PROVIDER, config.MAIN_MODEL, input_tokens, output_tokens)
-                    token_stats.record(config.PROVIDER, config.MAIN_MODEL, input_tokens, output_tokens, cost)
+                    cost = get_cost(PROVIDER, MAIN_MODEL, input_tokens, output_tokens)
+                    token_stats.record(PROVIDER, MAIN_MODEL, input_tokens, output_tokens, cost)
                     yield sse_event("token_stats", {
                         "input_tokens": input_tokens,
                         "output_tokens": output_tokens,
@@ -228,8 +229,8 @@ async def run_harness_async(harness, init_state: HarnessState, session_id: str, 
                     usage = response.usage_metadata or {}
                     input_tokens = usage.get("input_tokens") or 0
                     output_tokens = usage.get("output_tokens") or 0
-                    cost = get_cost(config.PROVIDER, config.MAIN_MODEL, input_tokens, output_tokens)
-                    token_stats.record(config.PROVIDER, config.MAIN_MODEL, input_tokens, output_tokens, cost)
+                    cost = get_cost(PROVIDER, MAIN_MODEL, input_tokens, output_tokens)
+                    token_stats.record(PROVIDER, MAIN_MODEL, input_tokens, output_tokens, cost)
                     yield sse_event("token_stats", {
                         "input_tokens": input_tokens,
                         "output_tokens": output_tokens,
@@ -402,7 +403,7 @@ async def run_harness_async(harness, init_state: HarnessState, session_id: str, 
         yield sse_event("memory_saved", {"summary": summary})
     except Exception as e:
         print(f"Memory save error: {e}")
-    replay_logger.log_complete(session_id, config.MAX_STEPS, "max_steps_reached")
+    replay_logger.log_complete(session_id, MAX_STEPS, "max_steps_reached")
     replay_logger.flush(session_id)
 
 
@@ -598,10 +599,10 @@ async def get_status():
     """Get system status."""
     stats = token_stats.get_summary()
     return {
-        "provider": config.PROVIDER,
-        "main_model": config.MAIN_MODEL,
-        "memory_model": config.MEMORY_MODEL,
-        "max_steps": config.MAX_STEPS,
+        "provider": PROVIDER,
+        "main_model": MAIN_MODEL,
+        "memory_model": MEMORY_MODEL,
+        "max_steps": MAX_STEPS,
         "pending_approvals": len(pending_approvals),
         "total_calls": stats["total_calls"],
         "total_input_tokens": stats["total_input_tokens"],
@@ -634,12 +635,12 @@ async def update_system_config(request: Request):
     data = await request.json()
 
     # Validate max_steps
-    max_steps = data.get("max_steps", config.MAX_STEPS)
+    max_steps = data.get("max_steps", MAX_STEPS)
     if not isinstance(max_steps, int) or max_steps < 1 or max_steps > 50:
         return {"error": "max_steps must be between 1 and 50"}
 
     # Validate provider
-    provider = data.get("provider", config.PROVIDER).lower()
+    provider = data.get("provider", PROVIDER).lower()
     valid_providers = ["anthropic", "openai", "deepseek", "kimi", "minimax", "qwen", "glm", "xiaomi"]
     if provider not in valid_providers:
         return {"error": f"provider must be one of: {valid_providers}"}
@@ -647,8 +648,8 @@ async def update_system_config(request: Request):
     # Save to config.json
     save_config({
         "provider": provider,
-        "main_model": data.get("main_model", config.MAIN_MODEL),
-        "memory_model": data.get("memory_model", config.MEMORY_MODEL),
+        "main_model": data.get("main_model", MAIN_MODEL),
+        "memory_model": data.get("memory_model", MEMORY_MODEL),
         "max_steps": max_steps,
     })
 
@@ -927,8 +928,8 @@ async def run_benchmark(
     runner = BenchmarkRunner()
     result = runner.run_benchmark(
         category=category,
-        provider=provider or config.PROVIDER,
-        model=model or config.MAIN_MODEL,
+        provider=provider or PROVIDER,
+        model=model or MAIN_MODEL,
         benchmark_ids=task_ids,
     )
 
@@ -943,7 +944,7 @@ async def run_benchmark(
 async def upload_document(file: UploadFile, description: str = ""):
     """Upload a document to the knowledge base."""
     from microharness.rag.rag import rag
-    from microharness.document_parser import parse_document
+    from microharness.rag.document_parser import parse_document
 
     # Read file content
     content = await file.read()
@@ -1071,7 +1072,7 @@ async def get_benchmark_history():
 async def unregister_tool(name: str):
     """Unregister a tool (built-in tools cannot be unregistered)."""
     from microharness.agent.tool_registry import get_registry
-    from microharness.tools import BUILTIN_SAFETY
+    from microharness.agent.tools import BUILTIN_SAFETY
     if name in BUILTIN_SAFETY:
         return {"error": "Cannot unregister built-in tool"}, 400
 

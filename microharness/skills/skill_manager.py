@@ -65,7 +65,7 @@ def load_skills(skills_dir: str = None) -> None:
 
     if skills_dir is None:
         # Skills directory is at project root (parent of microharness package)
-        skills_dir = Path(__file__).parent.parent / "skills"
+        skills_dir = Path(__file__).parent.parent.parent / "skills"
     else:
         skills_dir = Path(skills_dir)
 
@@ -179,12 +179,14 @@ def _generate_tool(skill_data: dict, bash_block: dict, block_index: int, skill_d
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                cwd="/tmp",
+                cwd=str(skill_dir),
+                encoding="utf-8",
+                errors="replace",
             )
             stdout, stderr = proc.communicate(timeout=30)
-            output = stdout.decode("utf-8", errors="replace").strip()
+            output = stdout.strip()
             if proc.returncode != 0:
-                err = stderr.decode("utf-8", errors="replace").strip()
+                err = stderr.strip()
                 return f"Command failed (exit {proc.returncode}):\n{err or output}"
             return output if output else "(no output)"
         except FileNotFoundError:

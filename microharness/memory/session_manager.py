@@ -340,16 +340,6 @@ def save_session_to_disk(state: SessionState) -> None:
     with open(conv_file, "w", encoding="utf-8") as f:
         json.dump(serializable, f, ensure_ascii=False, indent=2)
 
-    # ── In-memory cache ────────────────────────────
-
-    def _in_memory_sessions(self) -> dict[str, SessionState]:
-        """Return in-memory session cache (for debugging/admin)."""
-        return dict(self._sessions)
-
-    def clear_memory_cache(self) -> None:
-        """Clear in-memory cache (does not affect disk)."""
-        self._sessions.clear()
-
 
 # ──────────────────────────────────────────────────
 # Global accessor
