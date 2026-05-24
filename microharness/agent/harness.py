@@ -163,7 +163,7 @@ def main():
 
     # Check for 'skill' subcommand
     if len(sys.argv) > 1 and sys.argv[1] == "skill":
-        from .skill_cli import main as skill_main
+        from microharness.skills.skill_cli import main as skill_main
         skill_main()
         return
 

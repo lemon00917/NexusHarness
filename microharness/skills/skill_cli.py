@@ -1,408 +1,472 @@
 """
 Skill CLI — Command-line skill management for NexusHarness.
-
-Usage:
-    python harness.py skill list                    # List installed skills
-    python harness.py skill install <source>         # Install a skill
-    python harness.py skill remove <name>            # Remove a skill
-    python harness.py skill show <name>              # Show skill details
-    python harness.py skill update <name> [source]  # Update a skill
-
-Sources:
-    - Raw SKILL.md URL: https://raw.githubusercontent.com/user/repo/main/skills/weather/SKILL.md
-    - GitHub tree URL: https://github.com/user/repo/tree/main/skills/weather
-    - Local path: ./my-skill or /path/to/skill
 """
 
 import argparse
-import re
 import shutil
-import subprocess
 import sys
-import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any, Tuple, List
+from urllib.error import HTTPError
 
-try:
-    import yaml
-    HAS_YAML = True
-except ImportError:
-    HAS_YAML = False
+from microharness.skills.skill_common import (
+    parse_skill_md,
+    normalize_github_url,
+    fetch_url_content_with_retry as fetch_url,
+    install_from_local,
+    install_from_url,
+    MAX_DESCRIPTION_LENGTH,
+)
 
-# ──────────────────────────────────────────────────
-# Paths
-# ──────────────────────────────────────────────────
+# ── Constants ────────────────────────────────────────────────────────────
+
+EXIT_SUCCESS = 0
+EXIT_INPUT_ERROR = 1
+EXIT_NETWORK_ERROR = 2
+EXIT_IO_ERROR = 3
+EXIT_UNKNOWN_ERROR = 99
+
+# ── Paths ─────────────────────────────────────────────────────────────────
 
 def get_project_root() -> Path:
-    return Path(__file__).parent.parent
+    """
+    Get the project root directory.
+
+    skill_cli.py is at: microharness/skills/skill_cli.py
+    Returns: parent of microharness directory
+    """
+    return Path(__file__).parent.parent.parent
 
 
 def get_skills_dir() -> Path:
+    """Get the skills directory path."""
     return get_project_root() / "skills"
 
 
-# ──────────────────────────────────────────────────
-# SKILL.md parsing (copied from skill_manager for CLI-only use)
-# ──────────────────────────────────────────────────
+# ── Cache Management ─────────────────────────────────────────────────────
 
-def parse_skill_md(path: Path) -> dict:
-    """Parse SKILL.md: extract frontmatter, description, and bash blocks."""
-    content = path.read_text(encoding="utf-8")
+class _SkillCache:
+    """Thread-safe cache for scanned skills."""
 
-    parts = content.split("---", 2)
-    if len(parts) < 3:
-        raise ValueError(f"Invalid SKILL.md format in {path}")
+    def __init__(self):
+        self._cache: List[Dict[str, Any]] = []
+        self._initialized = False
 
-    frontmatter = parts[1].strip()
-    body = parts[2].strip()
+    def get(self) -> List[Dict[str, Any]]:
+        """Get cached skills, loading if necessary."""
+        if not self._initialized:
+            self._refresh()
+        return self._cache.copy()
 
-    fm = {}
-    if HAS_YAML:
-        try:
-            fm = yaml.safe_load(frontmatter) or {}
-        except Exception:
-            pass
+    def _refresh(self) -> None:
+        """Rebuild the cache by scanning the skills directory."""
+        skills_dir = get_skills_dir()
+        self._cache = []
 
-    # Extract all bash code blocks
-    bash_blocks = []
-    for match in re.finditer(r'```bash\s+(.*?)\s```', body, re.DOTALL):
-        raw_cmd = match.group(1).strip()
-        cmd_lines = [l for l in raw_cmd.splitlines() if not l.strip().startswith("# Output:")]
-        cmd = "\n".join(cmd_lines)
-        params = list(set(re.findall(r'\{(\w+)\}', cmd)))
-        if cmd.strip():
-            bash_blocks.append({"command": cmd, "params": params})
+        if not skills_dir.exists():
+            self._initialized = True
+            return
 
-    return {
-        "name": fm.get("name", path.parent.name),
-        "description": fm.get("description", ""),
-        "metadata": fm.get("metadata", {}),
-        "bash_blocks": bash_blocks,
-        "slug": path.parent.name,
-        "path": path,
-    }
-
-
-def scan_skills() -> list:
-    """Scan skills/ directory and return list of parsed skill data."""
-    skills_dir = get_skills_dir()
-    if not skills_dir.exists():
-        return []
-
-    results = []
-    for skill_dir in skills_dir.iterdir():
-        if not skill_dir.is_dir() or skill_dir.name.startswith('_'):
-            continue
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
-            continue
-        try:
-            results.append(parse_skill_md(skill_md))
-        except Exception:
-            continue
-    return results
-
-
-# ──────────────────────────────────────────────────
-# Install
-# ──────────────────────────────────────────────────
-
-def make_slug(name: str) -> str:
-    """Convert skill name to directory slug."""
-    return name.lower().replace(" ", "-").replace("_", "-")
-
-
-def install_from_url(url: str) -> tuple:
-    """
-    Download SKILL.md from a URL.
-    Returns (slug, content).
-    Handles:
-      - Raw GitHub URL (raw.githubusercontent.com)
-      - Direct .md file URL
-      - GitHub tree URL (constructs raw URL)
-    """
-    url = url.strip()
-
-    # GitHub tree URL → construct raw URL
-    gh_tree = re.match(r'https://github\.com/([^/]+)/([^/]+)/tree/([^/]+)/(.+)', url)
-    if gh_tree:
-        user, repo, branch, path = gh_tree.groups()
-        url = f"https://raw.githubusercontent.com/{user}/{repo}/{branch}/{path}/SKILL.md"
-
-    # Try to handle redirects (GitHub "view" URLs redirect to raw or HTML)
-    max_redirects = 5
-    last_url = url
-    for _ in range(max_redirects):
-        req = urllib.request.Request(last_url, headers={"User-Agent": "Mozilla/5.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                content = resp.read().decode("utf-8")
-                # Check if we got HTML instead of markdown (GitHub view page)
-                if content.strip().startswith('<!DOCTYPE') or content.strip().startswith('<html'):
-                    # This is an HTML page, not raw markdown - redirect to raw if possible
-                    if 'raw.githubusercontent.com' not in last_url and '/raw/' not in last_url:
-                        raise ValueError(
-                            f"URL appears to be a GitHub view page, not raw content. "
-                            f"Use the raw URL: https://raw.githubusercontent.com/..."
-                        )
-                break
-        except urllib.error.HTTPError as e:
-            if e.code in (301, 302, 303, 307, 308) and 'Location' in e.headers:
-                last_url = e.headers['Location']
+        for skill_dir in skills_dir.iterdir():
+            if not skill_dir.is_dir() or skill_dir.name.startswith('_') or skill_dir.name == '__pycache__':
                 continue
-            raise
 
-    # Extract skill name from frontmatter for slug
-    fm_match = re.search(r'^---\s*\n(.*?)\n---', content, re.DOTALL | re.MULTILINE)
-    slug = None
-    if fm_match and HAS_YAML:
-        try:
-            fm = yaml.safe_load(fm_match.group(1))
-            if fm and fm.get("name"):
-                slug = make_slug(fm["name"])
-        except Exception:
-            pass
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                continue
 
-    if not slug:
-        # Fallback: slug from URL path
-        slug = url.rstrip("/").rsplit("/", 2)[-1] if "/" in url else "unnamed"
+            try:
+                self._cache.append(parse_skill_md(skill_md))
+            except Exception as e:
+                # Log but continue scanning other skills
+                print(f"[SKILL] Warning: Failed to parse {skill_dir.name}: {e}", file=sys.stderr)
+                continue
 
-    return slug, content
+        self._initialized = True
 
-
-def install_from_local(path: Path) -> tuple:
-    """Install from a local skill directory or SKILL.md file."""
-    path = Path(path).expanduser().resolve()
-
-    if path.is_file():
-        # Direct SKILL.md file
-        content = path.read_text(encoding="utf-8")
-        slug = _slug_from_content(content) or path.parent.name
-    elif path.is_dir():
-        skill_md = path / "SKILL.md"
-        if not skill_md.exists():
-            raise ValueError(f"No SKILL.md found in {path}")
-        content = skill_md.read_text(encoding="utf-8")
-        slug = _slug_from_content(content) or path.name
-    else:
-        raise ValueError(f"Invalid path: {path}")
-
-    return slug, content
+    def invalidate(self) -> None:
+        """Invalidate the cache, forcing a refresh on next get."""
+        self._initialized = False
 
 
-def _slug_from_content(content: str) -> Optional[str]:
-    """Extract slug from SKILL.md frontmatter name."""
-    fm_match = re.search(r'^---\s*\n(.*?)\n---', content, re.DOTALL | re.MULTILINE)
-    if fm_match and HAS_YAML:
-        try:
-            fm = yaml.safe_load(fm_match.group(1))
-            if fm and fm.get("name"):
-                return make_slug(fm["name"])
-        except Exception:
-            pass
-    return None
+_skill_cache = _SkillCache()
 
+
+def scan_skills() -> List[Dict[str, Any]]:
+    """Scan skills directory and return list of parsed skill data."""
+    return _skill_cache.get()
+
+
+# ── Install ───────────────────────────────────────────────────────────────
 
 def install(source: str) -> None:
-    """Install a skill from URL or local path."""
+    """
+    Install a skill from URL or local path.
+
+    Args:
+        source: URL or local path to SKILL.md or skill directory
+
+    Raises:
+        ValueError: If source is invalid or empty
+        HTTPError: If network request fails
+    """
     source = source.strip()
+    if not source:
+        raise ValueError("Source cannot be empty")
+
     skills_dir = get_skills_dir()
     skills_dir.mkdir(exist_ok=True)
 
-    if source.startswith("http://") or source.startswith("https://"):
-        slug, content = install_from_url(source)
-    else:
-        slug, content = install_from_local(source)
+    print(f"[SKILL] Installing from: {source}")
 
+    # Determine source type and get content
+    if source.startswith(("http://", "https://")):
+        slug, content = _install_from_url(source)
+    else:
+        slug, content = _install_from_local_with_feedback(Path(source))
+
+    # Validate content
+    if not content or not content.strip():
+        raise ValueError("Downloaded content is empty")
+
+    # Write skill file
     target_dir = skills_dir / slug
     target_file = target_dir / "SKILL.md"
 
-    if target_dir.exists():
-        print(f"[SKILL] Updating existing skill: {slug}")
-    else:
-        print(f"[SKILL] Installing new skill: {slug}")
+    action = "Updating" if target_dir.exists() else "Installing new"
+    print(f"[SKILL] {action} skill: {slug}")
 
     target_dir.mkdir(exist_ok=True)
     target_file.write_text(content, encoding="utf-8")
     print(f"[SKILL] Installed at: {target_dir}")
 
-    # Reload skills so the new one is available immediately
-    from .skill_manager import load_skills, clear_skills
-    clear_skills()
-    load_skills()
-    print(f"[SKILL] Skill '{slug}' is now loaded and available.")
+    # Reload skills
+    _reload_skills()
+    print(f"[SKILL] ✓ Skill '{slug}' is now loaded and available.")
 
 
-# ──────────────────────────────────────────────────
-# List
-# ──────────────────────────────────────────────────
+def _install_from_url(url: str) -> Tuple[str, str]:
+    """Download SKILL.md from a URL with progress indication."""
+    print(f"[SKILL] Fetching from: {url}")
+    normalized_url = normalize_github_url(url)
+    if normalized_url != url:
+        print(f"[SKILL] Normalized to: {normalized_url}")
+
+    content, final_url = fetch_url(normalized_url)
+    print(f"[SKILL] Downloaded {len(content)} bytes")
+
+    # Use install_from_url's slug extraction logic
+    slug, _ = install_from_url(url, use_retry=False)
+    print(f"[SKILL] Identified as: {slug}")
+
+    return slug, content
+
+
+def _install_from_local_with_feedback(path: Path) -> Tuple[str, str]:
+    """Install from local path with progress indication."""
+    print(f"[SKILL] Reading from: {path}")
+    slug, content = install_from_local(path)
+    print(f"[SKILL] Identified as: {slug}")
+    return slug, content
+
+
+def _reload_skills() -> None:
+    """Reload skills in the skill manager and invalidate cache."""
+    _skill_cache.invalidate()
+
+    try:
+        from .skill_manager import load_skills
+        load_skills(force=True)
+    except ImportError:
+        pass
+
+
+# ── Index Building ───────────────────────────────────────────────────────
+
+def build_skill_index() -> Dict[str, Path]:
+    """Build a mapping from skill identifiers to skill directory path."""
+    skills_dir = get_skills_dir()
+    index = {}
+
+    if not skills_dir.exists():
+        return index
+
+    for skill_dir in skills_dir.iterdir():
+        if not skill_dir.is_dir() or skill_dir.name.startswith('_'):
+            continue
+
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.exists():
+            continue
+
+        try:
+            data = parse_skill_md(skill_md)
+            # Add all possible lookup variants
+            variants = {
+                data["slug"], data["slug"].lower(),
+                data["name"], data["name"].lower(),
+                data["name"].lower().replace(" ", "-"),
+                data["name"].lower().replace(" ", "_"),
+                skill_dir.name, skill_dir.name.lower(),
+            }
+            for variant in variants:
+                index[variant] = skill_dir
+        except Exception:
+            continue
+
+    return index
+
+
+def find_skill_by_name(name: str) -> Optional[Path]:
+    """
+    Find a skill directory by name or slug.
+
+    Args:
+        name: Skill name or slug
+
+    Returns:
+        Path to skill directory or None if not found
+    """
+    if not name:
+        return None
+
+    index = build_skill_index()
+    return index.get(name) or index.get(name.lower())
+
+
+# ── List Command ─────────────────────────────────────────────────────────
 
 def list_skills() -> None:
-    """List all installed skills."""
+    """List all installed skills with their details."""
     skills = scan_skills()
 
     if not skills:
         print("No skills installed. Run 'python harness.py skill install <source>' to add one.")
         return
 
+    # Print header
     print(f"{'Name':<22} {'Slug':<20} {'Description'}")
     print("-" * 70)
-    for s in skills:
-        name = s["name"]
-        slug = s["slug"]
-        desc = (s["description"] or "")[:40]
-        meta = s.get("metadata", {})
-        safety = ""
-        if isinstance(meta, dict):
-            clawdbot = meta.get("clawdbot", {}) or {}
-            safety = clawdbot.get("safety", "")
-        print(f"{name:<22} {slug:<20} {desc}  [{safety}]")
+
+    # Print each skill
+    for skill in skills:
+        name = skill["name"]
+        slug = skill["slug"]
+        desc = (skill["description"] or "")[:MAX_DESCRIPTION_LENGTH]
+
+        # Get safety level from metadata
+        safety = _extract_safety_level(skill.get("metadata", {}))
+        safety_display = f"[{safety}]" if safety else ""
+
+        print(f"{name:<22} {slug:<20} {desc}  {safety_display}")
 
     print(f"\n({len(skills)} skill(s) installed)")
 
 
-# ──────────────────────────────────────────────────
-# Show
-# ──────────────────────────────────────────────────
+def _extract_safety_level(metadata: Any) -> str:
+    """Extract safety level from skill metadata."""
+    if not isinstance(metadata, dict):
+        return ""
+
+    clawdbot = metadata.get("clawdbot", {})
+    if not isinstance(clawdbot, dict):
+        return ""
+
+    return clawdbot.get("safety", "")
+
+
+# ── Show Command ─────────────────────────────────────────────────────────
 
 def show_skill(name: str) -> None:
-    """Show detailed info about a skill."""
-    skills_dir = get_skills_dir()
-    if not skills_dir.exists():
-        print(f"[SKILL] Not found: {name}")
+    """
+    Show detailed information about a skill.
+
+    Args:
+        name: Skill name or slug
+    """
+    if not name:
+        print("[SKILL] Error: Skill name is required", file=sys.stderr)
         return
 
-    # Try exact directory match first, then by slug
-    skill_dir = None
-    for d in skills_dir.iterdir():
-        if d.is_dir() and (d.name == name or d.name == name.lower().replace(" ", "-")):
-            skill_dir = d
-            break
-        # Also check if name matches slugified version of subdirectory names
-        slugified = d.name.lower().replace("-", "_").replace(" ", "_")
-        if slugified == name.lower().replace("-", "_").replace(" ", "_"):
-            skill_dir = d
-            break
-        # Check if the skill's own name (from frontmatter) matches
-        if d.is_dir():
-            skill_md = d / "SKILL.md"
-            if skill_md.exists():
-                try:
-                    data = parse_skill_md(skill_md)
-                    if data["name"].lower().replace(" ", "-") == name.lower().replace(" ", "-"):
-                        skill_dir = d
-                        break
-                except Exception:
-                    pass
+    skill_dir = find_skill_by_name(name)
 
-    skill_md = skill_dir / "SKILL.md" if skill_dir and skill_dir.exists() else None
-    if not skill_md or not skill_md.exists():
+    if not skill_dir or not skill_dir.exists():
         print(f"[SKILL] Not found: {name}")
-        print(f"  Available skills: {[s['slug'] for s in scan_skills()]}")
+        available = [s['slug'] for s in scan_skills()]
+        if available:
+            print(f"  Available skills: {', '.join(available)}")
         return
 
-    data = parse_skill_md(skill_md)
+    # Parse and display skill details
+    skill_md = skill_dir / "SKILL.md"
 
+    try:
+        data = parse_skill_md(skill_md)
+    except Exception as e:
+        print(f"[SKILL] Error parsing skill: {e}", file=sys.stderr)
+        return
+
+    # Display basic info
     print(f"Name:        {data['name']}")
     print(f"Slug:        {data['slug']}")
     print(f"Description: {data['description'] or '(none)'}")
     print(f"Path:        {skill_md}")
 
-    meta = data.get("metadata", {})
-    if isinstance(meta, dict):
-        clawdbot = meta.get("clawdbot", {}) or {}
-        if clawdbot:
-            print(f"Safety:      {clawdbot.get('safety', 'KEYWORD_CHECK')}")
-            if clawdbot.get("requires"):
-                print(f"Requires:    {clawdbot['requires']}")
+    # Display metadata
+    _display_skill_metadata(data.get("metadata", {}))
 
-    print(f"\nBash commands: {len(data['bash_blocks'])}")
-    for i, block in enumerate(data["bash_blocks"]):
-        print(f"\n  [{i+1}] Command: {block['command'][:80]}{'...' if len(block['command']) > 80 else ''}")
-        if block["params"]:
-            print(f"      Params: {block['params']}")
+    # Display bash commands
+    bash_blocks = data.get("bash_blocks", [])
+    print(f"\nBash commands: {len(bash_blocks)}")
+    for i, block in enumerate(bash_blocks):
+        cmd = block['command']
+        preview = cmd[:80] + ('...' if len(cmd) > 80 else '')
+        print(f"\n  [{i+1}] Command: {preview}")
+        if block.get('params'):
+            print(f"      Params: {', '.join(block['params'])}")
 
     # Check if currently loaded
-    from .skill_manager import get_skills
-    loaded = [t.name for t in get_skills()]
-    if data["slug"] in [make_slug(s["name"]) for s in scan_skills()]:
-        tool_names = [n for n in loaded if n.startswith(data["slug"].replace("-", "_"))]
+    _show_loaded_status(data['slug'])
+
+
+def _display_skill_metadata(metadata: Any) -> None:
+    """Display skill metadata if present."""
+    if not isinstance(metadata, dict):
+        return
+
+    clawdbot = metadata.get("clawdbot", {})
+    if not isinstance(clawdbot, dict) or not clawdbot:
+        return
+
+    print(f"Safety:      {clawdbot.get('safety', 'KEYWORD_CHECK')}")
+    requires = clawdbot.get("requires")
+    if requires:
+        print(f"Requires:    {requires}")
+
+
+def _show_loaded_status(slug: str) -> None:
+    """Show if skill is currently loaded as tools."""
+    try:
+        from .skill_manager import get_skills
+        loaded = [t.name for t in get_skills()]
+        tool_prefix = slug.replace("-", "_")
+        tool_names = [n for n in loaded if n.startswith(tool_prefix)]
         if tool_names:
             print(f"\n  Loaded as tools: {', '.join(tool_names)}")
+    except ImportError:
+        pass
 
 
-# ──────────────────────────────────────────────────
-# Remove
-# ──────────────────────────────────────────────────
+# ── Remove Command ───────────────────────────────────────────────────────
 
 def remove_skill(name: str) -> None:
-    """Remove an installed skill."""
-    skills_dir = get_skills_dir()
-    skill_dir = skills_dir / name
+    """
+    Remove an installed skill.
 
-    if not skill_dir.exists():
+    Args:
+        name: Skill name or slug to remove
+    """
+    if not name:
+        print("[SKILL] Error: Skill name is required", file=sys.stderr)
+        return
+
+    skill_dir = find_skill_by_name(name)
+
+    if not skill_dir or not skill_dir.exists():
         print(f"[SKILL] Not found: {name}")
         return
 
-    shutil.rmtree(skill_dir)
-    print(f"[SKILL] Removed: {name}")
-
-    # Reload so the removed skill is deregistered
-    from .skill_manager import load_skills, clear_skills
-    clear_skills()
-    load_skills()
-
-
-# ──────────────────────────────────────────────────
-# Update
-# ──────────────────────────────────────────────────
-
-def update_skill(name: str, source: Optional[str] = None) -> None:
-    """Update a skill. If source not provided, re-fetch from original location (NYI)."""
-    if not source:
-        print("[SKILL] Update requires a source URL. Example:")
-        print(f"  python harness.py skill update {name} https://raw.githubusercontent.com/.../SKILL.md")
+    # Confirm removal
+    confirm = input(f"Remove skill '{skill_dir.name}'? [y/N] ").strip().lower()
+    if confirm not in ('y', 'yes'):
+        print("[SKILL] Cancelled")
         return
 
-    # Re-run install logic to overwrite
+    # Remove directory
+    shutil.rmtree(skill_dir)
+    print(f"[SKILL] Removed: {skill_dir.name}")
+
+    # Reload to deregister
+    _reload_skills()
+
+
+# ── Update Command ───────────────────────────────────────────────────────
+
+def update_skill(name: str, source: Optional[str] = None) -> None:
+    """
+    Update a skill with new source.
+
+    Args:
+        name: Skill name or slug to update
+        source: New source URL (required)
+    """
+    if not source:
+        print("[SKILL] Update requires a source URL. Example:", file=sys.stderr)
+        print(f"  python harness.py skill update {name} https://raw.githubusercontent.com/.../SKILL.md", file=sys.stderr)
+        return
+
+    # Check if skill exists
+    skill_dir = find_skill_by_name(name)
+    if not skill_dir:
+        print(f"[SKILL] Skill not found: {name}", file=sys.stderr)
+        return
+
+    print(f"[SKILL] Updating '{name}' from: {source}")
+
+    # Reuse install logic to overwrite
     install(source)
 
 
-# ──────────────────────────────────────────────────
-# Main CLI entry point
-# ──────────────────────────────────────────────────
+# ── Main CLI Entry Point ─────────────────────────────────────────────────
 
 def main() -> None:
-    sys.stdout.reconfigure(encoding='utf-8')
-    sys.stderr.reconfigure(encoding='utf-8')
+    """Main entry point for skill CLI."""
+    # Configure stdout for UTF-8
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
 
     parser = argparse.ArgumentParser(
         prog="python harness.py skill",
         description="NexusHarness Skill CLI — manage agent skills",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python harness.py skill list
+  python harness.py skill install ./my-skill
+  python harness.py skill install https://raw.githubusercontent.com/user/repo/main/skills/weather/SKILL.md
+  python harness.py skill remove weather-skill
+  python harness.py skill show weather-skill
+        """
     )
-    sub = parser.add_subparsers(dest="cmd", required=True)
 
-    # list
+    sub = parser.add_subparsers(dest="cmd", required=True, help="Command to execute")
+
+    # List command
     sub.add_parser("list", help="List installed skills")
 
-    # install
-    install_parser = sub.add_parser("install", help="Install a skill from URL or local path")
+    # Install command
+    install_parser = sub.add_parser("install", help="Install a skill")
     install_parser.add_argument("source", help="URL or local path to SKILL.md or skill directory")
 
-    # remove
+    # Remove command
     remove_parser = sub.add_parser("remove", help="Remove an installed skill")
     remove_parser.add_argument("name", help="Skill name/slug to remove")
 
-    # show
+    # Show command
     show_parser = sub.add_parser("show", help="Show skill details")
     show_parser.add_argument("name", help="Skill name/slug")
 
-    # update
+    # Update command
     update_parser = sub.add_parser("update", help="Update a skill")
     update_parser.add_argument("name", help="Skill name/slug to update")
     update_parser.add_argument("source", nargs="?", help="New source URL (required)")
 
+    # Parse arguments (skip script name and 'skill' subcommand)
     args = parser.parse_args(sys.argv[2:] if len(sys.argv) > 2 else [])
+
+    # Execute command with error handling
+    exit_code = EXIT_SUCCESS
 
     try:
         if args.cmd == "list":
@@ -415,9 +479,24 @@ def main() -> None:
             show_skill(args.name)
         elif args.cmd == "update":
             update_skill(args.name, args.source)
+    except ValueError as e:
+        print(f"[SKILL] Input error: {e}", file=sys.stderr)
+        exit_code = EXIT_INPUT_ERROR
+    except HTTPError as e:
+        print(f"[SKILL] Network error: {e}", file=sys.stderr)
+        exit_code = EXIT_NETWORK_ERROR
+    except (IOError, OSError) as e:
+        print(f"[SKILL] File system error: {e}", file=sys.stderr)
+        exit_code = EXIT_IO_ERROR
+    except KeyboardInterrupt:
+        print("\n[SKILL] Cancelled by user", file=sys.stderr)
+        exit_code = EXIT_INPUT_ERROR
     except Exception as e:
-        print(f"[SKILL] Error: {e}")
-        raise
+        print(f"[SKILL] Unexpected error: {e}", file=sys.stderr)
+        exit_code = EXIT_UNKNOWN_ERROR
+        raise  # For debugging
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
