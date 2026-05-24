@@ -27,21 +27,21 @@
 
 | 状态 | 问题 | 文件 | 说明 |
 |------|------|------|------|
-| × | RAG 混合搜索 chunk/doc 映射错误 | `microharness/rag/rag.py:192-235` | BM25 与向量分数组合时 doc_id 可能错位 |
-| × | 全局 config 污染 | `microharness/observability/evaluation.py` | 多线程环境会产生竞态条件 |
-| × | Web 全局状态竞态 | `web/app.py` | `pending_approvals`, `approval_results`, `disabled_skills` 无锁保护 |
-| × | Audit 日志无限增长 | `microharness/observability/audit.py` | 所有会话追加到同一文件，无轮转 |
-| × | Web 模式长期记忆不完整 | `microharness/memory/memory.py` / `web/app.py` | `extract_and_save_memory` 未在 Web 模式被调用 |
+| ❌ | RAG 混合搜索 chunk/doc 映射错误 | `microharness/rag/rag.py:192-235` | BM25 与向量分数组合时 doc_id 可能错位 |
+| ❌ | 全局 config 污染 | `microharness/observability/evaluation.py` | 多线程环境会产生竞态条件 |
+| ❌ | Web 全局状态竞态 | `web/app.py` | `pending_approvals`, `approval_results`, `disabled_skills` 无锁保护 |
+| ❌ | Audit 日志无限增长 | `microharness/observability/audit.py` | 所有会话追加到同一文件，无轮转 |
+| ❌ | Web 模式长期记忆不完整 | `microharness/memory/memory.py` / `web/app.py` | `extract_and_save_memory` 未在 Web 模式被调用 |
 
 ### P2/P3 一般问题
 
 | 状态 | 问题 | 文件 | 说明 |
 |------|------|------|------|
-| × | `build_harness()` 死代码 | `microharness/agent/harness.py` | CLI 和 Web 都没用这个函数 |
-| × | 循环依赖风险 | `microharness/config/prompts.py` | 导入 `web.app.disabled_skills` |
-| × | 硬编码定价 | `microharness/observability/token_tracker.py` | 模型定价不完整 |
-| × | Skill 重载不生效 | `microharness/skills/skill_manager.py` | `_loaded` 标志不清除 |
-| × | 文档路径不一致 | 多个文件 | 有的用 `Path`，有的用 `os.path` |
+| ❌ | `build_harness()` 死代码 | `microharness/agent/harness.py` | CLI 和 Web 都没用这个函数 |
+| ❌ | 循环依赖风险 | `microharness/config/prompts.py` | 导入 `web.app.disabled_skills` |
+| ❌ | 硬编码定价 | `microharness/observability/token_tracker.py` | 模型定价不完整 |
+| ❌ | Skill 重载不生效 | `microharness/skills/skill_manager.py` | `_loaded` 标志不清除 |
+| ❌ | 文档路径不一致 | 多个文件 | 有的用 `Path`，有的用 `os.path` |
 
 ---
 
@@ -60,7 +60,7 @@
 |------|------|
 | ✅ | 已修复 |
 | ⚠️ | 待修复（重要/高优先级） |
-| × | 待修复（一般/低优先级） |
+| ❌ | 待修复（一般/低优先级） |
 
 ---
 
