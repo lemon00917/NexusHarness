@@ -113,9 +113,14 @@ def _parse_skill_md(path: Path) -> dict:
     bash_blocks = []
     for match in re.finditer(r'```bash\s+(.*?)\s```', body, re.DOTALL):
         raw_cmd = match.group(1).strip()
-        # Remove comment lines (# Output: ...)
-        cmd_lines = [l for l in raw_cmd.splitlines() if not l.strip().startswith("# Output:")]
+        # Remove comment lines and empty lines
+        cmd_lines = [l for l in raw_cmd.splitlines() if l.strip() and not l.strip().startswith("# Output:")]
+        # Filter out blocks that are all comments or examples (no actual command)
+        if not cmd_lines or all(l.strip().startswith('#') or l.strip().startswith('/') for l in cmd_lines):
+            continue
         cmd = "\n".join(cmd_lines)
+        # Remove parameter placeholder syntax like <用户参数>
+        cmd = re.sub(r'<\w+>', '', cmd).strip()
         # Extract {param} placeholders
         params = list(set(re.findall(r'\{(\w+)\}', cmd)))
         if cmd.strip():
@@ -170,7 +175,13 @@ def _generate_tool(skill_data: dict, bash_block: dict, block_index: int, skill_d
             cmd = cmd.replace(f"{{{param}}}", str(value))
 
         # Auto-fix /path/to/skills placeholder to actual skill dir
-        cmd = cmd.replace("/path/to/skills/", str(skill_dir))
+        # The command has /path/to/skills/{skill_name}/ but skill_dir is skills/{slug}-{version}
+        # We need to extract the skill_name from the command and replace it
+        skill_dir_str = str(skill_dir).replace('\\', '/')
+        # Replace /path/to/skills/<skill_name> with the actual skill_dir (which includes version)
+        # e.g., /path/to/skills/1coos-calendar-cn -> skills/1coos-calendar-cn-1.0.2
+        import re
+        cmd = re.sub(r'/path/to/skills/[^/]+', skill_dir_str, cmd)
 
         # Execute via bash
         try:

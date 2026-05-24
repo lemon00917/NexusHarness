@@ -12,6 +12,7 @@
 | ✅ | 编码问题 | `microharness/skills/skill_manager.py` | 添加 `encoding="utf-8", errors="replace"` |
 | ✅ | skills 路径错误 | `microharness/skills/skill_manager.py` | 修正路径 `parent.parent.parent / "skills"` |
 | ✅ | .env 路径错误 | `microharness/config/config.py` | 修正路径 `parent.parent.parent / ".env"` |
+| ✅ | Skill 路径解析错误 | `microharness/skills/skill_manager.py` | 使用正则正确替换 `/path/to/skills/{name}` 为实际路径 |
 
 ---
 
