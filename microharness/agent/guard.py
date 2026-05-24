@@ -17,7 +17,7 @@ Harness 的安全守卫层 —— 这是 Harness 和普通 Agent 最关键的区
 
 # 高危操作关键词 —— 出现在任意工具参数中时触发守卫拦截
 DANGEROUS_KEYWORDS = [
-    "rm ",
+    "rm -rf", "rm -r", "rm -f",  # 递归删除
     "shutil.rmtree",
     "os.remove",
     "os.unlink",
@@ -25,7 +25,19 @@ DANGEROUS_KEYWORDS = [
     "DELETE FROM",
     "format(",          # 磁盘格式化
     "subprocess.call",  # 原始 shell 调用
-    "> /dev/",          # 写入系统设备
+    "> /dev/",           # 写入系统设备
+    "&& ",              # 命令链
+    "| ",              # 管道
+    "; ",              # 命令分隔
+    "curl ",           # 可能的网络调用
+    "wget ",
+    "python -c",       # 直接执行代码
+    "eval(",
+    "exec(",
+    "__import__",
+    "base64 -d",
+    "/etc/passwd",
+    "/etc/shadow",
 ]
 
 # 强制人工确认工具 —— 有持久化副作用，无论参数内容
