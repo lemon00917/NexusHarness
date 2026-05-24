@@ -6,12 +6,12 @@
 
 | 状态 | 问题 | 文件 | 修复内容 |
 |------|------|------|----------|
-| :white_check_mark: | 重复 LLM 定义 | `microharness/agent/harness.py` | 删除第58行重复代码 |
-| :white_check_mark: | 嵌套方法死代码 | `microharness/memory/session_manager.py` | 删除定义在函数内部的死代码 |
-| :white_check_mark: | 导入缺失 | `web/app.py` | 添加 `from microharness.agent.retry import get_retry_executor` |
-| :white_check_mark: | 编码问题 | `microharness/skills/skill_manager.py` | 添加 `encoding="utf-8", errors="replace"` |
-| :white_check_mark: | skills 路径错误 | `microharness/skills/skill_manager.py` | 修正路径 `parent.parent.parent / "skills"` |
-| :white_check_mark: | .env 路径错误 | `microharness/config/config.py` | 修正路径 `parent.parent.parent / ".env"` |
+| [x] | 重复 LLM 定义 | `microharness/agent/harness.py` | 删除第58行重复代码 |
+| [x] | 嵌套方法死代码 | `microharness/memory/session_manager.py` | 删除定义在函数内部的死代码 |
+| [x] | 导入缺失 | `web/app.py` | 添加 `from microharness.agent.retry import get_retry_executor` |
+| [x] | 编码问题 | `microharness/skills/skill_manager.py` | 添加 `encoding="utf-8", errors="replace"` |
+| [x] | skills 路径错误 | `microharness/skills/skill_manager.py` | 修正路径 `parent.parent.parent / "skills"` |
+| [x] | .env 路径错误 | `microharness/config/config.py` | 修正路径 `parent.parent.parent / ".env"` |
 
 ---
 
@@ -21,7 +21,7 @@
 
 | 状态 | 问题 | 文件 | 说明 |
 |------|------|------|------|
-| :x: | Guard 对 Skill 参数缺乏危险检测 | `microharness/agent/guard.py` | Skill 工具的参数可能被绕过关键词检测 |
+| [ ] | Guard 对 Skill 参数缺乏危险检测 | `microharness/agent/guard.py` | Skill 工具的参数可能被绕过关键词检测 |
 
 > 注：当前 `guard.py:100` 的 `is_dangerous(tool_input)` 会对所有非 AUTO_APPROVE/ALWAYS_CONFIRM 的工具进行检查。但 Skill 参数是 bash 命令字符串，可能因空格/路径差异漏过检测。
 
@@ -29,21 +29,21 @@
 
 | 状态 | 问题 | 文件 | 说明 |
 |------|------|------|------|
-| :x: | RAG 混合搜索 chunk/doc 映射错误 | `microharness/rag/rag.py:192-235` | BM25 与向量分数组合时 doc_id 可能错位 |
-| :x: | 全局 config 污染 | `microharness/observability/evaluation.py` | 多线程环境会产生竞态条件 |
-| :x: | Web 全局状态竞态 | `web/app.py` | `pending_approvals`, `approval_results`, `disabled_skills` 无锁保护 |
-| :x: | Audit 日志无限增长 | `microharness/observability/audit.py` | 所有会话追加到同一文件，无轮转 |
-| :x: | Web 模式长期记忆不完整 | `microharness/memory/memory.py` / `web/app.py` | `extract_and_save_memory` 未在 Web 模式被调用 |
+| [ ] | RAG 混合搜索 chunk/doc 映射错误 | `microharness/rag/rag.py:192-235` | BM25 与向量分数组合时 doc_id 可能错位 |
+| [ ] | 全局 config 污染 | `microharness/observability/evaluation.py` | 多线程环境会产生竞态条件 |
+| [ ] | Web 全局状态竞态 | `web/app.py` | `pending_approvals`, `approval_results`, `disabled_skills` 无锁保护 |
+| [ ] | Audit 日志无限增长 | `microharness/observability/audit.py` | 所有会话追加到同一文件，无轮转 |
+| [ ] | Web 模式长期记忆不完整 | `microharness/memory/memory.py` / `web/app.py` | `extract_and_save_memory` 未在 Web 模式被调用 |
 
 ### P2/P3 一般问题
 
 | 状态 | 问题 | 文件 | 说明 |
 |------|------|------|------|
-| :x: | `build_harness()` 死代码 | `microharness/agent/harness.py` | CLI 和 Web 都没用这个函数 |
-| :x: | 循环依赖风险 | `microharness/config/prompts.py` | 导入 `web.app.disabled_skills` |
-| :x: | 硬编码定价 | `microharness/observability/token_tracker.py` | 模型定价不完整 |
-| :x: | Skill 重载不生效 | `microharness/skills/skill_manager.py` | `_loaded` 标志不清除 |
-| :x: | 文档路径不一致 | 多个文件 | 有的用 `Path`，有的用 `os.path` |
+| [ ] | `build_harness()` 死代码 | `microharness/agent/harness.py` | CLI 和 Web 都没用这个函数 |
+| [ ] | 循环依赖风险 | `microharness/config/prompts.py` | 导入 `web.app.disabled_skills` |
+| [ ] | 硬编码定价 | `microharness/observability/token_tracker.py` | 模型定价不完整 |
+| [ ] | Skill 重载不生效 | `microharness/skills/skill_manager.py` | `_loaded` 标志不清除 |
+| [ ] | 文档路径不一致 | 多个文件 | 有的用 `Path`，有的用 `os.path` |
 
 ---
 
