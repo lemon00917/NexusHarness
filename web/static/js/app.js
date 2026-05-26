@@ -671,7 +671,7 @@ function parseMessageContent(content) {
     let result = decodeHtmlEntities(content);
 
     // Parse <thinking>...</thinking> into styled blocks
-    result = result.replace(/<thinking>([\s\S]*?)<\/thinking>/gi, '<div class="thinking-text">$1</div>');
+    result = result.replace(/<thinking>([\s\S]*?)<\/thinking>/gi, '<div class="thinking-text">$1</div><br><br>');
 
     // Parse Step X/10 labels
     result = result.replace(/(Step \d+\/\d+[^<]*)/g, '<div class="step-label">$1</div>');

@@ -681,7 +681,7 @@ html, body {
     color: var(--text-dim);
     padding-left: 10px;
     border-left: 2px solid var(--border-color);
-    margin: 4px 0 6px;
+    margin: 4px 0 12px;
     line-height: 1.6;
 }
 

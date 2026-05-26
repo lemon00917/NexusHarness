@@ -451,12 +451,14 @@ def _execute_command(cmd: str, cwd: Path) -> str:
             shell=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             cwd=str(cwd),
             timeout=SKILL_COMMAND_TIMEOUT,
             check=False
         )
 
-        output = result.stdout.strip()
+        output = (result.stdout or "").strip()
 
         if result.returncode != 0:
             error_msg = result.stderr.strip() or output or "Unknown error"

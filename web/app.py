@@ -43,6 +43,13 @@ from microharness.observability.token_tracker import token_stats, get_cost
 from microharness.observability.audit import log_audit, get_audit_records
 from microharness.observability.evaluation import BenchmarkRunner, print_benchmark_result
 from microharness.config.prompts import get_system_prompt
+from microharness.config.prompt_config import (
+    load_prompt_config,
+    save_prompt_config,
+    validate_prompt_config,
+    get_intent_templates,
+    delete_intent,
+)
 from microharness.rag.rag import rag
 from microharness.rag.rag_config import load_config, save_config, RAGConfig
 from microharness.rag.document_parser import parse_document
@@ -129,12 +136,26 @@ async def event_stream(session_id: str, task: str):
         yield sse_event("error", {"message": f"Skill loading error: {e}"})
         return
 
-    # Use resume_state if available, otherwise create fresh init state
-    init_state: HarnessState = resume_state if resume_state else {
-        "messages": [{"type": "human", "content": task}],
-        "step_count": 0,
-        "approved": True,
-    }
+    # Use resume_state if available, otherwise create init state with existing messages or fresh
+    if resume_state:
+        init_state = resume_state
+    else:
+        # Get existing messages from session history, or start fresh
+        existing_messages = session.get("harness_state", {}).get("messages", [])
+        if existing_messages:
+            # Append new task to existing conversation history
+            init_state = {
+                "messages": existing_messages + [{"type": "human", "content": task}],
+                "step_count": 0,
+                "approved": True,
+            }
+        else:
+            # No history, start fresh
+            init_state = {
+                "messages": [{"type": "human", "content": task}],
+                "step_count": 0,
+                "approved": True,
+            }
 
     # Run harness using our simplified run_harness_async
     try:
@@ -199,6 +220,10 @@ async def run_harness_async(harness, init_state: HarnessState, session_id: str, 
                 from langchain_core.messages import AIMessage
                 response = AIMessage(content=full_response_content)
                 if all_tool_calls:
+                    # Ensure each tool_call has an id (Anthropic streaming may not include it)
+                    for i, tc in enumerate(all_tool_calls):
+                        if "id" not in tc:
+                            tc["id"] = f"tool_{step}_{i}"
                     response.tool_calls = all_tool_calls
 
                 elapsed_ms = int(time.time() * 1000) - agent_start_ms
@@ -262,7 +287,7 @@ async def run_harness_async(harness, init_state: HarnessState, session_id: str, 
                     yield sse_event("memory_saved", {"summary": summary})
                 except Exception as e:
                     print(f"Memory save error: {e}")
-                replay_logger.log_complete(session_id, step, "no_more_tool_calls")
+                replay_logger.log_complete(session_id, step)
                 replay_logger.flush(session_id)
                 return
 
@@ -403,7 +428,7 @@ async def run_harness_async(harness, init_state: HarnessState, session_id: str, 
         yield sse_event("memory_saved", {"summary": summary})
     except Exception as e:
         print(f"Memory save error: {e}")
-    replay_logger.log_complete(session_id, MAX_STEPS, "max_steps_reached")
+    replay_logger.log_complete(session_id, MAX_STEPS)
     replay_logger.flush(session_id)
 
 
@@ -454,6 +479,22 @@ async def serve_rag_config_page():
     return {"error": "rag_config.html not found"}
 
 
+@app.get("/rag_config")
+async def redirect_to_rag_config():
+    """Redirect /rag_config to the template."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/templates/rag_config.html")
+
+
+@app.get("/templates/prompt_config.html")
+async def serve_prompt_config_page():
+    """Serve the prompt configuration page."""
+    html_path = templates_dir / "prompt_config.html"
+    if html_path.exists():
+        return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+    return {"error": "prompt_config.html not found"}
+
+
 @app.get("/api/run")
 async def run_task_get(session_id: str = "default", task: str = ""):
     """
@@ -476,11 +517,9 @@ async def get_memory():
 @app.delete("/api/memory")
 async def clear_memory():
     """Clear all long-term memory records."""
-    from pathlib import Path
-    memory_file = Path(__file__).parent.parent / "memory.json"
-    if memory_file.exists():
-        memory_file.write_text("[]", encoding="utf-8")
-    return {"status": "cleared"}
+    from microharness.memory.memory import clear_memories
+    cleared = clear_memories()
+    return {"status": "cleared" if cleared else "failed"}
 
 
 @app.delete("/api/audit")
@@ -913,15 +952,14 @@ async def get_tool_schema(name: str):
 
 
 @app.get("/api/benchmark")
-async def run_benchmark(
+def run_benchmark(
     category: str = None,
     tasks: str = None,
     provider: str = None,
     model: str = None,
 ):
     """Run benchmark tasks via web API."""
-    from microharness.evaluation import BenchmarkRunner, print_benchmark_result
-    import asyncio
+    from microharness.observability.evaluation import BenchmarkRunner, print_benchmark_result
 
     task_ids = tasks.split(",") if tasks else None
 
@@ -934,6 +972,66 @@ async def run_benchmark(
     )
 
     return asdict(result)
+
+
+# ──────────────────────────────────────────────────
+# Prompt Config API
+# ──────────────────────────────────────────────────
+
+@app.get("/api/prompt-config")
+async def get_prompt_config():
+    """Get prompt configuration."""
+    config = load_prompt_config()
+    intents = get_intent_templates(config)
+    return {
+        "config": config,
+        "intents": intents,
+    }
+
+
+@app.post("/api/prompt-config")
+async def update_prompt_config(request: Request):
+    """Update prompt configuration (full replace)."""
+    data = await request.json()
+    is_valid, error = validate_prompt_config(data)
+    if not is_valid:
+        return {"error": error}, 400
+    save_prompt_config(data)
+    return {"status": "saved", "config": load_prompt_config()}
+
+
+@app.post("/api/prompt-config/intents")
+async def create_or_update_intent(request: Request):
+    """Create or update an intent template."""
+    data = await request.json()
+    intent_name = data.get("intent_name")
+    intent_config = data.get("intent_config")
+    new_name = data.get("new_name")  # for rename support
+
+    if not intent_name or not intent_config:
+        return {"error": "intent_name and intent_config are required"}, 400
+
+    if "template" not in intent_config:
+        return {"error": "intent_config must contain 'template'"}, 400
+
+    config = load_prompt_config()
+
+    # Handle rename: delete old key if new_name differs
+    if new_name and new_name != intent_name:
+        if intent_name in config["intents"]:
+            del config["intents"][intent_name]
+        intent_name = new_name
+
+    config["intents"][intent_name] = intent_config
+    save_prompt_config(config)
+    return {"status": "saved", "intent_name": intent_name}
+
+
+@app.delete("/api/prompt-config/intents/{intent_name}")
+async def remove_intent(intent_name: str):
+    """Delete an intent template."""
+    config = delete_intent(intent_name)
+    return {"status": "deleted", "intent_name": intent_name}
 
 
 # ──────────────────────────────────────────────────
@@ -989,14 +1087,15 @@ async def search_rag(q: str, top_k: int = 3, vector_weight: float = None, bm25_w
     vw = vector_weight if vector_weight is not None else (config.vector_weight if config.search_mode == "hybrid" else 1.0)
     bw = bm25_weight if bm25_weight is not None else (config.bm25_weight if config.search_mode == "hybrid" else 0.0)
 
-    results = rag.similarity_search(q, top_k, vw, bw)
+    results = rag.search(q, top_k, vw, bw)
     return {
         "results": [
             {
-                "doc_id": r.doc_id,
-                "filename": r.filename,
-                "content": r.content,
-                "created_at": r.created_at,
+                "doc_id": r.document.doc_id,
+                "filename": r.document.filename,
+                "content": r.document.content,
+                "created_at": r.document.created_at,
+                "score": r.score,
             }
             for r in results
         ]
@@ -1029,11 +1128,15 @@ async def update_rag_config(request: Request):
 
 
 @app.get("/api/rag/preview_chunk")
-async def preview_chunk(text: str = ""):
+async def preview_chunk(text: str = "", filename: str = ""):
     """Preview how text would be chunked with current config."""
     from microharness.rag.rag import rag
+    from microharness.rag.document_parser import parse_document
     if not text:
         return {"chunks": []}
+    # Parse HTML if filename indicates HTML content
+    if filename.endswith('.html') or filename.endswith('.htm'):
+        text = parse_document(text.encode('utf-8'), filename)
     chunks = rag.preview_chunking(text)
     return {"chunks": chunks}
 
@@ -1057,15 +1160,40 @@ async def get_benchmark_history():
                 "model": data.get("model"),
                 "tasks_total": data.get("tasks_total"),
                 "tasks_passed": data.get("tasks_passed"),
+                "tasks_failed": data.get("tasks_failed"),
                 "pass_rate": data.get("pass_rate"),
                 "avg_score": data.get("avg_score"),
                 "total_cost_usd": data.get("total_cost_usd"),
+                "total_duration_ms": data.get("total_duration_ms"),
+                "task_results": data.get("task_results", []),
             })
         except Exception:
             pass
 
     results.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     return {"results": results}
+
+
+@app.delete("/api/benchmark/history")
+async def clear_benchmark_history():
+    """Delete all benchmark history results."""
+    import shutil
+    results_dir = Path("benchmark_results")
+    if results_dir.exists():
+        for f in results_dir.glob("*.json"):
+            f.unlink()
+    return {"status": "deleted"}
+
+
+@app.delete("/api/benchmark/history/{run_id}")
+async def delete_benchmark_result(run_id: str):
+    """Delete a specific benchmark result."""
+    results_dir = Path("benchmark_results")
+    # Find file matching run_id prefix
+    for f in results_dir.glob(f"{run_id}*.json"):
+        f.unlink()
+        return {"status": "deleted", "run_id": run_id}
+    return {"error": "Not found"}, 404
 
 
 @app.delete("/api/tools/{name}")

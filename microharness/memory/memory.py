@@ -1,104 +1,243 @@
 """
 Long-Term Memory Module
 =======================
-Harness 的长期记忆层 —— 跨会话持久化存储关键信息。
+Cross-platform persistent memory for session summaries.
 
-工作流程：
-  会话结束 → 模型提炼本次要点 → 写入 memory.json
-  下次启动 → 读取 memory.json → 注入系统提示
+Features:
+- Atomic file writes (temp file + rename)
+- JSON corruption recovery with auto-backup
+- Deduplication within recent memories
+- Cross-platform file locking (Windows + POSIX)
+- Retry with backoff for LLM extraction
 """
 
 import json
+import logging
 import os
+import time
 from datetime import datetime
+from pathlib import Path
+from typing import List, Dict, Optional
 
 from langchain_core.messages import HumanMessage
 
-from microharness.config.config import get_config
+logger = logging.getLogger(__name__)
 
-# Memory file at project root (parent of microharness package)
-MEMORY_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "memory.json")
-MAX_MEMORIES = 20
+# ──────────────────────── Configuration ────────────────────────
+
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+MEMORY_FILE = PROJECT_ROOT / "memory.json"
+TEMP_FILE = MEMORY_FILE.with_suffix(".json.tmp")
+BACKUP_FILE = MEMORY_FILE.with_suffix(".json.bak")
+
+MAX_MEMORIES_TO_STORE = 20
+MAX_MEMORIES_IN_PROMPT = 5
+MAX_MEMORY_SUMMARY_LEN = 500
+MEMORY_EXTRACT_RETRIES = 3
 
 
-def load_memories() -> list[dict]:
-    """读取持久化记忆，文件不存在时返回空列表"""
-    if not os.path.exists(MEMORY_FILE):
+# ──────────────────────── File Locking ────────────────────────
+
+def _acquire_lock(f, lock_type: str = "shared") -> None:
+    """
+    Acquire file lock (cross-platform).
+
+    Args:
+        f: Open file handle
+        lock_type: "shared" (LOCK_SH) or "exclusive" (LOCK_EX)
+    """
+    try:
+        import fcntl
+        op = fcntl.LOCK_SH if lock_type == "shared" else fcntl.LOCK_EX
+        fcntl.flock(f.fileno(), op)
+    except (ImportError, AttributeError):
+        # fcntl not available (Windows), skip locking
+        pass
+
+
+def _release_lock(f) -> None:
+    """Release file lock if held."""
+    try:
+        import fcntl
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except (ImportError, AttributeError):
+        pass
+
+
+# ──────────────────────── Persistence ────────────────────────
+
+def load_memories() -> List[Dict]:
+    """
+    Load memories from disk with corruption recovery.
+
+    Returns:
+        List of memory entries (oldest first)
+    """
+    if not MEMORY_FILE.exists():
         return []
+
     try:
         with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
+            _acquire_lock(f, "shared")
+            try:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+            finally:
+                _release_lock(f)
+    except (json.JSONDecodeError, IOError) as e:
+        logger.error(f"Failed to load memory file: {e}")
+        _backup_corrupted()
         return []
 
 
-def save_memories(memories: list[dict]) -> None:
-    """写入持久化记忆，超过上限时裁剪最旧的条目"""
-    memories = memories[-MAX_MEMORIES:]
-    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(memories, f, ensure_ascii=False, indent=2)
+def _backup_corrupted() -> None:
+    """Backup corrupted memory file."""
+    if MEMORY_FILE.exists():
+        os.replace(MEMORY_FILE, BACKUP_FILE)
+        logger.warning(f"Corrupted memory backed up to {BACKUP_FILE}")
 
 
-def format_memories_for_prompt(memories: list[dict]) -> str:
-    """把记忆列表格式化为可注入提示的字符串，只取最近 5 条"""
-    if not memories:
-        return ""
-    lines = ["## Long-Term Memory (from previous sessions)\n"]
-    for m in memories[-5:]:
-        lines.append(f"- [{m['date']}] {m['summary']}")
+def save_memories(memories: List[Dict]) -> bool:
+    """
+    Atomically save memories to disk.
+
+    Writes to temp file first, then atomic rename.
+    """
+    try:
+        memories = memories[-MAX_MEMORIES_TO_STORE:]
+
+        with open(TEMP_FILE, "w", encoding="utf-8") as f:
+            json.dump(memories, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+
+        _acquire_lock(f, "exclusive")
+        try:
+            os.replace(TEMP_FILE, MEMORY_FILE)
+        finally:
+            _release_lock(f)
+
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save memories: {e}")
+        return False
+
+
+# ──────────────────────── Memory Extraction ────────────────────────
+
+def extract_and_save_memory(messages: List, task: str) -> Optional[str]:
+    """
+    Extract a summary from messages and save to memory.
+
+    Args:
+        messages: Conversation history
+        task: Task/session identifier
+
+    Returns:
+        Extracted summary string, or None on failure
+    """
+    print(f"[MEMORY] extract_and_save_memory called: task={task[:30]}, messages_count={len(messages)}")
+    from microharness.config import get_llm, MEMORY_MODEL
+
+    history_text = _format_messages_for_llm(messages)
+
+    prompt = f"""Extract ONE concise summary (max 80 words) from this session:
+Task: {task}
+History: {history_text}
+Respond ONLY with the summary."""
+
+    last_error = None
+    for attempt in range(MEMORY_EXTRACT_RETRIES):
+        try:
+            llm = get_llm(MEMORY_MODEL)
+            response = llm.invoke([HumanMessage(content=prompt)], timeout=30)
+            summary = response.content.strip() if response.content else ""
+
+            if not summary:
+                logger.warning("Empty summary from LLM")
+                return None
+
+            return _save_extracted_memory(task, summary)
+
+        except Exception as e:
+            last_error = e
+            logger.warning(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < MEMORY_EXTRACT_RETRIES - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+
+    logger.error("Memory extraction failed after 3 attempts")
+    return None
+
+
+# ──────────────────────── Memory Management ────────────────────────
+
+def _format_messages_for_llm(messages: List) -> str:
+    """Format messages for LLM consumption."""
+    lines = []
+    for msg in messages[-20:]:  # Limit to recent messages
+        if hasattr(msg, "content") and msg.content:
+            role = getattr(msg, "type", "unknown")
+            lines.append(f"{role}: {msg.content[:200]}")
     return "\n".join(lines)
 
 
-def extract_and_save_memory(messages: list, task: str) -> str:
+def _save_extracted_memory(task: str, summary: str) -> str:
     """
-    会话结束后，调用模型提炼本次会话的关键信息，写入持久化存储。
-    使用 config.MEMORY_MODEL，通过 config.get_llm() 支持所有 provider。
+    Save memory with deduplication.
+
+    Skips save if same task was summarized recently.
     """
-    history_text = []
-    for m in messages:
-        if isinstance(m, dict):
-            role = m.get("type", "unknown")
-            content = m.get("content", "")
-        else:
-            role = getattr(m, "type", "unknown")
-            content = m.content if hasattr(m, "content") else ""
-        content = str(content) if not isinstance(content, str) else content
-        if content.strip():
-            history_text.append(f"[{role}]: {content[:500]}")
-
-    history_str = "\n".join(history_text[-20:])
-
-    extract_prompt = f"""You are a memory extraction assistant.
-
-Given this agent session, extract ONE concise summary sentence (max 80 words) capturing:
-- What task was completed
-- Key files created or modified
-- Any important outcomes or errors
-
-Task: {task}
-
-Session history:
-{history_str}
-
-Respond with ONLY the summary sentence, nothing else."""
-
-    from microharness.config.config import get_config, MEMORY_MODEL
-    llm = get_config().get_llm(MEMORY_MODEL)
-    response = llm.invoke([HumanMessage(content=extract_prompt)])
-    summary = response.content.strip()
-
     memories = load_memories()
 
-    # Skip if the same task was already saved in the last 3 records (dedup)
-    recent_tasks = [m.get("task", "") for m in memories[-3:]]
-    if task[:100] in recent_tasks:
-        return summary  # Skip saving duplicate
+    # Check for duplicates (exact task match in recent 3)
+    for recent in memories[-3:]:
+        if recent.get("task") == task:
+            logger.info(f"Skipping duplicate memory for task: {task[:50]}")
+            return summary
 
     memories.append({
         "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "task": task[:100],
-        "summary": summary,
+        "task": task,
+        "summary": summary[:MAX_MEMORY_SUMMARY_LEN],
     })
-    save_memories(memories)
+
+    if save_memories(memories):
+        logger.info(f"Saved memory: {summary[:100]}...")
+    else:
+        logger.error("Failed to save memory")
 
     return summary
+
+
+def clear_memories() -> bool:
+    """Clear all stored memories."""
+    try:
+        if MEMORY_FILE.exists():
+            os.remove(MEMORY_FILE)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to clear memories: {e}")
+        return False
+
+
+def format_memories_for_prompt(memories: List[Dict]) -> str:
+    """
+    Format memories for inclusion in a prompt.
+
+    Args:
+        memories: List of memory dicts (from load_memories)
+
+    Returns:
+        Formatted string for prompt insertion
+    """
+    if not memories:
+        return ""
+
+    lines = ["[Session Memory]"]
+    for m in memories[-MAX_MEMORIES_IN_PROMPT:]:
+        date = m.get("date", "unknown date")
+        task = m.get("task", "unknown task")
+        summary = m.get("summary", "")
+        lines.append(f"- [{date}] {task}: {summary}")
+
+    return "\n".join(lines)

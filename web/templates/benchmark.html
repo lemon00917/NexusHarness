@@ -467,7 +467,7 @@
         </div>
 
         <div class="history-section">
-            <h2>📜 历史记录</h2>
+            <h2>📜 历史记录 <button onclick="clearAllHistory()" style="background:none;border:none;color:var(--error);cursor:pointer;font-size:12px;margin-left:10px">清空全部</button></h2>
             <div id="historyTable"></div>
         </div>
     </div>
@@ -509,6 +509,7 @@
             currentCategory = cat;
             document.querySelectorAll('.category-tabs button').forEach(b => b.classList.remove('active'));
             if (btn) btn.classList.add('active');
+            loadHistory();
         }
 
         function buildUrl() {
@@ -525,12 +526,12 @@
         }
 
         async function runBenchmarks() {
-            showProgress('加载 benchmark...', '');
             runningTasks = [];
 
-            // Show real-time progress
-            document.getElementById('resultsSection').style.display = 'block';
-            document.getElementById('progressContainer').style.display = 'block';
+            // Show progress overlay
+            document.getElementById('progressOverlay').style.display = 'flex';
+            document.getElementById('progressText').textContent = '运行中...';
+            document.getElementById('currentTaskName').textContent = '请稍候';
 
             try {
                 const url = buildUrl();
@@ -543,8 +544,7 @@
             } catch (e) {
                 showToast('运行失败: ' + e.message, 'error');
             } finally {
-                hideProgress();
-                document.getElementById('progressContainer').style.display = 'none';
+                document.getElementById('progressOverlay').style.display = 'none';
                 loadHistory();
             }
         }
@@ -625,24 +625,63 @@
                         </div>
                         <div class="task-detail-section">
                             <h4>工具调用</h4>
-                            <pre>${t.tool_calls ? t.tool_calls.map(tc => tc.name).join(' → ') : '无'}</pre>
+                            <pre>${t.tool_calls && t.tool_calls.length ? t.tool_calls.join(' → ') : '无'}</pre>
                         </div>
                     </div>
                 </div>
             `).join('');
         }
 
-        function toggleTaskDetail(item) {
-            item.classList.toggle('expanded');
+        function toggleTaskDetail(idx) {
+            // Results section: idx is the clicked .task-item element
+            // History section: idx is the row index number
+            if (typeof idx === 'number') {
+                const detailRow = document.getElementById('detail-' + idx);
+                if (detailRow) {
+                    detailRow.style.display = detailRow.style.display === 'none' ? 'table-row' : 'none';
+                }
+            } else {
+                idx.classList.toggle('expanded');
+            }
         }
 
         async function loadHistory() {
             try {
                 const res = await fetch('/api/benchmark/history');
                 const data = await res.json();
-                renderHistory(data.results || []);
+                // Filter by current category if set
+                const filtered = currentCategory
+                    ? data.results.filter(r => r.benchmark_id === currentCategory)
+                    : data.results;
+                renderHistory(filtered);
             } catch (e) {
                 console.error('Failed to load history:', e);
+            }
+        }
+
+        async function deleteHistory(runId) {
+            if (!confirm('确定删除这条记录？')) return;
+            try {
+                const res = await fetch(`/api/benchmark/history/${runId}`, { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('已删除', 'success');
+                    loadHistory();
+                }
+            } catch (e) {
+                showToast('删除失败', 'error');
+            }
+        }
+
+        async function clearAllHistory() {
+            if (!confirm('确定清空所有历史记录？此操作不可恢复！')) return;
+            try {
+                const res = await fetch('/api/benchmark/history', { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('已清空', 'success');
+                    loadHistory();
+                }
+            } catch (e) {
+                showToast('清空失败', 'error');
             }
         }
 
@@ -655,7 +694,9 @@
                 <table class="history-table">
                     <thead>
                         <tr>
+                            <th style="width:40px"></th>
                             <th>时间</th>
+                            <th>分类</th>
                             <th>Provider</th>
                             <th>Model</th>
                             <th>任务</th>
@@ -666,9 +707,11 @@
                         </tr>
                     </thead>
                     <tbody>
-                        ${results.map(r => `
-                            <tr>
+                        ${results.map((r, idx) => `
+                            <tr class="history-row" onclick="toggleTaskDetail(${idx})" style="cursor:pointer">
+                                <td style="text-align:center;color:var(--text-dim)">${r.task_results && r.task_results.length ? '▶' : ''}</td>
                                 <td>${formatTime(r.timestamp)}</td>
+                                <td>${r.benchmark_id || 'all'}</td>
                                 <td>${r.provider}</td>
                                 <td>${r.model}</td>
                                 <td>${r.tasks_passed}/${r.tasks_total}</td>
@@ -681,11 +724,46 @@
                                 <td style="color:${getScoreColor(r.avg_score)}">${(r.avg_score * 100).toFixed(1)}%</td>
                                 <td>$${r.total_cost_usd.toFixed(4)}</td>
                                 <td>${((r.total_duration_ms || 0) / 1000).toFixed(1)}s</td>
+                                <td><button onclick="event.stopPropagation();deleteHistory('${r.run_id}')" style="background:none;border:none;color:var(--error);cursor:pointer;font-size:12px">🗑️</button></td>
+                            </tr>
+                            <tr id="detail-${idx}" class="detail-row" style="display:none">
+                                <td colspan="10">
+                                    <div class="task-details">
+                                        ${renderTaskDetails(r.task_results || [])}
+                                    </div>
+                                </td>
                             </tr>
                         `).join('')}
                     </tbody>
                 </table>
             `;
+        }
+
+        function renderTaskDetails(taskResults) {
+            if (!taskResults.length) return '<p style="color:var(--text-dim)">无任务明细</p>';
+            return taskResults.map(t => `
+                <div style="margin:8px 0;padding:10px;background:var(--bg-secondary);border-radius:6px;border-left:3px solid ${t.passed ? 'var(--success)' : 'var(--error)'}">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                        <strong>${t.task_id}</strong>
+                        <span style="color:${t.passed ? 'var(--success)' : 'var(--error)'};font-size:12px">${t.passed ? '✅ PASS' : '❌ FAIL'}</span>
+                    </div>
+                    <div style="font-size:12px;color:var(--text-dim);margin:4px 0">
+                        <span style="margin-right:12px">评分: ${(t.score * 100).toFixed(0)}%</span>
+                        <span style="margin-right:12px">Token: ${t.tokens_used || 0}</span>
+                        <span style="margin-right:12px">耗时: ${((t.duration_ms || 0) / 1000).toFixed(1)}s</span>
+                        <span>步骤: ${t.steps_used || 0}</span>
+                    </div>
+                    ${t.tool_calls && t.tool_calls.length ? `<div style="font-size:11px;color:var(--text-dim);margin:4px 0">工具: ${t.tool_calls.join(' → ')}</div>` : ''}
+                    ${t.error ? `<div style="font-size:12px;color:var(--error);margin:4px 0">错误: ${escapeHtml(t.error)}</div>` : ''}
+                    ${t.actual_output ? `<div style="font-size:11px;margin:6px 0;padding:6px;background:var(--bg-primary);border-radius:4px"><strong style="color:var(--text-dim)">实际输出:</strong><pre style="margin:4px 0;white-space:pre-wrap;word-break:break-all;font-size:11px">${escapeHtml(t.actual_output.substring(0, 500))}${t.actual_output.length > 500 ? '...' : ''}</pre></div>` : ''}
+                </div>
+            `).join('');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         function getPassRateColor(rate) {

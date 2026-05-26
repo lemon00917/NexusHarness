@@ -188,8 +188,8 @@
             <div class="config-row">
                 <label>分块模式</label>
                 <div class="radio-group">
-                    <label><input type="radio" name="chunk_mode" value="length"> 按长度</label>
-                    <label><input type="radio" name="chunk_mode" value="chapter"> 按章节</label>
+                    <label><input type="radio" name="chunk_mode" value="length" onchange="toggleChunkMode('length')"> 按长度</label>
+                    <label><input type="radio" name="chunk_mode" value="chapter" onchange="toggleChunkMode('chapter')"> 按章节</label>
                 </div>
             </div>
             <div class="config-row" id="chunk_size_row">
@@ -275,6 +275,9 @@
             document.getElementById('chunk_size').value = config.chunk_size || 1500;
             document.getElementById('chunk_overlap').value = config.chunk_overlap || 200;
 
+            // Show/hide chunk size/overlap based on chunk mode
+            toggleChunkMode(config.chunk_mode || 'length');
+
             // Search mode
             document.querySelector(`input[name="search_mode"][value="${config.search_mode}"]`).checked = true;
 
@@ -302,11 +305,32 @@
             }
         }
 
+        function toggleChunkMode(mode) {
+            const sizeRow = document.getElementById('chunk_size_row');
+            const overlapRow = document.getElementById('chunk_overlap_row');
+            if (mode === 'chapter') {
+                sizeRow.style.display = 'none';
+                overlapRow.style.display = 'none';
+            } else {
+                sizeRow.style.display = 'flex';
+                overlapRow.style.display = 'flex';
+            }
+        }
+
         async function saveConfig() {
+            const chunk_size = parseInt(document.getElementById('chunk_size').value);
+            const chunk_overlap = parseInt(document.getElementById('chunk_overlap').value);
+
+            // Validate overlap < chunk_size
+            if (chunk_overlap >= chunk_size) {
+                showToast('overlap 必须小于 chunk_size', 'error');
+                return;
+            }
+
             const config = {
                 chunk_mode: document.querySelector('input[name="chunk_mode"]:checked').value,
-                chunk_size: parseInt(document.getElementById('chunk_size').value),
-                chunk_overlap: parseInt(document.getElementById('chunk_overlap').value),
+                chunk_size: chunk_size,
+                chunk_overlap: chunk_overlap,
                 search_mode: document.querySelector('input[name="search_mode"]:checked').value,
                 vector_weight: parseFloat(document.getElementById('vector_weight').value),
                 bm25_weight: parseFloat(document.getElementById('bm25_weight').value)

@@ -125,7 +125,7 @@ def request_human_approval(tool_name: str, tool_input: dict) -> bool:
         False = 拒绝，Harness 将中止此操作
     """
     # 根据工具类型和内容决定风险标签
-    if tool_name in ALWAYS_CONFIRM_TOOLS and tool_name == "delete_file":
+    if tool_name == "delete_file":
         flag = "🗑️  DELETE OP"
     elif is_dangerous(tool_input):
         flag = "⚠️  HIGH RISK"

@@ -1,16 +1,28 @@
-# 核心依赖（必装）
+# 核心依赖
 langgraph>=0.2.0
 langchain-core>=0.2.0
-langchain-anthropic>=0.1.0   # PROVIDER=anthropic 时使用
+langchain-anthropic>=0.1.0
+langchain-openai>=0.1.0
+langchain-community>=0.2.0
 typing_extensions>=4.0.0
 
-# OpenAI 兼容 provider 依赖
-langchain-openai>=0.1.0
+# RAG 依赖
+chromadb>=1.4.0
+sentence-transformers>=2.2.0
+rank-bm25>=0.2.0
+numpy>=1.24.0
 
-# 前端 Web 界面
+# Web 界面
 fastapi>=0.100.0
 uvicorn>=0.23.0
 sse-starlette>=1.8.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+httpx>=0.24.0
 
-# 数据库连接（openGauss / PostgreSQL）
+# 工具库
+psutil>=5.9.0
+antlr4-python3-runtime>=4.9.0
+
+# 数据库连接（可选）
 psycopg2-binary>=2.9.0

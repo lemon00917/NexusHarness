@@ -18,12 +18,17 @@ Usage:
 """
 
 import json
+import logging
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from typing_extensions import TypedDict, NotRequired, Literal
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────
 # Types
@@ -62,37 +67,34 @@ def _get_conversations_dir() -> Path:
 
 class SessionManager:
     """
-    Singleton session manager — manages all active sessions.
-
+    Thread-safe singleton session manager — manages all active sessions.
     In-memory cache + disk persistence to conversations/*.json
     """
     _instance: Optional["SessionManager"] = None
+    _instance_lock = threading.Lock()
 
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
         return cls._instance
 
     def __init__(self):
         if self._initialized:
             return
         self._sessions: dict[str, SessionState] = {}
+        self._lock = threading.RLock()
         self._initialized = True
+        # Ensure conversations directory exists
+        _get_conversations_dir().mkdir(parents=True, exist_ok=True)
 
     # ── Session Lifecycle ──────────────────────────
 
     def create_session(self, task: str) -> SessionState:
-        """
-        Create a new session with initial state.
-
-        Args:
-            task: The user's task for this session
-
-        Returns:
-            The newly created SessionState
-        """
-        session_id = f"session_{int(time.time() * 1000)}"
+        """Create a new session with initial state."""
+        session_id = f"session_{int(time.time() * 1000)}_{threading.get_ident()}"
         now = datetime.now().isoformat()
 
         state: SessionState = {
@@ -109,109 +111,85 @@ class SessionManager:
             "interrupted": False,
         }
 
-        self._sessions[session_id] = state
-        save_session_to_disk(state)
+        with self._lock:
+            self._sessions[session_id] = state
+        self._save_session_to_disk(state)
         return state
 
     def get_session(self, session_id: str) -> Optional[SessionState]:
-        """
-        Get a session by ID. Loads from disk if not in memory.
-
-        Args:
-            session_id: The session ID
-
-        Returns:
-            SessionState or None if not found
-        """
-        if session_id in self._sessions:
-            return self._sessions[session_id]
+        """Get a session by ID. Loads from disk if not in memory."""
+        with self._lock:
+            if session_id in self._sessions:
+                return self._sessions[session_id].copy()
 
         # Try to load from disk
-        state = self.load_from_disk(session_id)
+        state = self._load_from_disk(session_id)
         if state:
-            self._sessions[session_id] = state
-        return state
+            with self._lock:
+                self._sessions[session_id] = state
+            return state.copy()
+        return None
 
     def update_session(self, session_id: str, harness_state: HarnessState) -> bool:
-        """
-        Update a session's harness state and save to disk.
+        """Update a session's harness state and save to disk."""
+        with self._lock:
+            if session_id not in self._sessions:
+                state = self._load_from_disk(session_id)
+                if not state:
+                    return False
+                self._sessions[session_id] = state
 
-        Args:
-            session_id: The session ID
-            harness_state: The new HarnessState to save
+            self._sessions[session_id]["harness_state"] = harness_state
+            self._sessions[session_id]["updated_at"] = datetime.now().isoformat()
+            session_to_save = self._sessions[session_id].copy()
 
-        Returns:
-            True if updated, False if session not found
-        """
-        session = self.get_session(session_id)
-        if not session:
-            return False
-
-        session["harness_state"] = harness_state
-        session["updated_at"] = datetime.now().isoformat()
-        save_session_to_disk(session)
+        self._save_session_to_disk(session_to_save)
         return True
 
     def set_status(self, session_id: str, status: Literal["active", "completed", "interrupted", "paused"]) -> bool:
-        """
-        Update a session's status.
+        """Update a session's status."""
+        with self._lock:
+            if session_id not in self._sessions:
+                state = self._load_from_disk(session_id)
+                if not state:
+                    return False
+                self._sessions[session_id] = state
 
-        Args:
-            session_id: The session ID
-            status: New status
+            self._sessions[session_id]["status"] = status
+            self._sessions[session_id]["updated_at"] = datetime.now().isoformat()
+            session_to_save = self._sessions[session_id].copy()
 
-        Returns:
-            True if updated, False if session not found
-        """
-        session = self.get_session(session_id)
-        if not session:
-            return False
-
-        session["status"] = status
-        session["updated_at"] = datetime.now().isoformat()
-        save_session_to_disk(session)
+        self._save_session_to_disk(session_to_save)
         return True
 
     def delete_session(self, session_id: str) -> bool:
-        """
-        Delete a session (from memory and disk).
+        """Delete a session (from memory and disk)."""
+        with self._lock:
+            if session_id in self._sessions:
+                del self._sessions[session_id]
 
-        Args:
-            session_id: The session ID
-
-        Returns:
-            True if deleted, False if not found
-        """
-        if session_id in self._sessions:
-            del self._sessions[session_id]
-
-        conv_dir = _get_conversations_dir()
-        conv_file = conv_dir / f"{session_id}.json"
+        conv_file = _get_conversations_dir() / f"{session_id}.json"
         if conv_file.exists():
-            conv_file.unlink()
+            try:
+                conv_file.unlink()
+            except OSError as e:
+                logger.error(f"Failed to delete {session_id}.json: {e}")
+                return False
             return True
         return False
 
     def list_sessions(self) -> list[SessionState]:
-        """
-        List all sessions sorted by updated_at (newest first).
-        Loads from disk for any sessions not in memory.
-
-        Returns:
-            List of SessionState dicts
-        """
+        """List all sessions sorted by updated_at (newest first)."""
         conv_dir = _get_conversations_dir()
-        conv_dir.mkdir(exist_ok=True)
-
-        # Collect all session files
         sessions: list[SessionState] = []
+
         for f in sorted(conv_dir.glob("session_*.json"), key=lambda x: -x.stat().st_mtime):
             try:
-                session_id = f.stem
-                session = self.get_session(session_id)
+                session = self.get_session(f.stem)
                 if session:
                     sessions.append(session)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to load {f.name}: {e}")
                 continue
 
         return sessions
@@ -219,138 +197,116 @@ class SessionManager:
     # ── Interrupt Support ──────────────────────────
 
     def set_interrupted(self, session_id: str) -> bool:
-        """
-        Set the interrupt flag for a session.
+        """Set the interrupt flag for a session."""
+        with self._lock:
+            if session_id not in self._sessions:
+                state = self._load_from_disk(session_id)
+                if not state:
+                    return False
+                self._sessions[session_id] = state
 
-        Args:
-            session_id: The session ID
+            self._sessions[session_id]["interrupted"] = True
+            self._sessions[session_id]["status"] = "interrupted"
+            self._sessions[session_id]["updated_at"] = datetime.now().isoformat()
+            session_to_save = self._sessions[session_id].copy()
 
-        Returns:
-            True if set, False if session not found
-        """
-        session = self.get_session(session_id)
-        if not session:
-            return False
-
-        session["interrupted"] = True
-        session["status"] = "interrupted"
-        session["updated_at"] = datetime.now().isoformat()
-        save_session_to_disk(session)
+        self._save_session_to_disk(session_to_save)
         return True
 
-    def clear_interrupted(self, session_id: str) -> bool:
-        """
-        Clear the interrupt flag for a session.
+    def clear_interrupted(self, session_id: str, restore_status: str = "paused") -> bool:
+        """Clear the interrupt flag for a session."""
+        with self._lock:
+            if session_id not in self._sessions:
+                state = self._load_from_disk(session_id)
+                if not state:
+                    return False
+                self._sessions[session_id] = state
 
-        Args:
-            session_id: The session ID
+            self._sessions[session_id]["interrupted"] = False
+            self._sessions[session_id]["status"] = restore_status
+            self._sessions[session_id]["updated_at"] = datetime.now().isoformat()
+            session_to_save = self._sessions[session_id].copy()
 
-        Returns:
-            True if cleared, False if session not found
-        """
-        session = self.get_session(session_id)
-        if not session:
-            return False
-
-        session["interrupted"] = False
-        session["updated_at"] = datetime.now().isoformat()
-        save_session_to_disk(session)
+        self._save_session_to_disk(session_to_save)
         return True
 
     def is_interrupted(self, session_id: str) -> bool:
-        """
-        Check if a session has been interrupted.
+        """Check if a session has been interrupted."""
+        with self._lock:
+            if session_id in self._sessions:
+                return self._sessions[session_id].get("interrupted", False)
+            state = self._load_from_disk(session_id)
+            return state.get("interrupted", False) if state else False
 
-        Args:
-            session_id: The session ID
+    # ── Private Methods ────────────────────────────
 
-        Returns:
-            True if interrupted, False otherwise
-        """
-        session = self.get_session(session_id)
-        if not session:
-            return False
-        return session.get("interrupted", False)
-
-    # ──────────────────────────────────────────────────
-# Helpers for JSON serialization
-# ──────────────────────────────────────────────────
-
-    def load_from_disk(self, session_id: str) -> Optional[SessionState]:
+    def _load_from_disk(self, session_id: str) -> Optional[SessionState]:
         """Load a session state from disk."""
-        conv_dir = _get_conversations_dir()
-        conv_file = conv_dir / f'{session_id}.json'
-
+        conv_file = _get_conversations_dir() / f'{session_id}.json'
         if not conv_file.exists():
             return None
 
         try:
             with open(conv_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error(f"Failed to load {session_id}: {e}")
             return None
 
+    def _save_session_to_disk(self, state: SessionState) -> None:
+        """Save a session state to disk."""
+        conv_dir = _get_conversations_dir()
+        conv_dir.mkdir(exist_ok=True)
 
-def _serialize_messages(msgs: list) -> list:
-    """Convert LangChain message objects to JSON-serializable dicts."""
-    result = []
-    for m in msgs:
-        if isinstance(m, dict):
-            result.append(m)
-        elif hasattr(m, 'content') and hasattr(m, 'type'):
-            msg_dict = {"type": getattr(m, 'type', 'unknown'), "content": str(m.content) if m.content else ''}
-            if hasattr(m, 'tool_calls') and m.tool_calls:
-                msg_dict["tool_calls"] = m.tool_calls
-            if hasattr(m, 'tool_call_id'):
-                msg_dict["tool_call_id"] = m.tool_call_id
-            result.append(msg_dict)
-        else:
-            result.append({"type": "unknown", "content": str(m)})
-    return result
+        # Serialize harness_state to ensure JSON compatibility
+        serializable = dict(state)
+        serializable["harness_state"] = self._serialize_state(state["harness_state"])
 
+        conv_file = conv_dir / f"{state['session_id']}.json"
 
-def _serialize_state(state: dict) -> dict:
-    """Serialize HarnessState for JSON storage."""
-    return {
-        "messages": _serialize_messages(state.get("messages", [])),
-        "step_count": state.get("step_count", 0),
-        "approved": state.get("approved", True),
-    }
+        # Atomic write via temp file
+        temp_file = conv_file.with_suffix('.tmp')
+        try:
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(serializable, f, ensure_ascii=False, indent=2)
+            temp_file.replace(conv_file)
+        except IOError as e:
+            logger.error(f"Failed to save {state['session_id']}: {e}")
+            if temp_file.exists():
+                temp_file.unlink()
+            raise
 
+    @staticmethod
+    def _serialize_messages(msgs: list) -> list:
+        """Convert LangChain message objects to JSON-serializable dicts."""
+        result = []
+        for m in msgs:
+            if isinstance(m, dict):
+                result.append(m)
+            elif hasattr(m, 'content') and hasattr(m, 'type'):
+                msg_dict = {"type": getattr(m, 'type', 'unknown'), "content": str(m.content) if m.content else ''}
+                if hasattr(m, 'tool_calls') and m.tool_calls:
+                    msg_dict["tool_calls"] = m.tool_calls
+                if hasattr(m, 'tool_call_id'):
+                    msg_dict["tool_call_id"] = m.tool_call_id
+                result.append(msg_dict)
+            else:
+                result.append({"type": "unknown", "content": str(m)})
+        return result
 
-# ──────────────────────────────────────────────────
-# Disk Persistence
-# ──────────────────────────────────────────────────
-
-def save_session_to_disk(state: SessionState) -> None:
-    """
-    Save a session state to disk.
-
-    Args:
-        state: The SessionState to save
-    """
-    conv_dir = _get_conversations_dir()
-    conv_dir.mkdir(exist_ok=True)
-
-    # Serialize harness_state to ensure JSON compatibility
-    serializable = dict(state)
-    serializable["harness_state"] = _serialize_state(state["harness_state"])
-
-    conv_file = conv_dir / f"{state['session_id']}.json"
-    with open(conv_file, "w", encoding="utf-8") as f:
-        json.dump(serializable, f, ensure_ascii=False, indent=2)
+    def _serialize_state(self, state: dict) -> dict:
+        """Serialize HarnessState for JSON storage."""
+        return {
+            "messages": self._serialize_messages(state.get("messages", [])),
+            "step_count": state.get("step_count", 0),
+            "approved": state.get("approved", True),
+        }
 
 
 # ──────────────────────────────────────────────────
 # Global accessor
 # ──────────────────────────────────────────────────
 
-_session_manager: Optional[SessionManager] = None
-
-
 def get_session_manager() -> SessionManager:
     """Get the global SessionManager instance."""
-    global _session_manager
-    if _session_manager is None:
-        _session_manager = SessionManager()
-    return _session_manager
+    return SessionManager()

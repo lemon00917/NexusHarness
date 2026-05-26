@@ -50,13 +50,15 @@ class MedicalRAG:
         self._collection = None
         self._bm25: Optional[BM25] = None
         self._chunk_to_doc: dict = {}
+        self.load_index()
 
     def _get_embedding_model(self):
         """Lazy load embedding model."""
         if self._embedding_model is None:
             from sentence_transformers import SentenceTransformer
-            self._embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-            print("[MedicalRAG] Embedding model loaded: all-MiniLM-L6-v2")
+            from microharness.rag.rag import DEFAULT_EMBEDDING_MODEL
+            self._embedding_model = SentenceTransformer(DEFAULT_EMBEDDING_MODEL)
+            print(f"[MedicalRAG] Embedding model loaded: {DEFAULT_EMBEDDING_MODEL}")
         return self._embedding_model
 
     def _get_collection(self):
@@ -292,46 +294,64 @@ class MedicalRAG:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
     def load_index(self):
-        """Load index from disk."""
+        """Load index from disk. Rebuilds from ChromaDB if index.json missing but collection has data."""
         index_file = self.index_dir / "index.json"
-        if not index_file.exists():
-            return
+        if index_file.exists():
+            with open(index_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
 
-        with open(index_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            self.documents = [Document(**d) for d in data.get("documents", [])]
+            self._chunk_to_doc = data.get("chunk_mapping", {})
 
-        self.documents = [Document(**d) for d in data.get("documents", [])]
-        self._chunk_to_doc = data.get("chunk_mapping", {})
+            if self.documents:
+                self._chroma_client = None
+                self._collection = None
+                collection = self._get_collection()
 
-        if self.documents:
-            self._chroma_client = None
-            self._collection = None
+                ids = []
+                embeddings = []
+                documents = []
+                metadatas = []
+
+                for doc in self.documents:
+                    ids.append(doc.doc_id)
+                    documents.append(doc.content)
+                    metadatas.append({
+                        "filename": doc.filename,
+                        "parent_id": doc.doc_id,
+                        "medical_type": doc.metadata.get("medical_type", "general")
+                    })
+
+                if ids:
+                    embeddings = self._embed_texts(documents)
+                    collection.add(
+                        ids=ids,
+                        embeddings=embeddings,
+                        documents=documents,
+                        metadatas=metadatas
+                    )
+
+                self._get_bm25().add_documents([d.content for d in self.documents])
+        else:
+            # No index.json - rebuild documents from ChromaDB if collection has data
             collection = self._get_collection()
-
-            ids = []
-            embeddings = []
-            documents = []
-            metadatas = []
-
-            for doc in self.documents:
-                ids.append(doc.doc_id)
-                documents.append(doc.content)
-                metadatas.append({
-                    "filename": doc.filename,
-                    "parent_id": doc.doc_id,
-                    "medical_type": doc.metadata.get("medical_type", "general")
-                })
-
-            if ids:
-                embeddings = self._embed_texts(documents)
-                collection.add(
-                    ids=ids,
-                    embeddings=embeddings,
-                    documents=documents,
-                    metadatas=metadatas
-                )
-
-            self._get_bm25().add_documents([d.content for d in self.documents])
+            if collection.count() > 0:
+                results = collection.get(include=["documents", "metadatas"])
+                seen_parents = {}
+                for i, (doc_id, content, metadata) in enumerate(zip(results["ids"], results["documents"], results["metadatas"])):
+                    parent_id = metadata.get("parent_id", doc_id)
+                    if parent_id not in seen_parents:
+                        seen_parents[parent_id] = Document(
+                            doc_id=parent_id,
+                            content=content,
+                            filename=metadata.get("filename", "unknown"),
+                            created_at=datetime.now().isoformat(),
+                            metadata={"medical_type": metadata.get("medical_type", "general")}
+                        )
+                    self._chunk_to_doc[doc_id] = parent_id
+                self.documents = list(seen_parents.values())
+                self._get_bm25().add_documents([d.content for d in self.documents])
+                print(f"[MedicalRAG] Loaded {len(self.documents)} documents from ChromaDB")
 
     def batch_add(self, directory: str) -> dict:
         """
