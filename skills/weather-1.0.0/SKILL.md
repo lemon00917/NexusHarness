@@ -1,36 +1,29 @@
 ---
 name: weather
-description: Get current weather and forecasts for any city worldwide (no API key required). Uses wttr.in service.
+description: Get current weather and forecasts for any city worldwide (no API key required). Supports Chinese city names via pinyin or English.
 homepage: https://wttr.in/:help
 metadata: {"clawdbot":{"emoji":"🌤️","safety":"AUTO_APPROVE","requires":{"bins":["curl"]}}}
 ---
 
 # Weather
 
-Two free services, no API keys needed.
-
-## wttr.in (primary)
-
 Quick one-liner:
 ```bash
-curl -s "wttr.in/{city}?format=3"
-# Output: Tokyo: ⛅️ +28°C
+curl -s "wttr.in/{input}?format=3"
 ```
 
 Compact format:
 ```bash
-curl -s "wttr.in/{city}?format=%l:+%c+%t+%h+%w"
-# Output: Tokyo: ⛅️ +28°C 71% ↙5km/h
+curl -s "wttr.in/{input}?format=%l:+%c+%t+%h+%w"
 ```
 
 Full forecast:
 ```bash
-curl -s "wttr.in/{city}?T"
+curl -s "wttr.in/{input}?T"
 ```
 
-Format codes: `%c` condition · `%t` temp · `%h` humidity · `%w` wind · `%l` location · `%m` moon
-
 Tips:
+- Chinese cities: use pinyin (南京→Nanjing, 北京→Beijing, 上海→Shanghai, 西安→Xian)
 - URL-encode spaces: `wttr.in/New+York`
 - Airport codes: `wttr.in/JFK`
 - Units: `?m` (metric) `?u` (USCS)
@@ -39,11 +32,14 @@ Tips:
 
 ## Open-Meteo (fallback, JSON)
 
-Free, no key, good for programmatic use:
+Get coordinates first, then query weather:
+
 ```bash
-curl -s "https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.12&current_weather=true"
+curl -s "https://geocoding-api.open-meteo.com/v1/search?name={input}&count=1"
 ```
 
-Find coordinates for a city, then query. Returns JSON with temp, windspeed, weathercode.
+```bash
+curl -s "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+```
 
 Docs: https://open-meteo.com/en/docs
