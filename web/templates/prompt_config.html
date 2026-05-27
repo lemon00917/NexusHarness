@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>提示词配置 - NexusHarness</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body { overflow: auto; }
+        .config-container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .config-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .config-header h1 {
+            font-size: 20px;
+            margin: 0;
+        }
+        .config-section {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .config-section h3 {
+            font-size: 14px;
+            margin: 0 0 15px 0;
+            color: var(--text-primary);
+        }
+        .intent-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 15px;
+        }
+        .intent-card {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 15px;
+            border: 1px solid var(--border-color);
+        }
+        .intent-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .intent-card-header h4 {
+            margin: 0;
+            font-size: 14px;
+            color: var(--text-primary);
+        }
+        .intent-card-header .badge {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            background: var(--accent-blue);
+            color: white;
+        }
+        .intent-card-header .badge.disabled {
+            background: var(--text-dim);
+        }
+        .intent-keywords {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+        .keyword-tag {
+            padding: 2px 8px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+        .intent-template-preview {
+            background: var(--bg-primary);
+            border-radius: 6px;
+            padding: 10px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            max-height: 80px;
+            overflow: hidden;
+            position: relative;
+        }
+        .intent-template-preview::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 30px;
+            background: linear-gradient(transparent, var(--bg-primary));
+        }
+        .intent-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: var(--accent-blue);
+            color: white;
+        }
+        .btn-primary:hover { opacity: 0.9; }
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        .btn-secondary:hover { background: var(--border-color); }
+        .btn-danger {
+            background: transparent;
+            color: var(--accent-red);
+            border: 1px solid var(--accent-red);
+        }
+        .btn-danger:hover { background: var(--accent-red); color: white; }
+        .btn-sm {
+            padding: 5px 10px;
+            font-size: 11px;
+        }
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 13px;
+            z-index: 1001;
+            animation: slideIn 0.3s ease;
+        }
+        .toast.success { border-color: var(--accent-green); }
+        .toast.error { border-color: var(--accent-red); }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .modal {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 25px;
+            width: 600px;
+            max-width: 90vw;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .modal h3 {
+            margin: 0 0 20px 0;
+            font-size: 16px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-bottom: 5px;
+        }
+        .form-group input, .form-group textarea, .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 13px;
+            box-sizing: border-box;
+        }
+        .form-group textarea {
+            min-height: 100px;
+            resize: vertical;
+            font-family: monospace;
+        }
+        .form-row {
+            display: flex;
+            gap: 10px;
+        }
+        .form-row .form-group {
+            flex: 1;
+        }
+        .rag-config {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .rag-config input[type="checkbox"] {
+            width: auto;
+        }
+        .rag-config input[type="number"] {
+            width: 60px;
+            padding: 5px;
+        }
+        .help-text {
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-dim);
+        }
+        .tab-bar {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+        .tab-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px 6px 0 0;
+            cursor: pointer;
+            font-size: 13px;
+            background: var(--bg-tertiary);
+            color: var(--text-dim);
+            transition: all 0.2s;
+        }
+        .tab-btn.active {
+            background: var(--accent-blue);
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="config-container">
+        <div class="config-header">
+            <h1>💬 提示词配置</h1>
+            <div style="display:flex;gap:10px;">
+                <button onclick="loadConfig()" style="padding:8px 16px;border:none;border-radius:6px;background:var(--bg-tertiary);cursor:pointer;">🔄 刷新</button>
+                <button onclick="openAddIntentModal()" class="btn btn-primary">+ 新增意图</button>
+            </div>
+        </div>
+
+        <div class="tab-bar">
+            <button class="tab-btn active" data-tab="intents">意图模板</button>
+            <button class="tab-btn" data-tab="base">基础配置</button>
+            <button class="tab-btn" data-tab="memory">记忆 & RAG</button>
+        </div>
+
+        <!-- 意图列表 -->
+        <div id="tab-intents" class="tab-content">
+            <div class="config-section">
+                <h3>🎯 意图模板</h3>
+                <div class="intent-grid" id="intentGrid">
+                    <div class="empty-state">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 基础配置 -->
+        <div id="tab-base" class="tab-content" style="display:none;">
+            <div class="config-section">
+                <h3>📝 系统提示词基础配置</h3>
+                <div class="form-group">
+                    <label>规则区块 (rule_block)</label>
+                    <textarea id="base_rule_block" rows="5" placeholder="输入规则..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label>工作空间 (workspace)</label>
+                    <input type="text" id="base_workspace" placeholder="/tmp/sandbox/">
+                </div>
+                <button onclick="saveBaseConfig()" class="btn btn-primary">保存基础配置</button>
+            </div>
+        </div>
+
+        <!-- 记忆 & RAG -->
+        <div id="tab-memory" class="tab-content" style="display:none;">
+            <div class="config-section">
+                <h3>🧠 记忆配置</h3>
+                <div class="form-group">
+                    <label style="display:flex;align-items:center;gap:8px;">
+                        <input type="checkbox" id="mem_enabled">
+                        启用长期记忆
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>最大记录数</label>
+                    <input type="number" id="mem_max_records" min="0" max="50" value="5">
+                </div>
+            </div>
+            <div class="config-section">
+                <h3>🔍 RAG 配置</h3>
+                <div class="form-group">
+                    <label style="display:flex;align-items:center;gap:8px;">
+                        <input type="checkbox" id="rag_auto_inject">
+                        自动注入 RAG 结果
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>返回数量 (top_k)</label>
+                    <input type="number" id="rag_top_k" min="1" max="10" value="2">
+                </div>
+                <div class="form-group">
+                    <label>超时 (ms)</label>
+                    <input type="number" id="rag_timeout_ms" min="100" max="5000" step="100" value="500">
+                </div>
+                <button onclick="saveMemoryRagConfig()" class="btn btn-primary">保存配置</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 意图编辑 Modal -->
+    <div id="intentModal" class="modal-overlay" style="display:none;">
+        <div class="modal">
+            <h3 id="modalTitle">新增意图</h3>
+            <input type="hidden" id="editIntentName">
+            <div class="form-group">
+                <label>意图名称 (ID)</label>
+                <input type="text" id="intentName" placeholder="如: diagnosis">
+                <div class="help-text">唯一标识，推荐使用英文下划线</div>
+            </div>
+            <div class="form-group">
+                <label>显示名称</label>
+                <input type="text" id="intentDisplayName" placeholder="如: 医学诊断">
+            </div>
+            <div class="form-group">
+                <label>描述</label>
+                <input type="text" id="intentDescription" placeholder="简要描述此意图的适用场景">
+            </div>
+            <div class="form-group">
+                <label>关键词 (逗号分隔)</label>
+                <input type="text" id="intentKeywords" placeholder="诊断, 可能是什么, 病因">
+                <div class="help-text">用户问题包含这些关键词时触发此意图</div>
+            </div>
+            <div class="form-group">
+                <label>模板内容</label>
+                <textarea id="intentTemplate" rows="8" placeholder="使用 {query} 和 {medical_knowledge} 作为占位符"></textarea>
+                <div class="help-text">可用变量: {'{query}'} (用户问题), {'{medical_knowledge}'} (RAG检索结果)</div>
+            </div>
+            <div class="form-group">
+                <label>RAG 检索设置</label>
+                <div class="rag-config">
+                    <input type="checkbox" id="intentRagEnabled">
+                    <span>启用 RAG</span>
+                    <input type="number" id="intentRagTopK" min="1" max="10" value="3" style="width:50px;">
+                    <span>top_k</span>
+                    <select id="intentRagFilterType" style="width:100px;">
+                        <option value="">不筛选</option>
+                        <option value="药品">药品</option>
+                        <option value="指南">指南</option>
+                        <option value="检验">检验</option>
+                        <option value="手术">手术</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label style="display:flex;align-items:center;gap:8px;">
+                    <input type="checkbox" id="intentEnabled" checked>
+                    启用此意图
+                </label>
+            </div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
+                <button onclick="closeModal()" class="btn btn-secondary">取消</button>
+                <button onclick="saveIntent()" class="btn btn-primary">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast" style="display:none;"></div>
+
+    <script>
+        let currentConfig = null;
+
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast ${type}`;
+            toast.style.display = 'block';
+            setTimeout(() => toast.style.display = 'none', 3000);
+        }
+
+        async function loadConfig() {
+            try {
+                const res = await fetch('/api/prompt-config');
+                const data = await res.json();
+                currentConfig = data.config;
+                renderIntents(data.intents || []);
+                applyBaseConfig(data.config);
+                applyMemoryRagConfig(data.config);
+            } catch (e) {
+                showToast('加载配置失败: ' + e.message, 'error');
+            }
+        }
+
+        function renderIntents(intents) {
+            const grid = document.getElementById('intentGrid');
+            if (!intents || intents.length === 0) {
+                grid.innerHTML = '<div class="empty-state">暂无意图模板，点击"新增意图"创建</div>';
+                return;
+            }
+            grid.innerHTML = intents.map(intent => `
+                <div class="intent-card">
+                    <div class="intent-card-header">
+                        <h4>${escapeHtml(intent.name)}</h4>
+                        <span class="badge ${intent.enabled ? '' : 'disabled'}">${intent.enabled ? '启用' : '禁用'}</span>
+                    </div>
+                    <p style="font-size:12px;color:var(--text-dim);margin:0 0 10px 0;">${escapeHtml(intent.description || '')}</p>
+                    <div class="intent-keywords">
+                        ${(intent.keywords || []).map(k => `<span class="keyword-tag">${escapeHtml(k)}</span>`).join('')}
+                    </div>
+                    <div class="intent-template-preview">${escapeHtml(intent.template_preview || '')}</div>
+                    <div class="intent-actions">
+                        <button onclick="openEditIntentModal('${intent.id}')" class="btn btn-secondary btn-sm">编辑</button>
+                        <button onclick="deleteIntent('${intent.id}')" class="btn btn-danger btn-sm">删除</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function applyBaseConfig(config) {
+            const sp = config.system_prompt || {};
+            const vars = sp.variables || {};
+            document.getElementById('base_rule_block').value = vars.rule_block || '';
+            document.getElementById('base_workspace').value = vars.workspace || '/tmp/sandbox/';
+        }
+
+        function applyMemoryRagConfig(config) {
+            const mem = config.memory || {};
+            document.getElementById('mem_enabled').checked = mem.enabled !== false;
+            document.getElementById('mem_max_records').value = mem.max_records || 5;
+
+            const rag = config.rag || {};
+            document.getElementById('rag_auto_inject').checked = rag.auto_inject !== false;
+            document.getElementById('rag_top_k').value = rag.top_k || 2;
+            document.getElementById('rag_timeout_ms').value = rag.timeout_ms || 500;
+        }
+
+        async function saveBaseConfig() {
+            const newConfig = JSON.parse(JSON.stringify(currentConfig));
+            if (!newConfig.system_prompt) newConfig.system_prompt = {};
+            if (!newConfig.system_prompt.variables) newConfig.system_prompt.variables = {};
+
+            newConfig.system_prompt.variables.rule_block = document.getElementById('base_rule_block').value;
+            newConfig.system_prompt.variables.workspace = document.getElementById('base_workspace').value;
+
+            await saveConfig(newConfig);
+        }
+
+        async function saveMemoryRagConfig() {
+            const newConfig = JSON.parse(JSON.stringify(currentConfig));
+            newConfig.memory = {
+                enabled: document.getElementById('mem_enabled').checked,
+                max_records: parseInt(document.getElementById('mem_max_records').value) || 5
+            };
+            newConfig.rag = {
+                auto_inject: document.getElementById('rag_auto_inject').checked,
+                top_k: parseInt(document.getElementById('rag_top_k').value) || 2,
+                timeout_ms: parseInt(document.getElementById('rag_timeout_ms').value) || 500
+            };
+
+            await saveConfig(newConfig);
+        }
+
+        async function saveConfig(config) {
+            try {
+                const res = await fetch('/api/prompt-config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(config)
+                });
+                const data = await res.json();
+                if (data.config) {
+                    currentConfig = data.config;
+                    showToast('配置已保存', 'success');
+                } else {
+                    showToast('保存失败: ' + (data.error || '未知错误'), 'error');
+                }
+            } catch (e) {
+                showToast('保存失败: ' + e.message, 'error');
+            }
+        }
+
+        function openAddIntentModal() {
+            document.getElementById('modalTitle').textContent = '新增意图';
+            document.getElementById('editIntentName').value = '';
+            document.getElementById('intentName').value = '';
+            document.getElementById('intentName').disabled = false;
+            document.getElementById('intentDisplayName').value = '';
+            document.getElementById('intentDescription').value = '';
+            document.getElementById('intentKeywords').value = '';
+            document.getElementById('intentTemplate').value = '';
+            document.getElementById('intentRagEnabled').checked = true;
+            document.getElementById('intentRagTopK').value = '3';
+            document.getElementById('intentRagFilterType').value = '';
+            document.getElementById('intentEnabled').checked = true;
+            document.getElementById('intentModal').style.display = 'flex';
+        }
+
+        function openEditIntentModal(intentId) {
+            const intents = currentConfig.intents || {};
+            const intent = intents[intentId];
+            if (!intent) return;
+
+            document.getElementById('modalTitle').textContent = '编辑意图';
+            document.getElementById('editIntentName').value = intentId;
+            document.getElementById('intentName').value = intentId;
+            document.getElementById('intentName').disabled = true;
+            document.getElementById('intentDisplayName').value = intent.name || '';
+            document.getElementById('intentDescription').value = intent.description || '';
+            document.getElementById('intentKeywords').value = (intent.keywords || []).join(', ');
+            document.getElementById('intentTemplate').value = intent.template || '';
+            document.getElementById('intentRagEnabled').checked = intent.rag?.enabled || false;
+            document.getElementById('intentRagTopK').value = intent.rag?.top_k || 3;
+            document.getElementById('intentRagFilterType').value = intent.rag?.filter_type || '';
+            document.getElementById('intentEnabled').checked = intent.enabled !== false;
+            document.getElementById('intentModal').style.display = 'flex';
+        }
+
+        function closeModal() {
+            document.getElementById('intentModal').style.display = 'none';
+        }
+
+        async function saveIntent() {
+            const editName = document.getElementById('editIntentName').value;
+            const intentName = document.getElementById('intentName').value.trim();
+            const displayName = document.getElementById('intentDisplayName').value.trim();
+            const description = document.getElementById('intentDescription').value.trim();
+            const keywordsStr = document.getElementById('intentKeywords').value.trim();
+            const template = document.getElementById('intentTemplate').value.trim();
+
+            if (!intentName) {
+                showToast('请输入意图名称', 'error');
+                return;
+            }
+            if (!template) {
+                showToast('请输入模板内容', 'error');
+                return;
+            }
+
+            const keywords = keywordsStr ? keywordsStr.split(',').map(k => k.trim()).filter(k => k) : [];
+
+            const intentConfig = {
+                name: displayName || intentName,
+                description: description,
+                keywords: keywords,
+                template: template,
+                enabled: document.getElementById('intentEnabled').checked,
+                rag: {
+                    enabled: document.getElementById('intentRagEnabled').checked,
+                    top_k: parseInt(document.getElementById('intentRagTopK').value) || 3,
+                    filter_type: document.getElementById('intentRagFilterType').value || undefined
+                }
+            };
+
+            try {
+                const res = await fetch('/api/prompt-config/intents', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        intent_name: editName || intentName,
+                        intent_config: intentConfig,
+                        new_name: editName ? intentName : undefined
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'saved') {
+                    closeModal();
+                    showToast('意图已保存', 'success');
+                    loadConfig();
+                } else {
+                    showToast('保存失败', 'error');
+                }
+            } catch (e) {
+                showToast('保存失败: ' + e.message, 'error');
+            }
+        }
+
+        async function deleteIntent(intentName) {
+            if (!confirm(`确认删除意图 "${intentName}"？`)) return;
+            try {
+                const res = await fetch(`/api/prompt-config/intents/${intentName}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (data.status === 'deleted') {
+                    showToast('意图已删除', 'success');
+                    loadConfig();
+                } else {
+                    showToast('删除失败', 'error');
+                }
+            } catch (e) {
+                showToast('删除失败: ' + e.message, 'error');
+            }
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Tab switching
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const tab = btn.dataset.tab;
+                document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+                document.getElementById('tab-' + tab).style.display = 'block';
+            });
+        });
+
+        // Close modal on overlay click
+        document.getElementById('intentModal').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('intentModal')) {
+                closeModal();
+            }
+        });
+
+        // Load on page load
+        loadConfig();
+    </script>
+</body>
+</html>
