@@ -41,6 +41,10 @@ replays/*.jsonl
 # Benchmark results
 benchmark_results/*.json
 
+# RAG index (runtime data)
+rag_index/chroma_db/
+rag_index/index.json
+
 # Temporary
 *.tmp
 *.bak
