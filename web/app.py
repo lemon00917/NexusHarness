@@ -53,6 +53,8 @@ from microharness.config.prompt_config import (
 from microharness.rag.rag import rag
 from microharness.rag.rag_config import load_config, save_config, RAGConfig
 from microharness.rag.document_parser import parse_document
+from microharness.rag.template_binding import TwoStageBinder
+from microharness.rag.template_binding_v2 import ThreeStageBinder
 from microharness.agent.tools import TOOLS as TOOLS
 
 # Ensure utf-8 output
@@ -60,6 +62,9 @@ sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
 app = FastAPI(title="NexusHarness", version="0.1.0")
+
+# Project root for resolving relative paths
+PROJECT_ROOT = Path(__file__).parent.parent
 
 # Load RAG index at startup
 rag.load_index()
@@ -493,6 +498,15 @@ async def serve_prompt_config_page():
     if html_path.exists():
         return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
     return {"error": "prompt_config.html not found"}
+
+
+@app.get("/templates/binding.html")
+async def serve_binding_page():
+    """Serve the binding page."""
+    html_path = templates_dir / "binding.html"
+    if html_path.exists():
+        return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+    return {"error": "binding.html not found"}
 
 
 @app.get("/api/run")
@@ -1139,6 +1153,329 @@ async def preview_chunk(text: str = "", filename: str = ""):
         text = parse_document(text.encode('utf-8'), filename)
     chunks = rag.preview_chunking(text)
     return {"chunks": chunks}
+
+
+# ──────────────────────────────────────────────────
+# Binding API (Two-Stage HTML-XML Binder)
+# ──────────────────────────────────────────────────
+
+import tempfile
+import shutil
+from pathlib import Path
+
+# In-memory binding results storage
+_binding_results = {}
+
+@app.post("/api/binding/single")
+async def binding_single(
+    xml_dir: str = "data/临床文档模板",
+    stage1_model: str = "qwen2.5:7b",
+    stage2_model: str = "qwen2.5:7b",
+    stage3_model: str = "qwen2.5:7b",
+    stage1_timeout: int = 120,
+    stage2_timeout: int = 120,
+    stage3_timeout: int = 300,
+    file: UploadFile = None
+):
+    """Single HTML file binding - three stages."""
+    if not file:
+        return {"error": "No file uploaded"}, 400
+
+    # Resolve xml_dir relative to project root
+    xml_dir = str(PROJECT_ROOT / xml_dir)
+
+    # Save uploaded file to temp
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".html", mode='wb') as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        binder = TwoStageBinder(
+            stage1_model=stage1_model,
+            stage2_model=stage2_model,
+            stage3_model=stage3_model,
+            xml_dir=xml_dir,
+            stage1_timeout=stage1_timeout,
+            stage2_timeout=stage2_timeout,
+            stage3_timeout=stage3_timeout
+        )
+        result = binder.bind_file(tmp_path)
+        if result:
+            return {
+                "html_file": result.html_file,
+                "xml_template": result.xml_template,
+                "match_confidence": result.match_confidence,
+                "field_count": len(result.field_bindings),
+                "stage1_output": result.stage1_output if result.stage1_output else "",
+                "bindings": [asdict(b) for b in result.field_bindings]
+            }
+        return {"error": "Binding failed"}, 500
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+@app.post("/api/binding/new-flow")
+async def binding_new_flow(
+    xml_dir: str = "data/临床文档模板",
+    stage1_model: str = "qwen2.5:7b",
+    stage2_model: str = "qwen2.5:7b",
+    stage3_model: str = "qwen2.5:7b",
+    stage4_model: str = "qwen2.5:7b",
+    file: UploadFile = None
+):
+    """New 4-stage binding flow:
+    1. LLM matches HTML to XML template
+    2. Parse XML template to get required fields
+    3. Convert HTML to structured text matching XML fields
+    4. Bind structured text to XML nodes
+    """
+    if not file:
+        return {"error": "No file uploaded"}, 400
+
+    xml_dir = str(PROJECT_ROOT / xml_dir)
+
+    # Read HTML content
+    html_content = await file.read()
+    try:
+        html_text = html_content.decode('utf-8', errors='replace')
+    except:
+        html_text = html_content.decode('gbk', errors='replace')
+
+    # Extract doc type hint from filename
+    import re
+    doc_type_hint = file.filename or ""
+
+    # Stage 1: Template matching (LLM)
+    stage1_client = OllamaClient(model=stage1_model, timeout=120)
+    stage2_client = OllamaClient(model=stage2_model, timeout=120)
+
+    templates = load_xml_templates(xml_dir)
+
+    # Stage1: Match template
+    from microharness.rag.template_binding import stage1_extract, parse_stage1_output, clean_html
+    fields = parse_stage1_output(stage1_extract(html_text, stage1_model, stage1_client))
+
+    templates_info = "\n".join([f"- {t['filename']}" for t in templates])
+    user_prompt = f"""【可用模板列表】
+{templates_info}
+
+【文档类型提示】
+{doc_type_hint}
+
+【HTML内容摘要】
+{clean_html(html_text)[:500]}
+
+请选择最匹配的模板文件名，只输出文件名：
+"""
+
+    try:
+        response = stage1_client.chat([
+            {"role": "user", "content": user_prompt}
+        ], temperature=0.0)
+        matched_name = response.strip()
+    except Exception as e:
+        rag_logger.error(f"[NewFlow] Stage1 failed: {e}")
+        matched_name = ""
+
+    # Find matched template
+    matched_template = None
+    for t in templates:
+        if matched_name in t["filename"] or t["filename"] in matched_name:
+            matched_template = t
+            break
+    if not matched_template:
+        matched_template = templates[0]
+
+    # Stage2: Get XML fields (already parsed in template)
+    xml_fields = list(matched_template["nodes"].keys())
+
+    # Stage3: Convert HTML to structured text matching XML fields (LLM)
+    stage3_client = OllamaClient(model=stage3_model, timeout=120)
+    xml_fields_text = "\n".join([f"- {p}: {v.get('sample', '')}" for p, v in matched_template["nodes"].items()])
+
+    user_prompt3 = f"""【XML模板需要的字段】
+{xml_fields_text}
+
+【HTML病历内容】
+{clean_html(html_text)[:6000]}
+
+请根据XML模板需要的字段，从HTML中提取对应的值，输出JSON数组：
+[{{"field":"字段路径","value":"字段值"}},...]
+
+只输出JSON，不要其他内容：
+"""
+
+    try:
+        response3 = stage3_client.chat([
+            {"role": "user", "content": user_prompt3}
+        ], temperature=0.0)
+        html_fields = json.loads(response3.strip())
+    except Exception as e:
+        rag_logger.error(f"[NewFlow] Stage3 failed: {e}")
+        html_fields = []
+
+    # Stage4: Bind HTML fields to XML nodes (LLM)
+    stage4_client = OllamaClient(model=stage4_model, timeout=300)
+
+    user_prompt4 = f"""【XML模板节点】
+{xml_fields_text}
+
+【从HTML提取的字段及其值】
+{json.dumps(html_fields, ensure_ascii=False)}
+
+任务：将每个字段的field名保持不变，将其value绑定到对应的XML节点路径。
+
+输出格式（每个元素包含html_field和xml_path）：
+[{{"html_field":"clinicaldocument/docheader/version","value":"V1.0","xml_path":"clinicaldocument/docheader/version"}},...]
+
+只输出JSON数组，不要其他内容：
+"""
+
+    bindings = []
+    try:
+        response4 = stage4_client.chat([
+            {"role": "user", "content": user_prompt4}
+        ], temperature=0.0)
+        bindings_data = json.loads(response4.strip())
+        bindings = bindings_data
+    except Exception as e:
+        rag_logger.error(f"[NewFlow] Stage4 failed: {e}")
+
+    return {
+        "template": matched_template["filename"],
+        "confidence": 0.9,
+        "xml_fields": xml_fields,
+        "html_fields": html_fields,
+        "bindings": bindings
+    }
+
+
+@app.post("/api/binding/v2")
+async def binding_v2(
+    xml_dir: str = "data/临床文档模板",
+    stage1_model: str = "qwen2.5:7b",
+    stage3_model: str = "qwen2.5:7b",
+    stage4_model: str = "qwen2.5:7b",
+    file: UploadFile = None
+):
+    """New 4-stage binding: 1) LLM匹配模板 2) 解析XML字段 3) LLM提取字段 4) LLM绑定字段"""
+    if not file:
+        return {"error": "No file uploaded"}, 400
+
+    xml_dir = str(PROJECT_ROOT / xml_dir)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".html", mode='wb') as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        binder = ThreeStageBinder(
+            stage1_model=stage1_model,
+            stage3_model=stage3_model,
+            xml_dir=xml_dir
+        )
+        result = binder.bind_file(tmp_path)
+        if result:
+            return result
+        return {"error": "Binding failed"}, 500
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+@app.post("/api/binding/directory")
+async def binding_directory(
+    html_dir: str,
+    xml_dir: str = "data/临床文档模板",
+    stage1_model: str = "qwen2.5:7b",
+    stage2_model: str = "qwen2.5:7b",
+    stage1_timeout: int = 120,
+    stage2_timeout: int = 300
+):
+    """Batch directory binding."""
+    # Resolve paths relative to project root
+    xml_dir = str(PROJECT_ROOT / xml_dir)
+    html_dir = str(PROJECT_ROOT / html_dir)
+
+    binder = TwoStageBinder(
+        stage1_model=stage1_model,
+        stage2_model=stage2_model,
+        xml_dir=xml_dir,
+        stage1_timeout=stage1_timeout,
+        stage2_timeout=stage2_timeout
+    )
+    result = binder.bind_directory(html_dir)
+    if result:
+        # Store in memory
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        key = f"batch_{ts}"
+        _binding_results[key] = result
+        return {
+            "total": result.statistics["total"],
+            "matched": result.statistics["matched"],
+            "unmatched": result.statistics["unmatched"],
+            "match_rate": result.statistics["match_rate"],
+            "result_key": key
+        }
+    return {"error": "Binding failed"}, 500
+
+
+@app.post("/api/binding/compare-models")
+async def binding_compare_models(
+    html_dir: str,
+    xml_dir: str = "data/临床文档模板",
+    stage1_models: str = "",
+    stage2_models: str = "",
+    stage1_timeout: int = 120,
+    stage2_timeout: int = 300
+):
+    """Compare binding results across different model configurations."""
+    # Resolve paths relative to project root
+    xml_dir = str(PROJECT_ROOT / xml_dir)
+    html_dir = str(PROJECT_ROOT / html_dir)
+
+    s1_list = [m.strip() for m in stage1_models.split(",") if m.strip()]
+    s2_list = [m.strip() for m in stage2_models.split(",") if m.strip()]
+
+    results = []
+    for s1 in s1_list:
+        for s2 in s2_list:
+            binder = TwoStageBinder(stage1_model=s1, stage2_model=s2, xml_dir=xml_dir, stage1_timeout=stage1_timeout, stage2_timeout=stage2_timeout)
+            result = binder.bind_directory(html_dir)
+            if result:
+                results.append({
+                    "stage1_model": s1,
+                    "stage2_model": s2,
+                    "statistics": result.statistics
+                })
+
+    return {"comparisons": results}
+
+
+@app.get("/api/binding/results")
+async def get_binding_results():
+    """Get all stored binding results."""
+    return {"results": list(_binding_results.keys())}
+
+
+@app.get("/api/binding/results/{result_key}")
+async def get_binding_result(result_key: str):
+    """Get a specific binding result."""
+    if result_key not in _binding_results:
+        return {"error": "Result not found"}, 404
+    result = _binding_results[result_key]
+    return {
+        "stage1_model": result.stage1_model,
+        "stage2_model": result.stage2_model,
+        "statistics": result.statistics,
+        "bindings": [{
+            "html_file": b.html_file,
+            "xml_template": b.xml_template,
+            "match_confidence": b.match_confidence,
+            "field_count": len(b.field_bindings)
+        } for b in result.bindings]
+    }
 
 
 @app.get("/api/benchmark/history")

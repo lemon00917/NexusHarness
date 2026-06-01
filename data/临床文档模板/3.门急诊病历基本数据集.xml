@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ClinicalDocument>
+	<!-- 文档头信息 -->
+	<docHeader>
+		<!-- 源文档Id -->
+		<documentId/>
+		<!-- 模板版本号 -->
+		<version>V1.0</version>
+		<!-- 文档保管机构 -->
+		<hospital>
+			<text>XXX医院</text>
+		</hospital>
+		<!-- 文档类型 -->
+		<docType>OutpatientAndEmergency</docType>
+	</docHeader>
+	<docBody>
+		<!-- 文档标题 -->
+		<title>门（急）诊病历</title>
+		<!--  医师签名 -->
+		<physician>
+			<text>张三扪</text>
+		</physician>
+		<!-- 患者信息 -->
+		<patient>
+			<!-- 登记号 -->
+			<registerNo>DJ4547657</registerNo>
+			<!-- 姓名 -->
+			<name>
+				<text>张金生</text>
+			</name>
+			<!-- 性别 -->
+			<gender>
+				<text>男</text>
+			</gender>
+			<!-- 年龄 -->
+			<age>
+				<text>15岁</text>
+			</age>
+			<!-- 出生日期 -->
+			<birthDate>20101010</birthDate>
+			<!-- 婚姻状况 -->
+			<maritalStatus>
+				<text>未婚</text>
+			</maritalStatus>
+			<!-- 职业 -->
+			<occupation>
+				<text>国家公务员</text>
+			</occupation>
+			<!-- 住址（现住址） -->
+			<address>
+				<!-- 住址 -->
+				<text>住址的全部信息</text>
+			</address>
+			<!-- 工作单位 -->
+			<company>XXX公司</company>
+		</patient>
+		<!-- 就诊信息 -->
+		<encounter>
+			<!-- 就诊号-->
+			<visitNumber>EN4547657</visitNumber>
+			<visitDateTime>20190420T120000</visitDateTime>
+			<!-- 就诊科室 -->
+			<visitDepartment>
+				<text>内分泌科</text>
+			</visitDepartment>
+		</encounter>
+		<!-- 主诉 -->
+		<chiefComplaint>
+			<text>头痛；发烧；咳嗽；</text>
+		</chiefComplaint>
+		<!-- 现病史 -->
+		<presentHistory>
+			<text>慢性胆囊炎；轻度脂肪肝</text>
+		</presentHistory>
+		<!-- 既往史 -->
+		<pastHistory>
+			<text>无</text>
+		</pastHistory>
+		<!-- 体格检查 -->
+		<physicalExamination>
+			<text>神志清楚，表情自如，无病容，发育正常，营养良好，自主体位，步态正常，查体合作</text>
+		</physicalExamination>
+		<!-- 中医四诊观察结果 -->
+		<tcmFourFindings>
+			<text>舌红，苔薄腻，脉弦</text>
+		</tcmFourFindings>
+		<!-- 辅助检查 -->
+		<investigations>
+			<text>头、上、盆腔CT示头皮血肿、胆囊切除术后改变</text>
+		</investigations>
+		<!-- 过敏史 -->
+		<allergy>
+			<text>头孢过敏</text>
+		</allergy>
+		<!-- 诊断 -->
+		<diagnosis>
+			<text>1.急性扁桃体炎,2.鼻炎? </text>
+		</diagnosis>
+		<!-- 治疗意见 -->
+		<treatment>
+			<text>治疗意见</text>
+		</treatment>
+	</docBody>
+</ClinicalDocument>

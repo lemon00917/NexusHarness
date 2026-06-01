@@ -1,0 +1,1046 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTML-XML 模板绑定 - NexusHarness</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg-primary: #0f1419;
+            --bg-secondary: #1a1f26;
+            --bg-tertiary: #242b35;
+            --text-primary: #e7e9ea;
+            --text-secondary: #8b98a5;
+            --accent-blue: #1d9bf0;
+            --accent-green: #00ba7c;
+            --accent-orange: #ff7a00;
+            --accent-red: #f4212e;
+            --border: #2f3336;
+        }
+        body { background: var(--bg-primary); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        h1 { font-size: 24px; margin-bottom: 20px; color: var(--text-primary); }
+        h2 { font-size: 18px; margin: 20px 0 10px; color: var(--text-primary); }
+        h3 { font-size: 14px; margin: 12px 0 8px; color: var(--text-secondary); }
+
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+
+        .model-config {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 16px;
+        }
+        .model-stage {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .model-stage h3 {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .stage-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .stage1-badge { background: var(--accent-blue); color: white; }
+        .stage2-badge { background: var(--accent-green); color: white; }
+        .stage3-badge { background: var(--accent-orange); color: white; }
+
+        .form-row {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        label {
+            font-size: 14px;
+            color: var(--text-secondary);
+            min-width: 80px;
+        }
+
+        select, input {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 12px;
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+
+        select { min-width: 180px; }
+        input[type="text"] { min-width: 300px; }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .btn-primary { background: var(--accent-blue); color: white; }
+        .btn-primary:hover { background: #1a8cd8; }
+        .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border); }
+        .btn-secondary:hover { background: var(--border); }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 16px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: var(--accent-blue);
+            transition: width 0.3s;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin: 16px 0;
+        }
+        .stat-item {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+        }
+        .stat-value { font-size: 28px; font-weight: bold; color: var(--accent-blue); }
+        .stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+        .binding-item {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+        .binding-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .binding-file { font-weight: 500; color: var(--text-primary); }
+        .binding-template { color: var(--accent-green); font-size: 13px; }
+        .confidence { font-size: 12px; color: var(--text-secondary); }
+
+        .fields-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 8px;
+        }
+        .fields-table th, .fields-table td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+        .fields-table th { color: var(--text-secondary); font-weight: 500; }
+        .field-html { color: var(--accent-blue); }
+        .field-value { color: var(--text-primary); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .field-xml { color: var(--accent-green); font-family: monospace; font-size: 12px; }
+
+        .model-compare {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+        .model-card {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .model-card h3 { font-size: 14px; margin-bottom: 8px; color: var(--accent-blue); word-break: break-all; }
+        .model-card .match-rate { font-size: 24px; font-weight: bold; color: var(--accent-green); }
+        .model-card .config-label { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+
+        .stage1-output {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 12px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 13px;
+            max-height: 700px;
+            overflow-y: auto;
+            color: var(--text-primary);
+        }
+
+        .log-container {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 16px;
+        }
+        .log-entry { padding: 4px 0; border-bottom: 1px solid var(--border); }
+        .log-time { color: var(--text-secondary); margin-right: 8px; }
+        .log-info { color: var(--accent-blue); }
+        .log-error { color: var(--accent-red); }
+        .log-success { color: var(--accent-green); }
+
+        .loading { display: none; text-align: center; padding: 40px; }
+        .loading.active { display: block; }
+        .spinner {
+            width: 40px; height: 40px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 4px;
+        }
+        .tab {
+            padding: 8px 16px;
+            border-radius: 8px 8px 0 0;
+            cursor: pointer;
+            color: var(--text-secondary);
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        .tab.active { background: var(--bg-secondary); color: var(--text-primary); }
+        .tab:hover { color: var(--text-primary); }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .info-text { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📋 HTML-XML 模板绑定工具</h1>
+        <p style="color: var(--text-secondary); margin-bottom: 16px;">
+            四阶段绑定：Stage1 (模板匹配) → Stage2 (XML解析) → Stage3 (HTML提取) → Stage4 (XML绑定)
+        </p>
+
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('single')">单文件测试</div>
+            <div class="tab" onclick="switchTab('batch')">批量绑定</div>
+            <div class="tab" onclick="switchTab('compare')">模型对比</div>
+            <div class="tab" onclick="switchTab('newflow')">新四阶段流程</div>
+            <div class="tab" onclick="switchTab('results')">历史结果</div>
+        </div>
+
+        <!-- 单文件测试 -->
+        <div id="tab-single" class="tab-content active">
+            <div class="card">
+                <h2>上传 HTML 文件进行绑定测试</h2>
+                <div class="form-row">
+                    <label>XML 模板:</label>
+                    <input type="text" id="xml-dir-single" value="data/临床文档模板" style="min-width: 300px;">
+                </div>
+
+                <!-- 两阶段模型选择 -->
+                <div class="model-config">
+                    <div class="model-stage">
+                        <h3>
+                            <span class="stage-badge stage1-badge">Stage1</span>
+                            HTML → 结构化文本
+                        </h3>
+                        <div class="form-row">
+                            <label>选择模型:</label>
+                            <select id="stage1-model-single">
+                                <option value="medaibase/medgemma1.5:4b">medaibase/medgemma1.5:4b</option>
+                                <option value="qwen2.5:7b">qwen2.5:7b</option>
+                                <option value="qwen2.5:3b">qwen2.5:3b</option>
+                                <option value="qwen2:7b-instruct">qwen2:7b-instruct</option>
+                                <option value="qwen2:1.5b">qwen2:1.5b</option>
+                                <option value="llama3:8b">llama3:8b</option>
+                                <option value="llama3.2:3b">llama3.2:3b</option>
+                                <option value="gemma2:2b">gemma2:2b</option>
+                            </select>
+                        </div>
+                        <p class="info-text">用于解析 HTML 文档，提取结构化字段。建议使用医学领域模型。</p>
+                    </div>
+                    <div class="model-stage">
+                        <h3>
+                            <span class="stage-badge stage2-badge">Stage2</span>
+                            模板匹配
+                        </h3>
+                        <div class="form-row">
+                            <label>选择模型:</label>
+                            <select id="stage2-model-single">
+                                <option value="qwen2.5:7b">qwen2.5:7b</option>
+                                <option value="qwen2.5:3b">qwen2.5:3b</option>
+                                <option value="qwen2:7b-instruct">qwen2:7b-instruct</option>
+                                <option value="qwen2:1.5b">qwen2:1.5b</option>
+                                <option value="llama3:8b">llama3:8b</option>
+                                <option value="llama3.2:3b">llama3.2:3b</option>
+                                <option value="gemma2:2b">gemma2:2b</option>
+                                <option value="medaibase/medgemma1.5:4b">medaibase/medgemma1.5:4b</option>
+                            </select>
+                        </div>
+                        <p class="info-text">用于将字段映射到 XML 节点路径。轻量模型即可胜任。</p>
+                    </div>
+                    <div class="model-stage">
+                        <h3>
+                            <span class="stage-badge stage3-badge">Stage3</span>
+                            字段绑定
+                        </h3>
+                        <div class="form-row">
+                            <label>选择模型:</label>
+                            <select id="stage3-model-single">
+                                <option value="qwen2.5:7b">qwen2.5:7b</option>
+                                <option value="qwen2.5:3b">qwen2.5:3b</option>
+                                <option value="qwen2:7b-instruct">qwen2:7b-instruct</option>
+                                <option value="qwen2:1.5b">qwen2:1.5b</option>
+                                <option value="llama3:8b">llama3:8b</option>
+                                <option value="llama3.2:3b">llama3.2:3b</option>
+                                <option value="gemma2:2b">gemma2:2b</option>
+                                <option value="medaibase/medgemma1.5:4b">medaibase/medgemma1.5:4b</option>
+                            </select>
+                        </div>
+                        <p class="info-text">用于将结构化字段绑定到 XML 节点。</p>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <button class="btn btn-primary" onclick="bindSingleFile()">开始绑定</button>
+                    <button class="btn btn-secondary" onclick="document.getElementById('file-input-single').click()">选择 HTML 文件</button>
+                    <span id="file-name-single" style="margin-left: 12px; color: var(--text-secondary);"></span>
+                </div>
+                <input type="file" id="file-input-single" accept=".html" style="display:none">
+            </div>
+
+            <div id="single-result" style="display: none;">
+                <div class="card">
+                    <h2>绑定结果</h2>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-value" id="res-template">-</div>
+                            <div class="stat-label">匹配模板</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="res-confidence">-</div>
+                            <div class="stat-label">置信度</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="res-fields">-</div>
+                            <div class="stat-label">绑定字段数</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>Stage1 输出 (HTML → 结构化文本)</h2>
+                    <pre id="stage1-output" class="stage1-output" style="display: none;"></pre>
+                    <p id="stage1-no-output" style="color: var(--text-secondary);">无输出</p>
+                </div>
+
+                <div class="card">
+                    <h2>Stage2 输出 (模板匹配结果)</h2>
+                    <div id="stage2-output" style="padding: 12px; background: var(--bg-tertiary); border-radius: 8px;">
+                        <div id="stage2-template" style="color: var(--accent-green); font-weight: bold;"></div>
+                        <div id="stage2-confidence" style="color: var(--text-secondary); margin-top: 4px;"></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>Stage3 输出 (字段绑定详情)</h2>
+                    <table class="fields-table">
+                        <thead>
+                            <tr>
+                                <th>HTML 字段</th>
+                                <th>值</th>
+                                <th>XML 路径</th>
+                                <th>置信度</th>
+                            </tr>
+                        </thead>
+                        <tbody id="bindings-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 批量绑定 -->
+        <div id="tab-batch" class="tab-content">
+            <div class="card">
+                <h2>批量绑定 HTML 目录</h2>
+                <div class="form-row">
+                    <label>HTML 目录:</label>
+                    <input type="text" id="html-dir-batch" value="C:/Users/Administrator/Desktop/文档下载2026-5-22 17_33_21" style="min-width: 400px;">
+                </div>
+                <div class="form-row">
+                    <label>XML 模板:</label>
+                    <input type="text" id="xml-dir-batch" value="data/临床文档模板">
+                </div>
+
+                <!-- 两阶段模型选择 -->
+                <div class="model-config">
+                    <div class="model-stage">
+                        <h3>
+                            <span class="stage-badge stage1-badge">Stage1</span>
+                            HTML → 结构化文本
+                        </h3>
+                        <div class="form-row">
+                            <label>模型:</label>
+                            <select id="stage1-model-batch">
+                                <option value="qwen2.5:7b">qwen2.5:7b</option>
+                                <option value="qwen2.5:3b">qwen2.5:3b</option>
+                                <option value="qwen2:7b-instruct">qwen2:7b-instruct</option>
+                                <option value="qwen2:1.5b">qwen2:1.5b</option>
+                                <option value="llama3:8b">llama3:8b</option>
+                                <option value="llama3.2:3b">llama3.2:3b</option>
+                                <option value="gemma2:2b">gemma2:2b</option>
+                                <option value="medaibase/medgemma1.5:4b">medaibase/medgemma1.5:4b</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="model-stage">
+                        <h3>
+                            <span class="stage-badge stage2-badge">Stage2</span>
+                            模板匹配
+                        </h3>
+                        <div class="form-row">
+                            <label>模型:</label>
+                            <select id="stage2-model-batch">
+                                <option value="qwen2.5:7b">qwen2.5:7b</option>
+                                <option value="qwen2.5:3b">qwen2.5:3b</option>
+                                <option value="qwen2:7b-instruct">qwen2:7b-instruct</option>
+                                <option value="qwen2:1.5b">qwen2:1.5b</option>
+                                <option value="llama3:8b">llama3:8b</option>
+                                <option value="llama3.2:3b">llama3.2:3b</option>
+                                <option value="gemma2:2b">gemma2:2b</option>
+                                <option value="medaibase/medgemma1.5:4b">medaibase/medgemma1.5:4b</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="model-stage">
+                        <h3>
+                            <span class="stage-badge stage3-badge">Stage3</span>
+                            字段绑定
+                        </h3>
+                        <div class="form-row">
+                            <label>模型:</label>
+                            <select id="stage3-model-batch">
+                                <option value="qwen2.5:7b">qwen2.5:7b</option>
+                                <option value="qwen2.5:3b">qwen2.5:3b</option>
+                                <option value="qwen2:7b-instruct">qwen2:7b-instruct</option>
+                                <option value="qwen2:1.5b">qwen2:1.5b</option>
+                                <option value="llama3:8b">llama3:8b</option>
+                                <option value="llama3.2:3b">llama3.2:3b</option>
+                                <option value="gemma2:2b">gemma2:2b</option>
+                                <option value="medaibase/medgemma1.5:4b">medaibase/medgemma1.5:4b</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" onclick="bindDirectory()">开始批量绑定</button>
+            </div>
+
+            <div id="batch-progress" class="card" style="display: none;">
+                <h2>绑定进度</h2>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+                </div>
+                <div id="progress-text" style="text-align: center; color: var(--text-secondary);">准备中...</div>
+
+                <div id="batch-results" style="display: none;">
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-value" id="batch-total">-</div>
+                            <div class="stat-label">总文件数</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="batch-matched">-</div>
+                            <div class="stat-label">已匹配</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="batch-unmatched">-</div>
+                            <div class="stat-label">未匹配</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="batch-rate">-</div>
+                            <div class="stat-label">匹配率</div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 12px; color: var(--text-secondary); font-size: 13px;">
+                        Stage1: <span id="batch-s1-model">-</span> | Stage2: <span id="batch-s2-model">-</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 模型对比 -->
+        <div id="tab-compare" class="tab-content">
+            <div class="card">
+                <h2>多模型准确率对比</h2>
+                <div class="form-row">
+                    <label>HTML 目录:</label>
+                    <input type="text" id="html-dir-compare" value="C:/Users/Administrator/Desktop/文档下载2026-5-22 17_33_21" style="min-width: 400px;">
+                </div>
+                <div class="form-row">
+                    <label>XML 模板:</label>
+                    <input type="text" id="xml-dir-compare" value="data/临床文档模板">
+                </div>
+
+                <div class="model-config">
+                    <div class="model-stage">
+                        <h3>
+                            <span class="stage-badge stage1-badge">Stage1</span>
+                            HTML → 结构化文本 (多选)
+                        </h3>
+                        <select id="stage1-models-compare" multiple style="min-width: 100%; height: 80px;">
+                            <option value="qwen2.5:7b">qwen2.5:7b</option>
+                            <option value="qwen2.5:3b">qwen2.5:3b</option>
+                            <option value="qwen2:7b-instruct">qwen2:7b-instruct</option>
+                            <option value="qwen2:1.5b">qwen2:1.5b</option>
+                            <option value="llama3:8b">llama3:8b</option>
+                            <option value="llama3.2:3b">llama3.2:3b</option>
+                            <option value="gemma2:2b">gemma2:2b</option>
+                            <option value="medaibase/medgemma1.5:4b">medaibase/medgemma1.5:4b</option>
+                        </select>
+                        <p class="info-text">按住 Ctrl 多选</p>
+                    </div>
+                    <div class="model-stage">
+                        <h3>
+                            <span class="stage-badge stage2-badge">Stage2</span>
+                            结构化文本 → XML (多选)
+                        </h3>
+                        <select id="stage2-models-compare" multiple style="min-width: 100%; height: 80px;">
+                            <option value="qwen2.5:7b">qwen2.5:7b</option>
+                            <option value="qwen2.5:3b">qwen2.5:3b</option>
+                            <option value="qwen2:7b-instruct">qwen2:7b-instruct</option>
+                            <option value="qwen2:1.5b">qwen2:1.5b</option>
+                            <option value="llama3:8b">llama3:8b</option>
+                            <option value="llama3.2:3b">llama3.2:3b</option>
+                            <option value="gemma2:2b">gemma2:2b</option>
+                            <option value="medaibase/medgemma1.5:4b">medaibase/medgemma1.5:4b</option>
+                        </select>
+                        <p class="info-text">所有组合都会被测试：3×3 = 9 种配置</p>
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" onclick="compareModels()">开始对比</button>
+            </div>
+
+            <div id="compare-results" class="card" style="display: none;">
+                <h2>对比结果</h2>
+                <div id="model-compare-grid" class="model-compare"></div>
+            </div>
+        </div>
+
+        <!-- 新四阶段流程 -->
+        <div id="tab-newflow" class="tab-content">
+            <div class="card">
+                <h2>新四阶段绑定流程</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 16px;">
+                    流程：1) LLM匹配模板 → 2) 解析XML字段 → 3) LLM提取字段 → 4) XML绑定
+                </p>
+                <div class="form-row">
+                    <label>XML 模板:</label>
+                    <input type="text" id="xml-dir-newflow" value="data/临床文档模板" style="min-width: 300px;">
+                </div>
+
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0;">
+                    <div>
+                        <label style="font-size: 12px; color: var(--text-secondary);">Stage1 模板匹配</label>
+                        <select id="stage1-model-newflow" style="width: 100%; padding: 8px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary);">
+                            <option value="qwen2.5:7b">qwen2.5:7b</option>
+                            <option value="qwen2.5:3b">qwen2.5:3b</option>
+                            <option value="qwen2:7b-instruct">qwen2:7b-instruct</option>
+                            <option value="qwen2:1.5b">qwen2:1.5b</option>
+                            <option value="llama3:8b">llama3:8b</option>
+                            <option value="llama3.2:3b">llama3.2:3b</option>
+                            <option value="gemma2:2b">gemma2:2b</option>
+                            <option value="medaibase/medgemma1.5:4b">medaibase/medgemma1.5:4b</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size: 12px; color: var(--text-secondary);">Stage2 XML解析 (无LLM)</label>
+                        <div style="padding: 8px; background: var(--bg-tertiary); border-radius: 8px; color: var(--text-secondary);">直接解析</div>
+                    </div>
+                    <div>
+                        <label style="font-size: 12px; color: var(--text-secondary);">Stage3 LLM提取</label>
+                        <select id="stage3-model-newflow" style="width: 100%; padding: 8px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary);">
+                            <option value="qwen2.5:7b">qwen2.5:7b</option>
+                            <option value="qwen2.5:3b">qwen2.5:3b</option>
+                            <option value="qwen2:7b-instruct">qwen2:7b-instruct</option>
+                            <option value="qwen2:1.5b">qwen2:1.5b</option>
+                            <option value="llama3:8b">llama3:8b</option>
+                            <option value="llama3.2:3b">llama3.2:3b</option>
+                            <option value="gemma2:2b">gemma2:2b</option>
+                            <option value="medaibase/medgemma1.5:4b">medaibase/medgemma1.5:4b</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size: 12px; color: var(--text-secondary);">Stage4 XML绑定</label>
+                        <select id="stage4-model-newflow" style="width: 100%; padding: 8px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary);">
+                            <option value="qwen2.5:7b">qwen2.5:7b</option>
+                            <option value="qwen2.5:3b">qwen2.5:3b</option>
+                            <option value="qwen2:7b-instruct">qwen2:7b-instruct</option>
+                            <option value="qwen2:1.5b">qwen2:1.5b</option>
+                            <option value="llama3:8b">llama3:8b</option>
+                            <option value="llama3.2:3b">llama3.2:3b</option>
+                            <option value="gemma2:2b">gemma2:2b</option>
+                            <option value="medaibase/medgemma1.5:4b">medaibase/medgemma1.5:4b</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <button class="btn btn-primary" onclick="runNewFlow()">开始绑定</button>
+                    <button class="btn btn-secondary" onclick="document.getElementById('file-input-newflow').click()">选择 HTML 文件</button>
+                    <input type="file" id="file-input-newflow" accept=".html" style="display:none">
+                    <span id="file-name-newflow" style="margin-left: 12px; color: var(--text-secondary);"></span>
+                </div>
+            </div>
+
+            <div id="newflow-results" style="display: none; margin-top: 20px;">
+                <div class="card">
+                    <h2>Stage1 - 模板匹配</h2>
+                    <div id="newflow-stage1-result" style="padding: 12px; background: var(--bg-tertiary); border-radius: 8px;"></div>
+                </div>
+                <div class="card">
+                    <h2>Stage2 - XML字段解析</h2>
+                    <div id="newflow-stage2-result" style="padding: 12px; background: var(--bg-tertiary); border-radius: 8px; max-height: 300px; overflow-y: auto;"></div>
+                </div>
+                <div class="card">
+                    <h2>Stage3 - HTML提取字段</h2>
+                    <div id="newflow-stage3-result" style="padding: 12px; background: var(--bg-tertiary); border-radius: 8px; max-height: 300px; overflow-y: auto;"></div>
+                </div>
+                <div class="card">
+                    <h2>Stage4 - XML绑定结果</h2>
+                    <table class="fields-table">
+                        <thead>
+                            <tr>
+                                <th>HTML 字段</th>
+                                <th>值</th>
+                                <th>XML 路径</th>
+                            </tr>
+                        </thead>
+                        <tbody id="newflow-bindings-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 历史结果 -->
+        <div id="tab-results" class="tab-content">
+            <div class="card">
+                <h2>历史绑定结果</h2>
+                <button class="btn btn-secondary" onclick="loadBindingResults()">刷新列表</button>
+                <div id="results-list" style="margin-top: 16px;"></div>
+            </div>
+        </div>
+
+        <div id="log-container" class="log-container" style="display: none;"></div>
+    </div>
+
+    <script>
+        // Tab switching
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelector(`[onclick="switchTab('${tab}')"]`).classList.add('active');
+            document.getElementById(`tab-${tab}`).classList.add('active');
+        }
+
+        // Log helper
+        function log(msg, type='info') {
+            const container = document.getElementById('log-container');
+            container.style.display = 'block';
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.innerHTML = `<span class="log-time">[${time}]</span> ${msg}`;
+            container.appendChild(entry);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // Single file binding
+        document.getElementById('file-input-single').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                document.getElementById('file-name-single').textContent = file.name;
+            }
+        });
+
+        async function bindSingleFile() {
+            const fileInput = document.getElementById('file-input-single');
+            const file = fileInput.files[0];
+            if (!file) {
+                alert('请先选择 HTML 文件');
+                return;
+            }
+
+            const stage1Model = document.getElementById('stage1-model-single').value;
+            const stage2Model = document.getElementById('stage2-model-single').value;
+            const xmlDir = document.getElementById('xml-dir-single').value;
+            const formData = new FormData();
+            formData.append('file', file);
+
+            log(`开始绑定: ${file.name}<br>Stage1: ${stage1Model}<br>Stage2: ${stage2Model}`);
+
+            try {
+                const url = `/api/binding/single?xml_dir=${encodeURIComponent(xmlDir)}&stage1_model=${encodeURIComponent(stage1Model)}&stage2_model=${encodeURIComponent(stage2Model)}`;
+                const response = await fetch(url, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    showSingleResult(data);
+                    log(`绑定成功: ${data.html_file} → ${data.xml_template}`, 'success');
+                } else {
+                    log(`绑定失败: ${data.detail}`, 'error');
+                }
+            } catch (e) {
+                log(`请求失败: ${e}`, 'error');
+            }
+        }
+
+        function showSingleResult(data) {
+            document.getElementById('single-result').style.display = 'block';
+            document.getElementById('res-template').textContent = data.xml_template || '未匹配';
+            document.getElementById('res-confidence').textContent = data.match_confidence ? (data.match_confidence * 100).toFixed(0) + '%' : '-';
+            document.getElementById('res-fields').textContent = data.field_count || 0;
+
+            // Stage1 output - 格式化显示每个字段
+            const stage1El = document.getElementById('stage1-output');
+            const noOutputEl = document.getElementById('stage1-no-output');
+            if (data.stage1_output) {
+                stage1El.style.display = 'block';
+                let fields = [];
+
+                //尝试解析 JSON
+                try {
+                    let jsonStr = data.stage1_output;
+                    // 去除 markdown 代码块
+                    if (jsonStr.includes('```json')) {
+                        jsonStr = jsonStr.split('```json')[1].split('```')[0].trim();
+                    } else if (jsonStr.includes('```')) {
+                        jsonStr = jsonStr.split('```')[1].split('```')[0].trim();
+                    }
+                    const parsed = JSON.parse(jsonStr);
+                    if (Array.isArray(parsed)) {
+                        fields = parsed.map(item => ({name: item.field, value: item.value}));
+                    } else if (typeof parsed === 'object') {
+                        fields = Object.entries(parsed).map(([name, value]) => ({name, value}));
+                    }
+                } catch (e) {
+                    // JSON 解析失败，尝试用 | 或 ,分割
+                    const separator = data.stage1_output.includes('|') ? '|' : ',';
+                    fields = data.stage1_output.split(separator).map(f => f.trim()).filter(f => f).map(field => {
+                        const colonIdx = field.indexOf(':');
+                        if (colonIdx > 0) {
+                            return {name: field.substring(0, colonIdx).trim(), value: field.substring(colonIdx + 1).trim()};
+                        }
+                        return {name: field, value: ''};
+                    });
+                }
+
+                let html = '<div style="display:flex;flex-direction:column;gap:8px;">';
+                fields.forEach((field, idx) => {
+                    if (field.name) {
+                        html += `<div style="display:flex;gap:12px;align-items:flex-start;padding:4px 0;border-bottom:1px solid var(--border);">
+                            <span style="color:var(--accent-orange);min-width:100px;font-weight:600;flex-shrink:0;">${field.name}:</span>
+                            <span style="color:var(--text-primary);word-break:break-word;flex:1;">${field.value || ''}</span>
+                        </div>`;
+                    }
+                });
+                html += '</div>';
+                stage1El.innerHTML = html;
+                noOutputEl.style.display = 'none';
+            } else {
+                stage1El.style.display = 'none';
+                noOutputEl.style.display = 'block';
+            }
+
+            // Stage2 output - template matching
+            const stage2Template = document.getElementById('stage2-template');
+            const stage2Confidence = document.getElementById('stage2-confidence');
+            if (data.xml_template) {
+                stage2Template.textContent = '匹配模板: ' + data.xml_template;
+                stage2Confidence.textContent = '匹配置信度: ' + (data.match_confidence ? (data.match_confidence * 100).toFixed(0) + '%' : '-');
+            } else {
+                stage2Template.textContent = '未匹配到模板';
+                stage2Confidence.textContent = '';
+            }
+
+            // Bindings table (Stage3 output)
+            const tbody = document.getElementById('bindings-tbody');
+            tbody.innerHTML = '';
+            (data.bindings || []).forEach(b => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="field-html">${b.html_field}</td>
+                    <td class="field-value" title="${b.html_value}">${b.html_value}</td>
+                    <td class="field-xml">${b.xml_path}</td>
+                    <td>${b.confidence ? (b.confidence * 100).toFixed(0) + '%' : '-'}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Batch binding
+        async function bindDirectory() {
+            const htmlDir = document.getElementById('html-dir-batch').value;
+            const xmlDir = document.getElementById('xml-dir-batch').value;
+            const stage1Model = document.getElementById('stage1-model-batch').value;
+            const stage2Model = document.getElementById('stage2-model-batch').value;
+
+            const progressDiv = document.getElementById('batch-progress');
+            progressDiv.style.display = 'block';
+            document.getElementById('progress-text').textContent = '正在绑定，请稍候...';
+            document.getElementById('batch-results').style.display = 'none';
+            log(`开始批量绑定: ${htmlDir}<br>Stage1: ${stage1Model}<br>Stage2: ${stage2Model}`);
+
+            try {
+                const url = `/api/binding/directory?html_dir=${encodeURIComponent(htmlDir)}&xml_dir=${encodeURIComponent(xmlDir)}&stage1_model=${encodeURIComponent(stage1Model)}&stage2_model=${encodeURIComponent(stage2Model)}`;
+                const response = await fetch(url, { method: 'POST' });
+
+                const data = await response.json();
+                if (response.ok) {
+                    showBatchResult(data, stage1Model, stage2Model);
+                    log(`批量绑定完成: ${data.matched}/${data.total} 匹配`, 'success');
+                } else {
+                    log(`绑定失败: ${data.detail}`, 'error');
+                }
+            } catch (e) {
+                log(`请求失败: ${e}`, 'error');
+            }
+        }
+
+        function showBatchResult(data, s1Model, s2Model) {
+            document.getElementById('batch-results').style.display = 'block';
+            document.getElementById('batch-total').textContent = data.total;
+            document.getElementById('batch-matched').textContent = data.matched;
+            document.getElementById('batch-unmatched').textContent = data.unmatched;
+            document.getElementById('batch-rate').textContent = data.match_rate;
+            document.getElementById('batch-s1-model').textContent = s1Model;
+            document.getElementById('batch-s2-model').textContent = s2Model;
+            document.getElementById('progress-fill').style.width = '100%';
+            document.getElementById('progress-text').textContent = '完成！';
+        }
+
+        // Model comparison
+        async function compareModels() {
+            const htmlDir = document.getElementById('html-dir-compare').value;
+            const xmlDir = document.getElementById('xml-dir-compare').value;
+            const s1Select = document.getElementById('stage1-models-compare');
+            const s2Select = document.getElementById('stage2-models-compare');
+            const stage1Models = Array.from(s1Select.selectedOptions).map(o => o.value);
+            const stage2Models = Array.from(s2Select.selectedOptions).map(o => o.value);
+
+            if (stage1Models.length === 0 || stage2Models.length === 0) {
+                alert('请至少为每个阶段选择一个模型');
+                return;
+            }
+
+            if (stage1Models.length * stage2Models.length > 20) {
+                alert('组合过多，请减少选择');
+                return;
+            }
+
+            log(`开始模型对比: Stage1(${stage1Models.length}) × Stage2(${stage2Models.length})`);
+
+            try {
+                const url = `/api/binding/compare-models?html_dir=${encodeURIComponent(htmlDir)}&xml_dir=${encodeURIComponent(xmlDir)}&stage1_models=${stage1Models.join(',')}&stage2_models=${stage2Models.join(',')}`;
+                const response = await fetch(url, { method: 'POST' });
+
+                const data = await response.json();
+                if (response.ok) {
+                    showCompareResult(data);
+                    log(`模型对比完成: 测试了 ${data.configs_tested.length} 种配置`, 'success');
+                } else {
+                    log(`对比失败: ${data.detail}`, 'error');
+                }
+            } catch (e) {
+                log(`请求失败: ${e}`, 'error');
+            }
+        }
+
+        function showCompareResult(data) {
+            const grid = document.getElementById('model-compare-grid');
+            grid.innerHTML = '';
+            document.getElementById('compare-results').style.display = 'block';
+
+            for (const [config, result] of Object.entries(data.results)) {
+                const card = document.createElement('div');
+                card.className = 'model-card';
+                card.innerHTML = `
+                    <h3>${config}</h3>
+                    <div class="match-rate">${result.match_rate}</div>
+                    <div style="font-size: 13px; color: var(--text-secondary); margin-top: 8px;">
+                        匹配: ${result.matched} | 未匹配: ${result.unmatched}
+                    </div>
+                    <div class="config-label">S1: ${result.stage1_model}<br>S2: ${result.stage2_model}</div>
+                `;
+                grid.appendChild(card);
+            }
+        }
+
+        // Load binding results
+        async function loadBindingResults() {
+            try {
+                const response = await fetch('/api/binding/results');
+                const data = await response.json();
+                const list = document.getElementById('results-list');
+
+                if (data.results.length === 0) {
+                    list.innerHTML = '<div style="color: var(--text-secondary);">暂无历史结果</div>';
+                    return;
+                }
+
+                list.innerHTML = data.results.map(r => `
+                    <div class="binding-item" style="cursor: pointer;" onclick="loadResult('${r.filename}')">
+                        <div class="binding-header">
+                            <span class="binding-file">${r.filename}</span>
+                            <span class="confidence">${(r.size / 1024).toFixed(1)} KB</span>
+                        </div>
+                        <div style="color: var(--text-secondary); font-size: 12px;">
+                            修改时间: ${r.modified}
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                log(`加载失败: ${e}`, 'error');
+            }
+        }
+
+        async function loadResult(filename) {
+            try {
+                const response = await fetch(`/api/binding/results/${encodeURIComponent(filename)}`);
+                const data = await response.json();
+                console.log('Result:', data);
+                alert(`已加载: ${filename}\nStage1: ${data.stage1_model || 'N/A'}\nStage2: ${data.stage2_model || 'N/A'}\n匹配率: ${data.statistics?.match_rate || data.match_rate || 'N/A'}`);
+            } catch (e) {
+                log(`加载结果失败: ${e}`, 'error');
+            }
+        }
+
+        // Initialize
+        loadBindingResults();
+
+        // 新三阶段流程
+        let newFlowHtmlContent = '';
+
+        document.getElementById('file-input-newflow').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                document.getElementById('file-name-newflow').textContent = file.name;
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    newFlowHtmlContent = e.target.result;
+                };
+                reader.readAsText(file);
+            }
+        });
+
+        async function runNewFlow() {
+            const xmlDir = document.getElementById('xml-dir-newflow').value;
+            const stage1Model = document.getElementById('stage1-model-newflow').value;
+            const stage3Model = document.getElementById('stage3-model-newflow').value;
+            const stage4Model = document.getElementById('stage4-model-newflow').value;
+
+            if (!newFlowHtmlContent) {
+                alert('请先选择HTML文件');
+                return;
+            }
+
+            document.getElementById('newflow-results').style.display = 'block';
+
+            try {
+                const formData = new FormData();
+                formData.append('file', new Blob([newFlowHtmlContent], {type: 'text/html'}), 'input.html');
+                formData.append('xml_dir', xmlDir);
+                formData.append('stage1_model', stage1Model);
+                formData.append('stage3_model', stage3Model);
+                formData.append('stage4_model', stage4Model);
+
+                log('开始新四阶段绑定流程...');
+
+                const response = await fetch(`/api/binding/v2?xml_dir=${encodeURIComponent(xmlDir)}&stage1_model=${encodeURIComponent(stage1Model)}&stage3_model=${encodeURIComponent(stage3Model)}&stage4_model=${encodeURIComponent(stage4Model)}`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    // Stage1 结果
+                    document.getElementById('newflow-stage1-result').innerHTML = `
+                        <div><strong>匹配模板:</strong> ${data.template || '未匹配'}</div>
+                        <div><strong>匹配置信度:</strong> ${data.confidence ? (data.confidence * 100).toFixed(0) + '%' : '-'}</div>
+                    `;
+
+                    // Stage2 结果 - XML字段
+                    document.getElementById('newflow-stage2-result').innerHTML = data.xml_fields ? Object.entries(data.xml_fields).map(([path, info]) => `<div>${path} <span style="color:var(--accent-green)">(${info.semantic || '无语义'})</span></div>`).join('') : '无';
+
+                    // Stage3 结果 - HTML结构化
+                    document.getElementById('newflow-stage3-result').innerHTML = data.html_fields ? data.html_fields.map(f => `<div>${f.field}: ${f.value.substring(0, 50)}...</div>`).join('') : '无';
+
+                    // Stage4 结果 - 绑定
+                    const tbody = document.getElementById('newflow-bindings-tbody');
+                    tbody.innerHTML = '';
+                    (data.bindings || []).forEach(b => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td>${b.html_field}</td>
+                            <td>${b.value || ''}</td>
+                            <td>${b.xml_path || '(未匹配)'}</td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+
+                    // Missing fields info
+                    if (data.missing_fields && data.missing_fields.length > 0) {
+                        const missingDiv = document.createElement('div');
+                        missingDiv.style.marginTop = '10px';
+                        missingDiv.style.padding = '8px';
+                        missingDiv.style.background = '#fff3cd';
+                        missingDiv.style.borderRadius = '4px';
+                        missingDiv.innerHTML = `<strong style="color:#856404">缺失字段 (${data.missing_fields.length})：</strong><br>` +
+                            data.missing_fields.map(f =>
+                                `<span style="color:${f.filled ? '#28a745' : '#856404'}">• ${f.semantic} → ${f.path}${f.filled ? ' ✓' : ''}</span>`
+                            ).join('<br>');
+                        document.getElementById('newflow-bindings-tbody').parentElement.parentElement.parentElement.appendChild(missingDiv);
+                    }
+
+                    log('绑定完成', 'success');
+                } else {
+                    log('绑定失败: ' + (data.error || '未知错误'), 'error');
+                }
+            } catch (e) {
+                log('请求失败: ' + e, 'error');
+            }
+        }
+    </script>
+</body>
+</html>

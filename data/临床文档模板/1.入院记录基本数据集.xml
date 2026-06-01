@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ClinicalDocument>
+	<!-- 文档头信息 -->
+	<docHeader>
+		<!-- 源文档Id -->
+		<documentId/>
+		<!-- 模板版本号 -->
+		<version>V1.0</version>
+		<!-- 文档保管机构 -->
+		<hospital>
+			<text>XXX医院</text>
+		</hospital>
+		<!-- 文档类型 -->
+		<docType>AdmissionRecord</docType>
+	</docHeader>
+	<docBody>
+		<!-- 文档标题 -->
+		<title>入院记录</title>
+		<!-- 记录时间 -->
+		<recordDatetime>20251010T120000</recordDatetime>
+		<!--  医师签名 -->
+		<physician>
+			<text>张三扪</text>
+		</physician>
+		<!-- 患者信息 -->
+		<patient>
+			<!-- 病案号 -->
+			<medicalNo>MN4547657</medicalNo>
+			<!-- 登记号 -->
+			<registerNo>DJ4547657</registerNo>
+			<!-- 姓名 -->
+			<name>
+				<text>张金生</text>
+			</name>
+			<!-- 性别 -->
+			<gender>
+				<text>男</text>
+			</gender>
+			<!-- 年龄 -->
+			<age>
+				<text>15岁</text>
+			</age>
+			<!-- 婚姻状况 -->
+			<maritalStatus>
+				<text>未婚</text>
+			</maritalStatus>
+			<nation>
+				<text>汉族</text>
+			</nation>
+			<!-- 职业 -->
+			<occupation>
+				<text>国家公务员</text>
+			</occupation>
+			<!-- 出生地 -->
+			<birthAddress>
+				<text>住址的全部信息</text>
+			</birthAddress>
+		</patient>
+		<!-- 就诊信息 -->
+		<encounter>
+			<!-- 就诊号-->
+			<visitNumber>EN4547657</visitNumber>
+			<!-- 入院日期时间 -->
+			<admissionDateTime>20190420T120000</admissionDateTime>
+			<!-- 入院科室 -->
+			<admissionDepartment>
+				<text>内分泌科</text>
+			</admissionDepartment>
+		</encounter>
+		<!-- 主诉 -->
+		<chiefComplaint>
+			<text>头痛；发烧；咳嗽；</text>
+		</chiefComplaint>
+		<!-- 现病史 -->
+		<presentHistory>
+			<text>慢性胆囊炎；轻度脂肪肝</text>
+		</presentHistory>
+		<!-- 既往史 -->
+		<pastHistory>
+			<text>无</text>
+		</pastHistory>
+		<!-- 个人史 -->
+		<socialHistory>
+			<text>无</text>
+		</socialHistory>
+		<!-- 婚育史 -->
+		<maritalandobstetricHistory>
+			<text>婚育史</text>
+		</maritalandobstetricHistory>
+		<!-- 月经史 -->
+		<menstrualHistory>
+			<text>月经史</text>
+		</menstrualHistory>
+		<!-- 家族史 -->
+		<familyHistory>
+			<text>家族史</text>
+		</familyHistory>
+		<!-- 体格检查 -->
+		<physicalExamination>
+			<text>神志清楚，表情自如，无病容，发育正常，营养良好，自主体位，步态正常，查体合作</text>
+		</physicalExamination>
+		<!-- 专科情况 -->
+		<specificFindings>
+			<text>专科情况</text>
+		</specificFindings>
+		<!-- 中医四诊观察结果 -->
+		<tcmFourFindings>
+			<text>舌红，苔薄腻，脉弦</text>
+		</tcmFourFindings>
+		<!-- 辅助检查 -->
+		<investigations>
+			<text>头、上、盆腔CT示头皮血肿、胆囊切除术后改变</text>
+		</investigations>
+		<!-- 初步诊断 -->
+		<preliminaryDiagnosis>
+			<text>1.急性扁桃体炎,2.鼻炎? </text>
+		</preliminaryDiagnosis>
+	</docBody>
+</ClinicalDocument>

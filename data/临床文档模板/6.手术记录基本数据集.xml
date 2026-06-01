@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ClinicalDocument>
+	<!-- 文档头信息 -->
+	<docHeader>
+		<!-- 源文档Id -->
+		<documentId/>
+		<!-- 模板版本号 -->
+		<version>V1.0</version>
+		<!-- 文档保管机构 -->
+		<hospital>
+			<text>XXX医院</text>
+		</hospital>
+		<!-- 文档类型 -->
+		<docType>SurgeryRecord</docType>
+	</docHeader>
+	<docBody>
+		<!-- 文档标题 -->
+		<title>手术记录</title>
+		<!--  术者签名 -->
+		<surgeonSign>
+			<text>张三扪</text>
+		</surgeonSign>
+		<!-- 患者信息 -->
+		<patient>
+			<!-- 病案号 -->
+			<medicalNo>MN4547657</medicalNo>
+			<!-- 登记号 -->
+			<registerNo>DJ4547657</registerNo>
+			<!-- 姓名 -->
+			<name>
+				<text>张金生</text>
+			</name>
+			<!-- 性别 -->
+			<gender>
+				<text>男</text>
+			</gender>
+			<!-- 年龄 -->
+			<age>
+				<text>15岁</text>
+			</age>
+		</patient>
+		<!-- 就诊信息 -->
+		<encounter>
+			<!-- 就诊号-->
+			<visitNumber>EN4547657</visitNumber>
+			<!-- 科室：手术时所在科室 -->
+			<department>
+				<text>内分泌科</text>
+			</department>
+			<!-- 病床 -->
+			<hospitalBed>
+				<text>001</text>
+			</hospitalBed>
+		</encounter>
+		<!-- 手术信息 -->
+		<surgery>
+			<!-- 手术医师 -->
+			<surgeon>
+				<text>张三扪</text>
+			</surgeon>
+			<!-- 手术助手 -->
+			<surgicalAssistant>
+				<text>苏晓丽</text>
+			</surgicalAssistant>
+			<!-- 手术名称 -->
+			<surgicalName>
+				<text>阑尾切除术</text>
+			</surgicalName>
+			<!-- 麻醉方法 -->
+			<anesthesiaMethod>
+				<text>全身麻醉</text>
+			</anesthesiaMethod>
+			<!-- 麻醉医生 -->
+			<anesthesiologist>
+				<text>苏墨儿</text>
+			</anesthesiologist>
+			<!-- 手术日期 -->
+			<surgeryDate>20250101</surgeryDate>
+		</surgery>
+		<!-- 术前诊断 -->
+		<preoperativeDiagnosis>
+			<text>头痛；发烧；咳嗽；</text>
+		</preoperativeDiagnosis>
+		<!-- 术中诊断 -->
+		<intraoperativeDiagnosis>
+			<text>慢性胆囊炎；轻度脂肪肝</text>
+		</intraoperativeDiagnosis>
+		<!-- 手术经过 -->
+		<operativeProcedure>
+			<text>无</text>
+		</operativeProcedure>
+		<!-- 术中出现情况及处理 -->
+		<intraoperativeFindingsAndManagement>
+			<text>术中出现情况及处理</text>
+		</intraoperativeFindingsAndManagement>
+		<!-- 备注 -->
+		<note>
+			<text>备注</text>
+		</note>
+	</docBody>
+</ClinicalDocument>

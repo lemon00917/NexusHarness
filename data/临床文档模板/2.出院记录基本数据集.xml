@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ClinicalDocument>
+	<!-- 文档头信息 -->
+	<docHeader>
+		<!-- 源文档Id -->
+		<documentId>2342345688456</documentId>
+		<!-- 模板版本号 -->
+		<version>V1.0</version>
+		<!-- 文档保管机构 -->
+		<hospital>
+			<text>XXX医院</text>
+		</hospital>
+		<!-- 文档类型 -->
+		<docType>DischargeRecord</docType>
+	</docHeader>
+	<docBody>
+		<!-- 文档标题 -->
+		<title>出院记录</title>
+		<!--  医师签名 -->
+		<physician>
+			<text>张三扪</text>
+		</physician>
+		<!-- 患者信息 -->
+		<patient>
+			<!-- 病案号 -->
+			<medicalNo>MN4547657</medicalNo>
+			<!-- 登记号 -->
+			<registerNo>DJ4547657</registerNo>
+			<!-- 姓名 -->
+			<name>
+				<text>张金生</text>
+			</name>
+			<!-- 性别 -->
+			<gender>
+				<text>男</text>
+			</gender>
+			<!-- 年龄 -->
+			<age>
+				<text>15岁</text>
+			</age>
+		</patient>
+		<!-- 就诊信息 -->
+		<encounter>
+			<!-- 就诊号-->
+			<visitNumber>EN4547657</visitNumber>
+			<!-- 入院日期时间 -->
+			<admissionDateTime>20190420T120000</admissionDateTime>
+			<!-- 出院日期时间 -->
+			<dischargeDateTime>20190420T120000</dischargeDateTime>
+			<!-- 出院科室 -->
+			<dischargeDepartment>
+				<text>内分泌科</text>
+			</dischargeDepartment>
+		</encounter>
+		<!-- 入院情况 -->
+		<admissionCondition>
+			<text>头痛；发烧；咳嗽；</text>
+		</admissionCondition>
+		<!-- 入院诊断 -->
+		<admissionDiagnosis>
+			<text>慢性胆囊炎；轻度脂肪肝</text>
+		</admissionDiagnosis>
+		<!-- 出院诊断 -->
+		<dischargeDiagnosis>
+			<text>无</text>
+		</dischargeDiagnosis>
+		<!-- 诊疗经过 -->
+		<treatmentProcess>
+			<text>诊疗经过</text>
+		</treatmentProcess>
+		<!-- 出院情况 -->
+		<dischargeCondition>
+			<text>出院情况</text>
+		</dischargeCondition>
+		<!-- 出院医嘱   -->
+		<dischargeOrder>
+			<text>出院医嘱</text>
+		</dischargeOrder>
+	</docBody>
+</ClinicalDocument>

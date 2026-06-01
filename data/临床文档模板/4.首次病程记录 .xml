@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ClinicalDocument>
+	<!-- 文档头信息 -->
+	<docHeader>
+		<!-- 源文档Id -->
+		<documentId/>
+		<!-- 模板版本号 -->
+		<version>V1.0</version>
+		<!-- 文档保管机构 -->
+		<hospital>
+			<text>XXX医院</text>
+		</hospital>
+		<!-- 文档类型 -->
+		<docType>FirstMedicalRecord</docType>
+	</docHeader>
+	<docBody>
+		<!-- 文档标题 -->
+		<title>首次病程记录</title>
+		<!-- 记录日期时间 -->
+		<recordDatetime>20251010T120000</recordDatetime>
+		<!--  医师签名 -->
+		<physician>
+			<text>张三扪</text>
+		</physician>
+		<!-- 上级医师签名 -->
+		<attendingPhysicianSign>
+			<text>张三扪</text>
+		</attendingPhysicianSign>
+		<!-- 患者信息 -->
+		<patient>
+			<!-- 病案号 -->
+			<medicalNo>MN4547657</medicalNo>
+			<!-- 登记号 -->
+			<registerNo>DJ4547657</registerNo>
+			<!-- 姓名 -->
+			<name>
+				<text>张金生</text>
+			</name>
+			<!-- 性别 -->
+			<gender>
+				<text>男</text>
+			</gender>
+			<!-- 年龄 -->
+			<age>
+				<text>15岁</text>
+			</age>
+		</patient>
+		<!-- 就诊信息 -->
+		<encounter>
+			<!-- 就诊号-->
+			<visitNumber>EN4547657</visitNumber>
+			<!-- 科室 -->
+			<department>
+				<text>内分泌科</text>
+			</department>
+		</encounter>
+		<!-- 病历特点 -->
+		<caseCharacteristics>
+			<text>病历特点</text>
+		</caseCharacteristics>
+		<!-- 诊断依据 -->
+		<diagnosticBasis>
+			<text>面黄，贫血</text>
+		</diagnosticBasis>
+		<!-- 初步诊断 -->
+		<preliminaryDiagnosis>
+			<text>慢性胆囊炎；轻度脂肪肝</text>
+		</preliminaryDiagnosis>
+		<!-- 鉴别诊断 -->
+		<differentialDiagnosis>
+			<text>鉴别诊断</text>
+		</differentialDiagnosis>
+		<!-- 诊疗计划 -->
+		<treatment>
+			<text>诊疗计划</text>
+		</treatment>
+	</docBody>
+</ClinicalDocument>
