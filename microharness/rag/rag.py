@@ -443,6 +443,10 @@ class SimpleRAG:
         # Get BM25 scores
         bm25_scores = self._compute_bm25_scores(query)
 
+        # Normalize BM25 scores to 0-1 range before combining with vector scores
+        all_bm25_scores = list(bm25_scores.values())
+        max_bm25 = max(all_bm25_scores) if all_bm25_scores else 1.0
+
         # Combine scores
         combined = {}
         chunk_ids = vector_results["ids"][0]
@@ -451,7 +455,7 @@ class SimpleRAG:
         for chunk_id, distance in zip(chunk_ids, distances):
             parent_id = self._chunk_to_parent.get(chunk_id, chunk_id)
             vector_score = self._normalize_vector_score(distance)
-            bm25_score = bm25_scores.get(parent_id, 0.0)
+            bm25_score = bm25_scores.get(parent_id, 0.0) / max_bm25
 
             combined[chunk_id] = (
                 vector_weight * vector_score +
