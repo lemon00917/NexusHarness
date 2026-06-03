@@ -26,10 +26,17 @@ from typing import Optional, Dict, Any
 # Default configuration file path
 CONFIG_FILENAME = "rag_config.json"
 
+# Valid query enhancement modes
+ENHANCE_QUERY_SIMPLE = "simple"
+ENHANCE_QUERY_LLM = "llm"
+VALID_ENHANCE_QUERY_MODES = {ENHANCE_QUERY_SIMPLE, ENHANCE_QUERY_LLM}
+
 # Valid chunking modes
 CHUNK_MODE_LENGTH = "length"
 CHUNK_MODE_CHAPTER = "chapter"
-VALID_CHUNK_MODES = {CHUNK_MODE_LENGTH, CHUNK_MODE_CHAPTER}
+CHUNK_MODE_LLM = "llm"
+CHUNK_MODE_FIELD_LLM = "field_llm"
+VALID_CHUNK_MODES = {CHUNK_MODE_LENGTH, CHUNK_MODE_CHAPTER, CHUNK_MODE_LLM, CHUNK_MODE_FIELD_LLM}
 
 # Valid search modes
 SEARCH_MODE_VECTOR = "vector"
@@ -72,6 +79,9 @@ class RAGConfig:
         bm25_weight: Weight for BM25 scores in hybrid mode (0.0-1.0)
     """
 
+    # Query enhancement settings
+    enhance_query_mode: str = ENHANCE_QUERY_SIMPLE  # "simple" = string join, "llm" = LLM expansion
+
     # Chunking settings
     chunk_mode: str = CHUNK_MODE_LENGTH
     chunk_size: int = 1500
@@ -95,6 +105,13 @@ class RAGConfig:
             ValueError: If any parameter is invalid
         """
         errors = []
+
+        # Validate enhance query mode
+        if self.enhance_query_mode not in VALID_ENHANCE_QUERY_MODES:
+            errors.append(
+                f"Invalid enhance_query_mode: '{self.enhance_query_mode}'. "
+                f"Must be one of: {VALID_ENHANCE_QUERY_MODES}"
+            )
 
         # Validate chunk mode
         if self.chunk_mode not in VALID_CHUNK_MODES:
@@ -203,6 +220,7 @@ class RAGConfig:
         """
         lines = [
             "RAG Configuration:",
+            f"  Query Enhancement: {self.enhance_query_mode} mode",
             f"  Chunking: {self.chunk_mode} mode, "
             f"{self.chunk_size} chars, {self.chunk_overlap} overlap",
             f"  Search: {self.search_mode} mode",
@@ -225,13 +243,13 @@ def get_config_path(config_dir: Optional[Path] = None) -> Path:
 
     Args:
         config_dir: Optional directory containing the config file.
-                   Defaults to current working directory.
+                   Defaults to configs/ in project root.
 
     Returns:
         Path to config file
     """
     if config_dir is None:
-        config_dir = Path.cwd()
+        config_dir = Path(__file__).parent.parent.parent / "configs"
     return config_dir / CONFIG_FILENAME
 
 

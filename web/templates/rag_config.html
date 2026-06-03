@@ -190,6 +190,8 @@
                 <div class="radio-group">
                     <label><input type="radio" name="chunk_mode" value="length" onchange="toggleChunkMode('length')"> 按长度</label>
                     <label><input type="radio" name="chunk_mode" value="chapter" onchange="toggleChunkMode('chapter')"> 按章节</label>
+                    <label><input type="radio" name="chunk_mode" value="llm" onchange="toggleChunkMode('llm')"> LLM 智能分块</label>
+                    <label><input type="radio" name="chunk_mode" value="field_llm" onchange="toggleChunkMode('field_llm')"> 字段智能分块</label>
                 </div>
             </div>
             <div class="config-row" id="chunk_size_row">
@@ -221,6 +223,32 @@
                 </div>
             </div>
             <div class="config-row" id="bm25_weights_row" style="display:none;">
+                <label>BM25权重</label>
+                <div class="slider-row">
+                    <input type="range" id="bm25_weight" min="0" max="1" step="0.1" value="0.3">
+                    <span id="bm25_weight_val">0.3</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="config-section">
+            <h3>🔮 查询增强</h3>
+            <div class="config-row">
+                <label>增强模式</label>
+                <div class="radio-group">
+                    <label><input type="radio" name="enhance_query_mode" value="simple"> 简单拼接</label>
+                    <label><input type="radio" name="enhance_query_mode" value="llm"> LLM 扩展</label>
+                </div>
+            </div>
+        </div>
+
+        <div style="display:flex;gap:10px;">
+            <button onclick="saveConfig()" class="btn btn-primary">💾 保存配置</button>
+            <button onclick="resetConfig()" class="btn btn-secondary">🔄 重置默认</button>
+        </div>
+
+        <div class="config-section preview-section">
+            <h3>🔬 分块预览</h3>="display:none;">
                 <label>BM25权重</label>
                 <div class="slider-row">
                     <input type="range" id="bm25_weight" min="0" max="1" step="0.1" value="0.3">
@@ -291,6 +319,10 @@
 
             // Show/hide weight inputs
             toggleWeightInputs(config.search_mode);
+
+            // Query enhancement mode
+            const enhanceMode = config.enhance_query_mode || 'simple';
+            document.querySelector(`input[name="enhance_query_mode"][value="${enhanceMode}"]`).checked = true;
         }
 
         function toggleWeightInputs(mode) {
@@ -308,7 +340,7 @@
         function toggleChunkMode(mode) {
             const sizeRow = document.getElementById('chunk_size_row');
             const overlapRow = document.getElementById('chunk_overlap_row');
-            if (mode === 'chapter') {
+            if (mode === 'chapter' || mode === 'llm' || mode === 'field_llm') {
                 sizeRow.style.display = 'none';
                 overlapRow.style.display = 'none';
             } else {
@@ -333,7 +365,8 @@
                 chunk_overlap: chunk_overlap,
                 search_mode: document.querySelector('input[name="search_mode"]:checked').value,
                 vector_weight: parseFloat(document.getElementById('vector_weight').value),
-                bm25_weight: parseFloat(document.getElementById('bm25_weight').value)
+                bm25_weight: parseFloat(document.getElementById('bm25_weight').value),
+                enhance_query_mode: document.querySelector('input[name="enhance_query_mode"]:checked').value
             };
 
             try {
@@ -360,7 +393,8 @@
                 chunk_overlap: 200,
                 search_mode: 'vector',
                 vector_weight: 0.7,
-                bm25_weight: 0.3
+                bm25_weight: 0.3,
+                enhance_query_mode: 'simple'
             });
         }
 

@@ -56,7 +56,13 @@
                     </div>
                 </div>
                 <div class="footer-info">
-                    <span class="model-badge" id="modelBadge">MiniMax-M2</span>
+                    <div class="model-selector" style="position:relative;">
+                        <span class="model-badge" id="modelBadge" onclick="toggleModelDropdown()" style="cursor:pointer;">MiniMax-M2 ▼</span>
+                        <div id="modelDropdown" style="display:none;position:absolute;bottom:30px;left:0;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:6px;padding:8px;min-width:180px;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.2);">
+                            <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;">选择模型:</div>
+                            <div id="modelList"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </aside>
@@ -296,6 +302,118 @@
                 arrow.textContent = '▼';
             }
         }
+
+        // Model selector functions
+        let availableModels = [];
+
+        async function loadModelList() {
+            try {
+                // Get Ollama models
+                const ollamaRes = await fetch('/api/ollama/models');
+                let ollamaModels = [];
+                if (ollamaRes.ok) {
+                    const data = await ollamaRes.json();
+                    ollamaModels = (data.models || []).map(m => ({provider: 'ollama', name: m}));
+                }
+
+                // Get current model status
+                const statusRes = await fetch('/api/model');
+                let currentModel = {provider: 'minimax', name: 'MiniMax-M2'};
+                if (statusRes.ok) {
+                    currentModel = await statusRes.json();
+                }
+
+                // Build model list
+                availableModels = [
+                    {provider: 'ollama', name: 'qwen2:7b-instruct'},
+                    {provider: 'ollama', name: 'llama3:8b'},
+                    {provider: 'ollama', name: 'qwen2.5:7b'},
+                    {provider: 'ollama', name: 'qwen2:1.5b'},
+                    {provider: 'minimax', name: 'MiniMax-M2'},
+                    {provider: 'anthropic', name: 'claude-sonnet-4'},
+                ];
+
+                renderModelList(currentModel);
+            } catch (e) {
+                console.error('Failed to load model list:', e);
+            }
+        }
+
+        function renderModelList(current) {
+            const list = document.getElementById('modelList');
+            if (!list) return;
+
+            list.innerHTML = availableModels.map(m => `
+                <div class="model-option ${m.provider === current.provider && m.name === current.main_model ? 'active' : ''}"
+                     onclick="switchModel('${m.provider}', '${escapeHtml(m.name)}')"
+                     style="padding:6px 8px;cursor:pointer;border-radius:4px;margin-bottom:4px;font-size:12px;${m.provider === current.provider && m.name === current.main_model ? 'background:var(--accent-blue);color:white;' : ''}">
+                    ${escapeHtml(m.provider)}/${escapeHtml(m.name)}
+                </div>
+            `).join('');
+
+            // Update badge
+            const badge = document.getElementById('modelBadge');
+            if (badge) {
+                badge.textContent = `${current.provider}/${current.main_model} ▼`;
+            }
+        }
+
+        function toggleModelDropdown() {
+            const dropdown = document.getElementById('modelDropdown');
+            if (!dropdown) return;
+
+            if (dropdown.style.display === 'none' || dropdown.style.display === '') {
+                dropdown.style.display = 'block';
+                loadModelList();
+            } else {
+                dropdown.style.display = 'none';
+            }
+        }
+
+        async function switchModel(provider, model) {
+            try {
+                const res = await fetch('/api/model/switch', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({provider, model})
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    showToast(`已切换到 ${provider}/${model}`, 'success');
+
+                    // Update badge
+                    const badge = document.getElementById('modelBadge');
+                    if (badge) {
+                        badge.textContent = `${provider}/${model} ▼`;
+                    }
+
+                    // Refresh model list to show active state
+                    loadModelList();
+
+                    // Hide dropdown
+                    const dropdown = document.getElementById('modelDropdown');
+                    if (dropdown) dropdown.style.display = 'none';
+                } else {
+                    const err = await res.json();
+                    showToast('切换失败: ' + (err.error || '未知错误'), 'error');
+                }
+            } catch (e) {
+                showToast('切换失败: ' + e.message, 'error');
+            }
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(e) {
+            const dropdown = document.getElementById('modelDropdown');
+            const badge = document.getElementById('modelBadge');
+            if (dropdown && badge && !dropdown.contains(e.target) && !badge.contains(e.target)) {
+                dropdown.style.display = 'none';
+            }
+        });
+
+        // Load model list on page load
+        loadModelList();
     </script>
     <script src="/static/js/app.js?v=05202102"></script>
 </body>

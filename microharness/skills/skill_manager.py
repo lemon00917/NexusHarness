@@ -431,6 +431,28 @@ def _prepare_command(command: str, params: Dict[str, str], skill_dir: Path) -> s
     if len(cmd) > 10000:
         raise ValueError(f"Command too long: {len(cmd)} characters")
 
+    # Security check - block dangerous patterns for shell injection
+    dangerous_patterns = [
+        # Shell operators
+        ';', '&&', '||', '|',
+        # Command substitution
+        '`', '$(', '${',
+        # I/O redirection (file overwrite/inject)
+        '>', '>>', '<',
+        # Newlines (command chaining)
+        '\n', '\r',
+        # Environment variable expansion (can hide commands)
+        '$ ', '${',
+    ]
+
+    for pattern in dangerous_patterns:
+        if pattern in cmd:
+            raise ValueError(f"Command contains dangerous pattern: {pattern}")
+
+    # Also check for unescaped environment variables like $VAR or ${VAR}
+    if re.search(r'\$[a-zA-Z_][a-zA-Z0-9_]*', cmd) or re.search(r'\$\{[^}]+\}', cmd):
+        raise ValueError("Command contains environment variable expansion")
+
     return cmd
 
 

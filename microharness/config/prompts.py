@@ -48,11 +48,12 @@ def build_tool_block(tools: list = None) -> str:
         格式化的工具列表字符串
     """
     from microharness.agent.tools import TOOLS
+    from microharness.agent.disabled_skills import get_disabled_skills
 
     if tools is None:
         try:
-            from web.app import disabled_skills
-            tools = [t for t in TOOLS if t.name not in disabled_skills]
+            disabled = get_disabled_skills()
+            tools = [t for t in TOOLS if t.name not in disabled]
         except Exception:
             tools = TOOLS
 
@@ -135,6 +136,8 @@ def _get_rag_results(task: str, top_k: int = 2, timeout: float = 0.5) -> str:
             return ""  # 超时则返回空
         except Exception:
             signal.alarm(0)
+            logger = __import__('logging').getLogger(__name__)
+            logger.warning(f"RAG search failed (SIGALRM path): {e}")
             return ""
     except AttributeError:
         # Windows 不支持 signal.SIGALRM，回退到不带超时的版本
@@ -149,7 +152,9 @@ def _get_rag_results(task: str, top_k: int = 2, timeout: float = 0.5) -> str:
             query = task[:100] if len(task) > 100 else task
             results = rag.search(query, top_k=top_k, vector_weight=vector_weight, bm25_weight=bm25_weight)
             return _format_rag_results(results) if results else ""
-        except Exception:
+        except Exception as e:
+            logger = __import__('logging').getLogger(__name__)
+            logger.warning(f"RAG search failed (Windows fallback): {e}")
             return ""
 
 
@@ -199,6 +204,81 @@ def get_system_prompt(task: str = None, tools: list = None) -> str:
     if intent_name and intent_config:
         intent_template = intent_config.get("template", "")
         if intent_template:
+            # 检查是否为病历筛选意图
+            filter_config = intent_config.get("filter", {})
+            if filter_config.get("enabled"):
+                # 病历筛选意图：直接调用筛选API
+                from microharness.rag.record_filter import RecordFilter
+                from microharness.ollama import OllamaClient
+
+                model = filter_config.get("model", "qwen2:7b-instruct")
+                top_k = filter_config.get("top_k", 20)
+                only_matched = filter_config.get("only_matched", False)
+
+                try:
+                    client = OllamaClient(model=model)
+                    if client.is_available():
+                        rf = RecordFilter(ollama_client=client)
+                        results = rf.filter(task, only_matched=only_matched)
+                        matched_count = len(results)
+
+                        # 构建详细的筛选结果摘要
+                        filter_summary = f"【病历筛选结果】\n"
+                        filter_summary += f"筛选条件: {task}\n"
+                        filter_summary += f"共检索到 {matched_count} 条相关病历\n"
+                        filter_summary += "=" * 50 + "\n\n"
+
+                        for i, r in enumerate(results[:5], 1):  # 最多显示5条
+                            # 使用content的前300字符
+                            content = r.content[:300] if len(r.content) > 300 else r.content
+                            content = content.replace('\n', ' ').strip()
+
+                            # 获取LLM判断理由
+                            if r.reason and 'Error' not in str(r.reason):
+                                reason_text = f"判断理由: {r.reason[:100]}"
+                            else:
+                                reason_text = f"LLM判断: {'符合' if r.matched else '不符合'}"
+
+                            filter_summary += f"【病历 {i}】{r.filename}\n"
+                            filter_summary += f"   相似度得分: {r.score:.2%}\n"
+                            filter_summary += f"   {reason_text}\n"
+                            filter_summary += f"   内容摘要: {content}...\n\n"
+
+                        if matched_count > 5:
+                            filter_summary += f"... 还有 {matched_count - 5} 条记录未显示\n"
+
+                        filter_summary += "=" * 50 + "\n"
+                        filter_summary += "【重要】请基于上述病历内容如实回答，引用具体病历名称和内容。如果病历中没有明确信息，请说明\"病历中未提及\"。\n"
+
+                        # 填充场景模板
+                        variables = {
+                            "query": task or "",
+                            "medical_knowledge": filter_summary,
+                        }
+
+                        base = SYSTEM_PROMPT_TEMPLATE.format(
+                            tool_block=tool_block,
+                            rule_block=rule_block
+                        )
+                        scene_prompt = format_template(intent_template, variables)
+                        base = base + "\n\n" + scene_prompt
+
+                        # 记忆注入
+                        memory_config = config.get("memory", {})
+                        if memory_config.get("enabled", True):
+                            memories = load_memories()
+                            max_records = memory_config.get("max_records", 5)
+                            memory_block = format_memories_for_prompt(memories[:max_records])
+                            if memory_block:
+                                base += f"\n\n{memory_block}"
+
+                        return base
+                except Exception as e:
+                    # 筛选失败，回退到普通处理但记录错误
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"病历筛选失败 (将回退到普通处理): {e}", exc_info=True)
+
             # 获取意图对应的 RAG 结果
             rag_block = ""
             if intent_config.get("rag", {}).get("enabled"):

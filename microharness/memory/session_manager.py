@@ -27,8 +27,11 @@ from typing import Optional
 
 from typing_extensions import TypedDict, NotRequired, Literal
 
-# Setup logging
+# Setup logging (standard logging for this module)
 logger = logging.getLogger(__name__)
+
+# Import unified logger for structured logging
+from microharness.observability.logger import session_logger, log_session_event
 
 # ──────────────────────────────────────────────────
 # Types
@@ -58,7 +61,19 @@ class SessionState(TypedDict):
 
 def _get_conversations_dir() -> Path:
     """Return the conversations directory path."""
-    return Path(__file__).parent.parent / "conversations"
+    return Path(__file__).parent.parent.parent / "sessions" / "conversations"
+
+
+def _safe_session_id(session_id: str) -> str:
+    """
+    Validate and sanitize session_id to prevent path traversal.
+    Only allows alphanumeric, dash, underscore.
+    """
+    import re
+    safe = re.sub(r'[^a-zA-Z0-9_-]', '', session_id)
+    if safe != session_id:
+        logger.warning(f"Session id sanitized: {session_id} -> {safe}")
+    return safe or f"invalid_{id(session_id)}"
 
 
 # ──────────────────────────────────────────────────
@@ -94,7 +109,8 @@ class SessionManager:
 
     def create_session(self, task: str) -> SessionState:
         """Create a new session with initial state."""
-        session_id = f"session_{int(time.time() * 1000)}_{threading.get_ident()}"
+        import uuid
+        session_id = f"session_{int(time.time() * 1000)}_{threading.get_ident()}_{uuid.uuid4().hex[:8]}"
         now = datetime.now().isoformat()
 
         state: SessionState = {
@@ -114,6 +130,10 @@ class SessionManager:
         with self._lock:
             self._sessions[session_id] = state
         self._save_session_to_disk(state)
+
+        log_session_event(session_id, "created", task_preview=task[:50] if task else "")
+        logger.info(f"Created session: {session_id}")
+
         return state
 
     def get_session(self, session_id: str) -> Optional[SessionState]:
@@ -168,14 +188,16 @@ class SessionManager:
             if session_id in self._sessions:
                 del self._sessions[session_id]
 
-        conv_file = _get_conversations_dir() / f"{session_id}.json"
+        conv_file = _get_conversations_dir() / f"{_safe_session_id(session_id)}.json"
         if conv_file.exists():
             try:
                 conv_file.unlink()
+                log_session_event(session_id, "deleted")
+                logger.info(f"Deleted session: {session_id}")
+                return True
             except OSError as e:
                 logger.error(f"Failed to delete {session_id}.json: {e}")
                 return False
-            return True
         return False
 
     def list_sessions(self) -> list[SessionState]:
@@ -211,6 +233,8 @@ class SessionManager:
             session_to_save = self._sessions[session_id].copy()
 
         self._save_session_to_disk(session_to_save)
+        log_session_event(session_id, "interrupted")
+        logger.info(f"Session interrupted: {session_id}")
         return True
 
     def clear_interrupted(self, session_id: str, restore_status: str = "paused") -> bool:
@@ -242,7 +266,7 @@ class SessionManager:
 
     def _load_from_disk(self, session_id: str) -> Optional[SessionState]:
         """Load a session state from disk."""
-        conv_file = _get_conversations_dir() / f'{session_id}.json'
+        conv_file = _get_conversations_dir() / f'{_safe_session_id(session_id)}.json'
         if not conv_file.exists():
             return None
 

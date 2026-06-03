@@ -254,6 +254,7 @@ class TokenTracker:
     - Aggregated usage statistics
     - Usage history export
     - Provider/model breakdown
+    - Bounded memory: auto-trim oldest records when MAX_CALLS exceeded
 
     Usage:
         tracker = TokenTracker()
@@ -268,15 +269,21 @@ class TokenTracker:
         breakdown = tracker.get_provider_breakdown()
     """
 
-    def __init__(self, pricing: Optional[PricingRegistry] = None):
+    # Maximum calls to keep in memory (prevents unbounded growth)
+    MAX_CALLS = 10000
+
+    def __init__(self, pricing: Optional[PricingRegistry] = None, max_calls: Optional[int] = None):
         """
         Initialize token tracker.
 
         Args:
             pricing: Pricing registry (uses default if None)
+            max_calls: Optional override for MAX_CALLS limit (for testing)
         """
         self.calls: List[CallRecord] = []
         self._pricing = pricing or PricingRegistry()
+        if max_calls is not None:
+            self.MAX_CALLS = max_calls
 
     def record(
         self,
@@ -326,6 +333,12 @@ class TokenTracker:
         )
 
         self.calls.append(record)
+
+        # Trim oldest records if limit exceeded (prevents unbounded memory growth)
+        if len(self.calls) > self.MAX_CALLS:
+            trim_count = len(self.calls) - self.MAX_CALLS
+            self.calls = self.calls[trim_count:]
+
         return record
 
     def _calculate_cost(
@@ -503,6 +516,10 @@ class TokenTracker:
         self.calls.extend(other.calls)
         # Sort by timestamp, then by provider/model for stable order
         self.calls.sort(key=lambda r: (r.timestamp, r.provider, r.model))
+        # Trim to MAX_CALLS after merge
+        if len(self.calls) > self.MAX_CALLS:
+            trim_count = len(self.calls) - self.MAX_CALLS
+            self.calls = self.calls[trim_count:]
 
     @property
     def call_count(self) -> int:

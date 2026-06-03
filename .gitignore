@@ -24,26 +24,26 @@ ENV/
 *.swo
 
 # Logs
+logs/*.log
 *.log
-web_server.log
-audit.log
 
-# Runtime data
-memory.json
-config.json
+# Configs (runtime, not committed)
+configs/config.json
+configs/rag_config.json
 
 # Session data
-conversations/*.json
+sessions/conversations/*.json
+sessions/memory.json
 
 # Replay logs
-replays/*.jsonl
+sessions/replays/*.jsonl
 
 # Benchmark results
-benchmark_results/*.json
+results/benchmark/*.json
 
 # RAG index (runtime data)
-rag_index/chroma_db/
-rag_index/index.json
+cache/rag_index/
+cache/rag_index_test/
 
 # Temporary
 *.tmp

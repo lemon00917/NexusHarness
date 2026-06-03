@@ -102,6 +102,20 @@
             font-size: 12px;
             transition: all 0.2s;
         }
+        .doc-item .chunks-btn {
+            background: rgba(74, 222, 128, 0.15);
+            color: var(--accent-green);
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+            margin-right: 8px;
+        }
+        .doc-item .chunks-btn:hover {
+            background: rgba(74, 222, 128, 0.25);
+        }
         .doc-item .delete-btn {
             background: rgba(239, 95, 95, 0.15);
             color: var(--accent-red);
@@ -193,6 +207,138 @@
             from { transform: translateX(100%); opacity: 0; }
             to { transform: translateX(0); opacity: 1; }
         }
+        .filter-section {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .filter-section h3 {
+            font-size: 14px;
+            margin: 0 0 15px 0;
+        }
+        .filter-form {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+        .filter-form select, .filter-form input {
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 13px;
+        }
+        .filter-form select {
+            min-width: 150px;
+        }
+        .filter-form input[type="text"] {
+            flex: 1;
+            min-width: 200px;
+        }
+        .filter-form button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .filter-form .search-btn {
+            background: var(--accent-blue);
+            color: white;
+        }
+        .filter-form .clear-btn {
+            background: var(--bg-tertiary);
+            color: var(--text);
+        }
+        .filter-results {
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-top: 15px;
+        }
+        .filter-result-item {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-primary);
+        }
+        .filter-result-item:last-child {
+            border-bottom: none;
+        }
+        .filter-result-item.matched {
+            border-left: 3px solid var(--accent-green);
+        }
+        .filter-result-item.unmatched {
+            border-left: 3px solid var(--accent-red);
+            opacity: 0.7;
+        }
+        .filter-result-item .filename {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-bottom: 6px;
+        }
+        .filter-result-item .match-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-left: 8px;
+        }
+        .filter-result-item .match-badge.yes {
+            background: rgba(72, 199, 116, 0.2);
+            color: var(--accent-green);
+        }
+        .filter-result-item .match-badge.no {
+            background: rgba(239, 95, 95, 0.2);
+            color: var(--accent-red);
+        }
+        .filter-result-item .content {
+            font-size: 13px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            max-height: 150px;
+            overflow-y: auto;
+            background: var(--bg-tertiary);
+            padding: 10px;
+            border-radius: 6px;
+            margin-top: 8px;
+        }
+        .filter-result-item .matched-chunk {
+            font-size: 13px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            background: rgba(74, 222, 128, 0.1);
+            border: 1px solid rgba(74, 222, 128, 0.3);
+            padding: 10px;
+            border-radius: 6px;
+            margin-top: 8px;
+        }
+        .filter-result-item .matched-chunk code {
+            color: var(--accent-green);
+        }
+        .filter-result-item .llm-response {
+            font-size: 12px;
+            color: var(--accent-blue);
+            margin-top: 8px;
+            padding: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+        .model-status {
+            font-size: 12px;
+            padding: 8px 12px;
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            margin-bottom: 10px;
+        }
+    #chunksModal {
+            font-family: inherit;
+        }
+        #chunksModal h3 {
+            color: var(--text-primary);
+        }
     </style>
 </head>
 <body>
@@ -200,6 +346,8 @@
         <div class="rag-header">
             <h1>📚 RAG 知识库</h1>
             <button onclick="loadDocuments()" style="padding:8px 16px;border:none;border-radius:6px;background:var(--bg-tertiary);cursor:pointer;">🔄 刷新</button>
+            <button onclick="rebuildIndex()" style="padding:8px 16px;border:none;border-radius:6px;background:rgba(74, 222, 128, 0.15);color:var(--accent-green);cursor:pointer;">🔧 重建索引</button>
+            <button onclick="clearIndex()" style="padding:8px 16px;border:none;border-radius:6px;background:rgba(239, 95, 95, 0.15);color:var(--accent-red);cursor:pointer;">🗑 清空索引</button>
         </div>
 
         <div class="upload-section">
@@ -209,11 +357,32 @@
             </div>
             <div class="upload-form">
                 <input type="file" id="fileInput" accept=".txt,.md,.json,.py,.js,.html,.css">
+                <input type="text" id="visitIdInput" placeholder="就诊号（必填）" required style="padding:8px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text);">
                 <input type="text" id="descInput" placeholder="文档描述（可选）">
-                <button onclick="previewFileChunks()" style="padding:10px 16px;border:none;border-radius:6px;background:var(--bg-tertiary);color:var(--text);cursor:pointer;">🔍 预览分块</button>
+                <select id="previewMode" style="padding:6px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text);">
+                    <option value="llm">标题标注模式</option>
+                    <option value="field_llm">字段提取模式</option>
+                </select>
+                <select id="previewModel" style="padding:6px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text);">
+                    <option value="qwen2.5:7b">qwen2.5:7b</option>
+                    <option value="qwen2:7b-instruct">qwen2:7b-instruct</option>
+                    <option value="medaibase/medgemma1.5:4b">medaibase/medgemma1.5:4b</option>
+                    <option value="llama3:8b">llama3:8b</option>
+                </select>
+                <button onclick="previewHtmlConversion()" style="padding:10px 16px;border:none;border-radius:6px;background:rgba(74, 222, 128, 0.15);color:var(--accent-green);cursor:pointer;">🔍 预览转换</button>
+                <button onclick="previewFileChunks()" style="padding:10px 16px;border:none;border-radius:6px;background:var(--bg-tertiary);color:var(--text);cursor:pointer;">📋 预览分块</button>
                 <button onclick="uploadDocument()" style="padding:10px 20px;border:none;border-radius:6px;background:var(--accent-blue);color:white;cursor:pointer;">上传</button>
             </div>
             <p style="font-size:11px;color:var(--text-dim);margin-top:10px;">支持格式: txt, md, json, py, js, html, css</p>
+
+            <div id="llmPreviewSection" style="display:none;margin-top:15px;padding:12px;background:var(--bg-tertiary);border-radius:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                    <strong>📄 HTML 转 Markdown 结果</strong>
+                    <button onclick="document.getElementById('llmPreviewSection').style.display='none'" style="background:none;border:none;color:var(--text-dim);cursor:pointer;">✕</button>
+                </div>
+                <div id="llmStructuredContent" style="max-height:400px;overflow-y:auto;white-space:pre-wrap;font-size:13px;padding:10px;background:var(--bg-primary);border-radius:6px;margin-bottom:10px;line-height:1.6;"></div>
+                <div id="llmChunkList" style="font-size:12px;color:var(--text-dim);"></div>
+            </div>
 
             <div id="previewSection" style="display:none;margin-top:15px;padding:12px;background:var(--bg-tertiary);border-radius:8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
@@ -236,6 +405,66 @@
             </div>
             <div class="search-results" id="searchResults" style="display:none;"></div>
         </div>
+
+        <div class="filter-section">
+            <h3>🏥 病历智能筛选</h3>
+            <div class="model-status" id="modelStatus">检查 Ollama 模型...</div>
+
+            <!-- Step 1: 问题 -->
+            <div style="margin-bottom:8px;">
+                <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">❓ 问题</div>
+                <div style="display:flex;gap:8px;">
+                    <input type="text" id="filterCondition" placeholder="输入筛选条件，如：血糖大于7.0的糖尿病患者" style="flex:1;padding:8px 12px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:13px;">
+                    <input type="text" id="filterVisitId" placeholder="就诊号" style="width:100px;padding:8px 12px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:13px;">
+                </div>
+            </div>
+
+            <!-- Step 2: 问题增强 -->
+            <div style="margin-bottom:8px;">
+                <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">🔮 问题增强</div>
+                <div style="display:flex;gap:8px;">
+                    <select id="enhanceMode" style="padding:8px 12px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:13px;min-width:140px;">
+                        <option value="simple">简单拼接</option>
+                        <option value="llm">LLM 扩展</option>
+                    </select>
+                    <select id="enhanceModel" style="padding:8px 12px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:13px;flex:1;">
+                        <!-- filled dynamically -->
+                    </select>
+                </div>
+            </div>
+
+            <!-- Step 3: RAG检索 -->
+            <div style="margin-bottom:8px;">
+                <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">🔍 RAG 检索</div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <span style="font-size:12px;color:var(--text-dim);">top_k</span>
+                    <input type="number" id="filterTopK" value="20" min="1" max="100" style="width:60px;padding:8px 12px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:13px;">
+                    <span style="font-size:12px;color:var(--text-dim);">阈值</span>
+                    <input type="number" id="filterThreshold" value="0.0" min="0" max="1" step="0.05" style="width:60px;padding:8px 12px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:13px;">
+                </div>
+            </div>
+
+            <!-- Step 4: LLM 判断 + 操作 -->
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+                <div style="flex:1;min-width:200px;">
+                    <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">🤖 LLM 判断</div>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <select id="modelSelect" style="padding:8px 12px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:13px;flex:1;">
+                            <option value="reader-lm:1.5b-q4_0">reader-lm:1.5b-q4_0</option>
+                            <option value="qwen2.5:7b">qwen2.5:7b</option>
+                        </select>
+                        <label style="font-size:12px;color:var(--text-dim);cursor:pointer;white-space:nowrap;"><input type="checkbox" id="filterShowScore" style="margin-right:4px;">显示分数</label>
+                    </div>
+                </div>
+                <div style="display:flex;gap:8px;">
+                    <button class="search-btn" onclick="filterRecords()">🔍 分析</button>
+                    <button class="search-btn" onclick="filterRecordsBatch()" style="background:#8b5cf6;">📋 批量判断</button>
+                    <button class="clear-btn" onclick="clearFilterResults()">清空</button>
+                </div>
+            </div>
+
+            <div class="filter-results" id="filterResults" style="display:none;"></div>
+        </div>
     </div>
 
     <div id="toast" class="toast" style="display:none;"></div>
@@ -253,8 +482,14 @@
             try {
                 const res = await fetch('/api/rag/config');
                 const config = await res.json();
-                const modeText = config.chunk_mode === 'chapter' ? '按章节 (h2/h3)' : '按长度';
-                const sizeInfo = config.chunk_mode === 'chapter'
+                const modeMap = {
+                    'length': '按长度',
+                    'chapter': '按章节 (h2/h3)',
+                    'llm': 'LLM 智能分块',
+                    'field_llm': '字段智能分块'
+                };
+                const modeText = modeMap[config.chunk_mode] || config.chunk_mode;
+                const sizeInfo = config.chunk_mode === 'chapter' || config.chunk_mode === 'llm' || config.chunk_mode === 'field_llm'
                     ? ''
                     : ` | chunk_size: <strong>${config.chunk_size}</strong> | overlap: <strong>${config.chunk_overlap}</strong>`;
                 document.getElementById('configLoading').innerHTML = `
@@ -276,6 +511,58 @@
             }
         }
 
+        async function rebuildIndex() {
+            if (!confirm('确定重建索引？将使用当前分块配置重新索引所有文档。')) return;
+
+            const btn = document.querySelector('button[onclick="rebuildIndex()"]');
+            btn.disabled = true;
+            btn.textContent = '⏳ 重建中...';
+
+            try {
+                const res = await fetch('/api/rag/rebuild', { method: 'POST' });
+                const data = await res.json();
+
+                if (data.status === 'done') {
+                    showToast(`重建完成：${data.success_count}/${data.total} 个文档`, 'success');
+                    loadDocuments();
+                } else if (data.status === 'no_documents') {
+                    showToast('没有文档需要重建', 'info');
+                } else {
+                    showToast('重建失败: ' + JSON.stringify(data), 'error');
+                }
+            } catch (e) {
+                showToast('重建失败: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔧 重建索引';
+            }
+        }
+
+        async function clearIndex() {
+            if (!confirm('⚠️ 确定清空所有索引？此操作不可恢复，文档需要重新上传。')) return;
+
+            const btn = document.querySelector('button[onclick="clearIndex()"]');
+            btn.disabled = true;
+            btn.textContent = '⏳ 清空中...';
+
+            try {
+                const res = await fetch('/api/rag/clear', { method: 'POST' });
+                const data = await res.json();
+
+                if (data.status === 'cleared') {
+                    showToast('已清空 ' + data.documents_removed + ' 个文档', 'success');
+                    loadDocuments();
+                } else {
+                    showToast('清空失败', 'error');
+                }
+            } catch (e) {
+                showToast('清空失败: ' + e.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🗑 清空索引';
+            }
+        }
+
         function renderDocuments(docs) {
             const list = document.getElementById('docList');
             const empty = document.getElementById('emptyState');
@@ -293,10 +580,77 @@
                         <div class="doc-meta">ID: ${doc.doc_id} | ${doc.created_at ? doc.created_at.substring(0, 10) : 'N/A'}</div>
                     </div>
                     <div class="doc-actions">
-                        <button class="delete-btn" onclick="deleteDoc('${doc.doc_id}')">删除</button>
+                        <button class="chunks-btn" data-doc-id="${escapeHtml(doc.doc_id)}" onclick="viewDocChunks(this.dataset.docId)">📦 查看块</button>
+                        <button class="delete-btn" data-doc-id="${escapeHtml(doc.doc_id)}" onclick="deleteDoc(this.dataset.docId)">删除</button>
                     </div>
                 </div>
             `).join('');
+        }
+
+        async function previewHtmlConversion() {
+            const fileInput = document.getElementById('fileInput');
+            if (!fileInput.files.length) {
+                showToast('请先选择文件', 'error');
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const previewMode = document.getElementById('previewMode').value;
+            const modelSelect = document.getElementById('previewModel')?.value || '';
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('mode', previewMode);
+            if (modelSelect) formData.append('model', modelSelect);
+
+            const section = document.getElementById('llmPreviewSection');
+            const contentDiv = document.getElementById('llmStructuredContent');
+            const chunkList = document.getElementById('llmChunkList');
+
+            section.style.display = 'block';
+            contentDiv.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim);">⏳ 正在转换，请稍候...</div>';
+            chunkList.textContent = '';
+
+            try {
+                const res = await fetch('/api/rag/llm_preview', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    const md = data.structured_content || '（无结果）';
+                    const modeLabel = data.mode === 'field_llm' ? '字段提取' : '标题标注';
+
+                    // Highlight based on mode
+                    let highlighted = md;
+                    if (data.mode === 'field_llm') {
+                        // Field mode: highlight ## section headers
+                        highlighted = highlighted.replace(/(## [^\n]+)/g, '<span style="color:var(--accent-blue);font-weight:bold;">$1</span>');
+                        highlighted = highlighted.replace(/(- [^\n]+)/g, '<span style="color:var(--text-secondary);">$1</span>');
+                    } else {
+                        // Heading mode: highlight ## and ###
+                        highlighted = highlighted.replace(/## ([^\n]+)/g, '<span style="color:var(--accent-blue);font-weight:bold;">## $1</span>');
+                        highlighted = highlighted.replace(/### ([^\n]+)/g, '<span style="color:var(--accent-green);font-weight:bold;">### $1</span>');
+                    }
+                    highlighted = highlighted.replace(/\n/g, '<br>');
+                    contentDiv.innerHTML = `<div style="margin-bottom:8px;font-size:12px;color:var(--text-dim);">模式: ${modeLabel} | 模型: ${data.model || 'default'}</div>${highlighted}`;
+
+                    if (data.chunks && data.chunks.length > 0) {
+                        const chunksHtml = data.chunks.map(c =>
+                            `<div style="margin-top:8px;padding:8px;background:var(--bg-primary);border-radius:4px;border-left:3px solid var(--accent-blue);">
+                                <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">【${c.index + 1}/${data.chunks.length}】${c.chars} 字符</div>
+                                <div style="font-size:12px;">${escapeHtml(c.content.substring(0, 300))}${c.content.length > 300 ? '...' : ''}</div>
+                            </div>`
+                        ).join('');
+                        chunkList.innerHTML = `<div style="margin-top:10px;font-size:12px;color:var(--text-dim);">分块结果: ${data.chunks.length} 个</div>${chunksHtml}`;
+                    }
+                } else {
+                    contentDiv.innerHTML = `<div style="color:var(--accent-red);">❌ ${data.error || '未知错误'}</div>`;
+                }
+            } catch (e) {
+                contentDiv.innerHTML = `<div style="color:var(--accent-red);">❌ 请求失败: ${e.message}</div>`;
+            }
         }
 
         async function previewFileChunks() {
@@ -336,19 +690,40 @@
             reader.readAsText(file);
         }
 
-        async function uploadDocument() {
+async function uploadDocument() {
             const fileInput = document.getElementById('fileInput');
+            const visitIdInput = document.getElementById('visitIdInput');
             const descInput = document.getElementById('descInput');
+            const modelSelect = document.getElementById('previewModel');
+            const previewMode = document.getElementById('previewMode');
 
             if (!fileInput.files.length) {
                 showToast('请选择文件', 'error');
+                return;
+            }
+            if (!visitIdInput.value.trim()) {
+                showToast('请输入就诊号', 'error');
                 return;
             }
 
             const file = fileInput.files[0];
             const formData = new FormData();
             formData.append('file', file);
+            formData.append('visit_id', visitIdInput.value.trim());
             formData.append('description', descInput.value || '');
+            if (modelSelect && modelSelect.value) {
+                formData.append('model', modelSelect.value);
+            }
+// Pass chunking mode if LLM mode is selected
+            if (previewMode && previewMode.value) {
+                formData.append('mode', previewMode.value);
+            }
+
+            // Show loading state
+            const uploadBtn = document.querySelector('button[onclick="uploadDocument()"]');
+            const originalText = uploadBtn.textContent;
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = '⏳ 上传中...';
 
             try {
                 const res = await fetch('/api/rag/upload', {
@@ -358,16 +733,77 @@
                 const data = await res.json();
 
                 if (data.status === 'success') {
-                    showToast('上传成功: ' + data.filename, 'success');
+                    showToast('上传成功: ' + data.filename + ' (就诊号: ' + data.visit_id + ')', 'success');
                     fileInput.value = '';
+                    visitIdInput.value = '';
                     descInput.value = '';
                     loadDocuments();
                 } else {
-                    showToast('上传失败', 'error');
+                    showToast('上传失败: ' + (data.error || '未知错误'), 'error');
                 }
             } catch (e) {
                 showToast('上传失败: ' + e.message, 'error');
+            } finally {
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = originalText;
             }
+        }
+
+        async function viewDocChunks(docId) {
+            try {
+                const res = await fetch(`/api/rag/documents/${docId}/chunks`);
+                if (!res.ok) {
+                    showToast('获取失败', 'error');
+                    return;
+                }
+                const data = await res.json();
+                showChunksModal(data);
+            } catch (e) {
+                showToast('获取失败: ' + e.message, 'error');
+            }
+        }
+
+        function showChunksModal(data) {
+            const modal = document.getElementById('chunksModal') || createChunksModal();
+            document.getElementById('chunksModalTitle').textContent = `📦 ${data.filename} - ${data.chunk_count} 个块`;
+            document.getElementById('chunksModalDocId').textContent = `文档ID: ${data.doc_id}`;
+
+            const chunksList = document.getElementById('chunksList');
+            chunksList.innerHTML = data.chunks.map(chunk => `
+                <div style="margin-bottom:16px;padding:12px;background:var(--bg-tertiary);border-radius:8px;border-left:3px solid var(--accent-blue);">
+                    <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px;">
+                        <strong>块 ${chunk.chunk_index + 1}/${chunk.total_chunks}</strong>
+                        | ID: ${chunk.chunk_id}
+                        | 字符数: ${chunk.content.length}
+                    </div>
+                    <div style="font-size:13px;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;padding:10px;background:var(--bg-primary);border-radius:6px;">${escapeHtml(chunk.content)}</div>
+                </div>
+            `).join('');
+
+            modal.style.display = 'block';
+        }
+
+        function createChunksModal() {
+            const modal = document.createElement('div');
+            modal.id = 'chunksModal';
+            modal.style.cssText = 'display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:1000;justify-content:center;align-items:center;';
+            modal.innerHTML = `
+                <div style="background:var(--bg-secondary);border-radius:12px;padding:24px;max-width:800px;width:90%;max-height:90vh;overflow-y:auto;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                        <h3 id="chunksModalTitle" style="margin:0;font-size:16px;">文档块</h3>
+                        <span id="chunksModalDocId" style="font-size:12px;color:var(--text-dim);"></span>
+                        <button onclick="document.getElementById('chunksModal').style.display='none'" style="background:none;border:none;color:var(--text-dim);font-size:20px;cursor:pointer;">✕</button>
+                    </div>
+                    <div id="chunksList" style="max-height:70vh;overflow-y:auto;"></div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            // Close on background click
+            modal.addEventListener('click', function(e) {
+                if (e.target === modal) modal.style.display = 'none';
+            });
+            return modal;
         }
 
         async function deleteDoc(docId) {
@@ -445,6 +881,287 @@
         // Load documents on page load
         loadDocuments();
         loadRagConfig();
+        checkOllamaModels();
+
+        async function checkOllamaModels() {
+            try {
+                const res = await fetch('/api/ollama/models');
+                if (res.ok) {
+                    const data = await res.json();
+                    const status = document.getElementById('modelStatus');
+                    if (data.models && data.models.length > 0) {
+                        status.innerHTML = `✅ Ollama 已连接 | 可用模型: <strong>${data.models.join(', ')}</strong>`;
+                        // Update select options
+                        const select = document.getElementById('modelSelect');
+                        select.innerHTML = data.models.map(m => `<option value="${m}">${m}</option>`).join('');
+                        // Also fill enhanceModel
+                        const enhanceSelect = document.getElementById('enhanceModel');
+                        enhanceSelect.innerHTML = data.models.map(m => `<option value="${m}">${m}</option>`).join('');
+                    } else {
+                        status.innerHTML = '⚠️ 未检测到 Ollama 模型';
+                    }
+                } else {
+                    document.getElementById('modelStatus').innerHTML = '⚠️ Ollama 服务不可用';
+                }
+            } catch (e) {
+                document.getElementById('modelStatus').innerHTML = '⚠️ Ollama 连接失败';
+            }
+        }
+
+        async function filterRecords() {
+            const condition = document.getElementById('filterCondition').value.trim();
+            const visitId = document.getElementById('filterVisitId').value.trim();
+            const model = document.getElementById('modelSelect').value;
+            const topK = parseInt(document.getElementById('filterTopK').value) || 20;
+            const enhanceMode = document.getElementById('enhanceMode').value;
+            const enhanceModel = document.getElementById('enhanceModel').value;
+
+            if (!condition) {
+                showToast('请输入筛选条件', 'error');
+                return;
+            }
+
+            const container = document.getElementById('filterResults');
+            container.style.display = 'block';
+            container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim);">⏳ 分析中，请稍候...</div>';
+
+            try {
+                const res = await fetch('/api/rag/filter', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        condition: condition,
+                        visit_id: visitId || null,
+                        model: model,
+                        top_k: topK,
+                        only_matched: false,
+                        enhance_mode: enhanceMode,
+                        enhance_model: enhanceModel
+                    })
+                });
+                const data = await res.json();
+
+                if (data.error) {
+                    container.innerHTML = `<div style="padding:20px;color:var(--accent-red);">❌ ${data.error}</div>`;
+                    return;
+                }
+
+                renderFilterResults(data);
+            } catch (e) {
+                container.innerHTML = `<div style="padding:20px;color:var(--accent-red);">❌ 请求失败: ${e.message}</div>`;
+            }
+        }
+
+        async function filterRecordsBatch() {
+            const condition = document.getElementById('filterCondition').value.trim();
+            const visitId = document.getElementById('filterVisitId').value.trim();
+            const model = document.getElementById('modelSelect').value;
+            const topK = parseInt(document.getElementById('filterTopK').value) || 20;
+            const threshold = parseFloat(document.getElementById('filterThreshold').value) || 0.0;
+            const enhanceMode = document.getElementById('enhanceMode').value;
+            const enhanceModel = document.getElementById('enhanceModel').value;
+
+            if (!condition) {
+                showToast('请输入筛选条件', 'error');
+                return;
+            }
+
+            const container = document.getElementById('filterResults');
+            container.style.display = 'block';
+            container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim);">⏳ 批量分析中，请稍候...</div>';
+
+            try {
+                const res = await fetch('/api/rag/filter_batch', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        condition: condition,
+                        visit_id: visitId || null,
+                        model: model,
+                        top_k: topK,
+                        score_threshold: threshold,
+                        enhance_mode: enhanceMode,
+                        enhance_model: enhanceModel
+                    })
+                });
+                const data = await res.json();
+
+                if (data.error) {
+                    container.innerHTML = `<div style="padding:20px;color:var(--accent-red);">❌ ${data.error}</div>`;
+                    return;
+                }
+
+                renderBatchResults(data);
+            } catch (e) {
+                container.innerHTML = `<div style="padding:20px;color:var(--accent-red);">❌ 请求失败: ${e.message}</div>`;
+            }
+        }
+
+        function renderBatchResults(data) {
+            const container = document.getElementById('filterResults');
+            const matched = data.matched;
+            const docs = data.matched_docs || [];
+            const summary = data.summary || '';
+            const allChunks = data.all_chunks || [];
+            const showScore = document.getElementById('filterShowScore')?.checked;
+
+            let docsHtml = '';
+            if (docs.length > 0) {
+                docsHtml = docs.map(d => {
+                    const chunks = d.matched_chunks || [];
+                    let chunksHtml = '';
+                    if (chunks.length > 0) {
+                        chunksHtml = chunks.map(c => `
+                            <div style="margin:6px 0;padding:6px 8px;background:var(--bg-tertiary);border-radius:4px;border-left:3px solid var(--accent-green);">
+                                <div style="font-size:11px;color:var(--accent-blue);">Chunk${c.chunk_index}</div>
+                                <div style="font-size:12px;color:var(--text);">${escapeHtml(c.chunk_content || '')}</div>
+                                <div style="font-size:11px;color:var(--accent-green);margin-top:2px;">→ ${escapeHtml(c.matched_condition || '')}</div>
+                            </div>
+                        `).join('');
+                    }
+                    return `
+                    <div style="padding:10px;margin:8px 0;background:var(--bg-primary);border-radius:6px;font-size:12px;">
+                        <div style="color:var(--accent-green);font-weight:bold;">📄 ${escapeHtml(d.filename || d.doc_id)}</div>
+                        <div style="color:var(--text-dim);margin-top:4px;font-size:11px;">${escapeHtml(d.reason || '')}</div>
+                        ${chunksHtml}
+                    </div>
+                `}).join('');
+            }
+
+            let allChunksHtml = '';
+            if (allChunks.length > 0) {
+                allChunksHtml = allChunks.map(c => `
+                    <div style="margin:4px 0;padding:4px 8px;background:var(--bg-primary);border-radius:4px;font-size:11px;display:flex;align-items:center;gap:8px;">
+                        <span style="color:var(--accent-blue);min-width:60px;">Chunk${c.chunk_index}</span>
+                        <span style="color:var(--accent-yellow);min-width:50px;">${(c.score * 100).toFixed(1)}%</span>
+                        <span style="color:var(--text-dim);min-width:150px;">${escapeHtml(c.filename)}</span>
+                        <span style="color:var(--text);">${escapeHtml(c.content_preview || '')}</span>
+                    </div>
+                `).join('');
+            }
+
+            container.innerHTML = `
+                <div style="padding:12px 15px;background:var(--bg-tertiary);border-bottom:1px solid var(--border-color);font-size:12px;">
+                    批量判断: <strong>${escapeHtml(data.condition)}</strong> |
+                    就诊号: <strong>${data.visit_id || '全部'}</strong> |
+                    top_k: <strong>${data.top_k}</strong> |
+                    阈值: <strong>${data.score_threshold || 0}</strong> |
+                    <span style="color:${matched ? 'var(--accent-green)' : 'var(--accent-red)'};font-weight:bold;">
+                        ${matched ? '✅ 符合' : '❌ 不符合'}
+                    </span>
+                </div>
+                ${data.enhanced_query ? `<div style="padding:10px 12px;background:var(--bg-primary);border-bottom:1px solid var(--border-color);font-size:12px;">
+                    <strong style="color:var(--accent-purple);">🔮 增强查询:</strong> ${escapeHtml(data.enhanced_query)}
+                    <span style="color:var(--text-dim);margin-left:8px;">(模式: ${data.enhance_query_mode === 'llm' ? 'LLM扩展' : '简单拼接'})</span>
+                </div>` : ''}
+                ${data.step_timings ? `<div style="padding:8px 12px;background:var(--bg-primary);border-bottom:1px solid var(--border-color);font-size:11px;color:var(--text-dim);">
+                    ⏱ 增强: ${(data.step_timings.step1_enhance_ms || data.step_timings.step1_parse_ms || 0).toFixed(0)}ms |
+                    检索: ${(data.step_timings.step2_retrieve_ms || data.step_timings.step3_retrieve_ms || 0).toFixed(0)}ms |
+                    判断: ${(data.step_timings.step3_judge_ms || 0).toFixed(0)}ms |
+                    <strong>总计: ${(data.step_timings.total_ms || 0).toFixed(0)}ms</strong>
+                </div>` : ''}
+                ${summary ? `<div style="padding:12px;font-size:13px;color:var(--text);">${escapeHtml(summary)}</div>` : ''}
+                ${allChunksHtml ? `
+                <div style="padding:10px;border-bottom:1px solid var(--border-color);">
+                    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">全部检索chunks（${allChunks.length}个）：</div>
+                    ${allChunksHtml}
+                </div>` : ''}
+                <div style="padding:10px;">
+                    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">匹配文档（${docs.length}个）：</div>
+                    ${docs.length > 0 ? docsHtml : '<div style="color:var(--text-dim);font-size:12px;">无匹配文档</div>'}
+                </div>
+            `;
+        }
+
+        function renderFilterResults(data) {
+            window.filterData = data;  // 保存到全局供 toggleAllCandidates 使用
+            const showScore = document.getElementById('filterShowScore')?.checked;
+            const container = document.getElementById('filterResults');
+
+            if (!data.results || data.results.length === 0) {
+                container.innerHTML = '<div style="padding:20px;color:var(--text-dim);">未找到相关病历</div>';
+                return;
+            }
+
+            const html = `
+                <div style="padding:12px 15px;background:var(--bg-tertiary);border-bottom:1px solid var(--border-color);font-size:12px;">
+                    筛选: <strong>${escapeHtml(data.condition)}</strong> |
+                    模型: <strong>${data.model}</strong> |
+                    <span style="color:var(--accent-blue);cursor:pointer;text-decoration:underline;" onclick="toggleAllCandidates()">检索: ${data.total_candidates}个</span> →
+                    <span style="color:var(--accent-green);">判断符合: ${data.matched_count}个</span>
+                </div>
+                ${data.enhanced_query ? `<div style="padding:10px 12px;background:var(--bg-primary);border-bottom:1px solid var(--border-color);font-size:12px;">
+                    <strong style="color:var(--accent-purple);">🔮 增强查询:</strong> ${escapeHtml(data.enhanced_query)}
+                    <span style="color:var(--text-dim);margin-left:8px;">(模式: ${data.enhance_query_mode === 'llm' ? 'LLM扩展' : '简单拼接'})</span>
+                </div>` : ''}
+                ${data.step_timings ? `<div style="padding:8px 12px;background:var(--bg-primary);border-bottom:1px solid var(--border-color);font-size:11px;color:var(--text-dim);">
+                    ⏱ 解析: ${(data.step_timings.step1_parse_ms || data.step_timings.step1_enhance_ms || 0).toFixed(0)}ms |
+                    检索: ${(data.step_timings.step3_retrieve_ms || data.step_timings.step2_retrieve_ms || 0).toFixed(0)}ms |
+                    判断: ${(data.step_timings.step4_judge_ms || data.step_timings.step3_judge_ms || 0).toFixed(0)}ms |
+                    <strong>总计: ${(data.step_timings.total_ms || 0).toFixed(0)}ms</strong>
+                </div>` : ''}
+                <div id="allCandidatesSection" style="display:none;max-height:300px;overflow-y:auto;background:var(--bg-tertiary);border-bottom:1px solid var(--border-color);padding:10px;">
+                    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">候选列表（按相似度排序）：</div>
+                    <div id="allCandidatesList"></div>
+                </div>
+                ${data.results.map(r => `
+                    <div class="filter-result-item ${r.matched ? 'matched' : 'unmatched'}">
+                        <div class="filename">
+                            📄 ${escapeHtml(r.filename)}
+                            <span class="match-badge ${r.matched ? 'yes' : 'no'}">${r.matched ? '✅ 符合' : '❌ 不符合'}</span>
+                            ${showScore ? `<span style="margin-left:10px;color:var(--accent-blue);">向量: ${(r.score * 100).toFixed(1)}%</span>` : ''}
+                        </div>
+                        ${r.matched_keywords && r.matched_keywords.length > 0 ? `
+                        <div class="keywords" style="margin:8px 0;padding:6px 10px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;">
+                            <strong>匹配关键词:</strong> ${r.matched_keywords.map(kw => `<span style="background:var(--accent-blue);color:white;padding:2px 6px;border-radius:3px;margin-right:4px;">${escapeHtml(kw)}</span>`).join('')}
+                        </div>` : ''}
+                        ${r.retrieved_chunk ? `
+                        <div class="retrieved-chunk" style="margin:8px 0;padding:8px;background:var(--bg-primary);border-radius:6px;font-size:12px;border-left:3px solid var(--accent-blue);">
+                            <strong>📍 检索内容:</strong>
+                            <pre style="margin:8px 0;white-space:pre-wrap;word-break:break-all;font-size:11px;">${escapeHtml(r.retrieved_chunk)}</pre>
+                        </div>` : ''}
+                        ${r.reason ? `
+                        <div class="llm-reason" style="margin:8px 0;padding:8px;background:rgba(255,200,0,0.1);border-radius:6px;font-size:12px;border-left:3px solid var(--accent-yellow);">
+                            <strong>🤖 LLM判断:</strong>
+                            <div style="margin-top:6px;">${escapeHtml(r.reason)}</div>
+                        </div>` : ''}
+                    </div>
+                `).join('')}
+            `;
+
+            container.innerHTML = html;
+        }
+
+        function clearFilterResults() {
+            document.getElementById('filterCondition').value = '';
+            document.getElementById('filterResults').style.display = 'none';
+        }
+
+        let allCandidatesExpanded = false;
+        function toggleAllCandidates() {
+            allCandidatesExpanded = !allCandidatesExpanded;
+            const section = document.getElementById('allCandidatesSection');
+            if (section) {
+                section.style.display = allCandidatesExpanded ? 'block' : 'none';
+            }
+            // Update list
+            if (allCandidatesExpanded && typeof data !== 'undefined') {
+                renderAllCandidates(data);
+            }
+        }
+
+        function renderAllCandidates(data) {
+            const list = document.getElementById('allCandidatesList');
+            if (!list) return;
+            list.innerHTML = data.results.map((r, i) => `
+                <div style="padding:6px 8px;margin:4px 0;background:var(--bg-primary);border-radius:4px;font-size:11px;">
+                    <span style="color:${r.matched ? 'var(--accent-green)' : 'var(--text-dim)'}">${r.matched ? '✅' : '❌'}</span>
+                    <span style="margin-left:8px;">${escapeHtml(r.filename)}</span>
+                    <span style="margin-left:8px;color:var(--text-dim);">向量:${(r.score * 100).toFixed(1)}%</span>
+                    <span style="margin-left:8px;">${r.reason ? escapeHtml(r.reason.slice(0, 30)) : ''}</span>
+                </div>
+            `).join('');
+        }
     </script>
 </body>
 </html>

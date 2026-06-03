@@ -326,7 +326,7 @@ def _format_document_list(docs: list) -> str:
 # ──────────────────────── Tool: Index Document ────────────────────────
 
 @tool
-def index_document_tool(filename: str) -> str:
+def index_document_tool(filename: str, visit_id: str) -> str:
     """
     Index a file from the sandbox into the knowledge base.
 
@@ -335,13 +335,14 @@ def index_document_tool(filename: str) -> str:
 
     Args:
         filename: Name of the file to index (must exist in sandbox)
+        visit_id: Visit/patient ID to bind to this document
 
     Returns:
         Success or failure message with document ID
 
     Examples:
-        index_document_tool("documentation.md")
-        index_document_tool("api_reference.txt")
+        index_document_tool("documentation.md", "V001")
+        index_document_tool("api_reference.txt", "V002")
     """
     if not filename or not filename.strip():
         fmt = get_formatter()
@@ -357,7 +358,8 @@ def index_document_tool(filename: str) -> str:
     try:
         doc_id = rag.add_document(
             content=read_result,
-            filename=filename
+            filename=filename,
+            visit_id=visit_id
         )
     except ValueError as e:
         fmt = get_formatter()

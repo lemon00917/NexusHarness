@@ -32,7 +32,7 @@ from typing import Dict, List, Optional, Callable
 # ──────────────────────── Configuration ────────────────────────
 
 # Default audit log file
-DEFAULT_AUDIT_LOG = "audit.log"
+DEFAULT_AUDIT_LOG = "logs/audit.log"
 
 # Maximum log file size before rotation (10 MB)
 MAX_LOG_SIZE_BYTES = 10 * 1024 * 1024

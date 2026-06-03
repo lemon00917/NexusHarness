@@ -485,7 +485,7 @@ class BenchmarkRunner:
     def __init__(
         self,
         benchmark_dir: str = "benchmarks",
-        results_dir: str = "benchmark_results",
+        results_dir: str = "results/benchmark",
         auto_approve: bool = True,
         max_steps: int = 10,
     ):

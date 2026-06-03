@@ -22,7 +22,7 @@ import json
 from pathlib import Path
 
 # Config file for runtime settings (persisted separately from .env)
-_CONFIG_FILE = Path(__file__).parent.parent.parent / "config.json"
+_CONFIG_FILE = Path(__file__).parent.parent.parent / "configs" / "config.json"
 
 
 def load_config() -> dict:
@@ -79,6 +79,61 @@ MAIN_MODEL: str = os.environ.get("MAIN_MODEL", "claude-sonnet-4-20250514")
 MEMORY_MODEL: str = os.environ.get("MEMORY_MODEL", "claude-haiku-4-5-20251001")
 MAX_STEPS: int = int(os.environ.get("MAX_STEPS", "10"))
 
+# ── Runtime Model Switching ─────────────────────────────────────────
+# Store runtime overrides for model switching
+_runtime_model_override: str = None
+_runtime_provider_override: str = None
+
+
+def get_runtime_model() -> str:
+    """Get current model (runtime override or default)."""
+    return _runtime_model_override or MAIN_MODEL
+
+
+def get_runtime_provider() -> str:
+    """Get current provider (runtime override or default)."""
+    return _runtime_provider_override or PROVIDER
+
+
+def set_runtime_model(model: str) -> None:
+    """Set runtime model override."""
+    global _runtime_model_override
+    _runtime_model_override = model
+
+
+def set_runtime_provider(provider: str) -> None:
+    """Set runtime provider override."""
+    global _runtime_provider_override
+    _runtime_provider_override = provider
+
+
+def switch_model(provider: str, model: str) -> dict:
+    """
+    Switch model at runtime.
+
+    Args:
+        provider: Provider name (ollama, anthropic, minimax, etc.)
+        model: Model name
+
+    Returns:
+        Dict with new config
+    """
+    set_runtime_provider(provider)
+    set_runtime_model(model)
+
+    return {
+        "provider": provider,
+        "main_model": model,
+        "status": "ok"
+    }
+
+
+def reset_runtime_config() -> None:
+    """Reset runtime overrides to .env defaults."""
+    global _runtime_model_override, _runtime_provider_override
+    _runtime_model_override = None
+    _runtime_provider_override = None
+
 # OpenAI 兼容 provider 的默认 base_url
 _DEFAULT_BASE_URLS: dict[str, str] = {
     "openai":   "https://api.openai.com/v1",
@@ -92,21 +147,37 @@ _DEFAULT_BASE_URLS: dict[str, str] = {
 
 
 # ── LLM 工厂函数 ───────────────────────────────────────────────────
-def get_llm(model: str):
+def get_llm(model: str = None):
     """
     根据 PROVIDER 返回对应的 LangChain LLM 实例。
 
     Args:
-        model: 模型名，从 MAIN_MODEL 或 MEMORY_MODEL 传入
+        model: 模型名，如果为None则使用runtime配置的模型
 
     Returns:
         LangChain BaseChatModel 实例
     """
-    if PROVIDER == "anthropic":
+    # Use runtime config if no specific model provided
+    if model is None:
+        provider = get_runtime_provider()
+        model = get_runtime_model()
+    else:
+        provider = get_runtime_provider()
+
+    if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(
             model=model,
             api_key=ANTHROPIC_API_KEY,
+        )
+
+    if provider == "ollama":
+        # Ollama uses OpenAI compatible API
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=model,
+            api_key="ollama-local",  # Ollama doesn't need real API key
+            base_url="http://localhost:11434/v1",
         )
 
     # 其他 provider 统一走 OpenAI 兼容接口
@@ -115,12 +186,12 @@ def get_llm(model: str):
     # base_url 优先用 .env 里的显式配置，没有则用内置默认值
     base_url = (
         OPENAI_COMPATIBLE_BASE_URL
-        or _DEFAULT_BASE_URLS.get(PROVIDER, "")
+        or _DEFAULT_BASE_URLS.get(provider, "")
     )
 
     if not base_url:
         raise ValueError(
-            f"Unknown provider '{PROVIDER}'. "
+            f"Unknown provider '{provider}'. "
             f"Please set OPENAI_COMPATIBLE_BASE_URL in .env, "
             f"or use one of: {list(_DEFAULT_BASE_URLS.keys())}"
         )

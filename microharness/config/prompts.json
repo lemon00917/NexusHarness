@@ -102,6 +102,30 @@
         "enabled": true,
         "top_k": 3
       }
+    },
+    "filter_records": {
+      "name": "病历智能筛选",
+      "description": "根据自然语言条件筛选病历，如'找出所有糖尿病患者'、'筛选血糖大于7的病人'",
+      "keywords": [
+        "筛选",
+        "找出",
+        "查找",
+        "过滤",
+        "病历",
+        "患者",
+        "记录"
+      ],
+      "template": "你是病历筛选助手。根据以下筛选条件，已从病历数据库中获取了初步结果：\n\n筛选条件：{query}\n\n{medical_knowledge}\n\n请基于上述筛选结果，回答用户的问题。如果结果不足或需要更多信息，请说明。",
+      "enabled": true,
+      "rag": {
+        "enabled": false
+      },
+      "filter": {
+        "enabled": true,
+        "model": "qwen2:7b-instruct",
+        "top_k": 20,
+        "only_matched": false
+      }
     }
   },
   "memory": {

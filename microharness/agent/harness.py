@@ -177,7 +177,7 @@ def main():
         parser.add_argument("--providers", nargs="+", help="Providers to compare")
         parser.add_argument("--model", default=None, help="Model to test (default: current MAIN_MODEL)")
         parser.add_argument("--tasks", nargs="+", help="Specific task IDs to run")
-        parser.add_argument("--output", default="benchmark_results", help="Output directory")
+        parser.add_argument("--output", default="results/benchmark", help="Output directory")
         args = parser.parse_args(sys.argv[2:])
 
         runner = BenchmarkRunner(results_dir=args.output)
@@ -241,6 +241,47 @@ def main():
                     print(f"• {doc['filename']} (ID: {doc['doc_id']})")
         else:
             parser.print_help()
+        return
+
+    # Check for 'filter' subcommand
+    if len(sys.argv) > 1 and sys.argv[1] == "filter":
+        import argparse
+        from microharness.rag.record_filter import RecordFilter
+
+        parser = argparse.ArgumentParser(description="Medical Record Filter with LLM reasoning")
+        parser.add_argument("condition", help="Filter condition in natural language")
+        parser.add_argument("--model", default="qwen2:7b-instruct", help="Ollama model to use")
+        parser.add_argument("--records-dir", default=None, help="Medical records directory")
+        parser.add_argument("--top-k", type=int, default=20, help="Number of candidates to retrieve")
+        parser.add_argument("--show-all", action="store_true", help="Show all results, not just matched")
+
+        args = parser.parse_args(sys.argv[2:])
+
+        # Initialize filter
+        rf = RecordFilter()
+        if not rf.is_ready:
+            print("Error: RAG index not ready or Ollama not available")
+            print("Please ensure: 1) Ollama is running  2) RAG index exists")
+            return
+
+        # Load records from directory if specified
+        if args.records_dir:
+            print(f"Loading records from: {args.records_dir}")
+            count = rf.add_records_from_dir(args.records_dir)
+            print(f"Loaded {count} record(s)")
+
+        # Run filter
+        results = rf.filter(args.condition, only_matched=not args.show_all)
+
+        if not results:
+            print("\n❌ No matching records found.")
+        else:
+            print(f"\n✅ Found {len(results)} matching record(s):\n")
+            for r in results:
+                preview = r.content[:150] + "..." if len(r.content) > 150 else r.content
+                print(f"📄 {r.filename} (score: {r.score:.2f})")
+                print(f"   {preview}")
+                print()
         return
 
     config_validate()

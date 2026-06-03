@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # ──────────────────────── Configuration ────────────────────────
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-MEMORY_FILE = PROJECT_ROOT / "memory.json"
+MEMORY_FILE = PROJECT_ROOT / "sessions" / "memory.json"
 TEMP_FILE = MEMORY_FILE.with_suffix(".json.tmp")
 BACKUP_FILE = MEMORY_FILE.with_suffix(".json.bak")
 

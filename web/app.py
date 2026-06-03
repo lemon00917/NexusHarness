@@ -23,7 +23,7 @@ from typing import Optional
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastapi import FastAPI, Request, UploadFile
+from fastapi import FastAPI, Request, UploadFile, Form
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
@@ -54,6 +54,7 @@ from microharness.rag.rag import rag
 from microharness.rag.rag_config import load_config, save_config, RAGConfig
 from microharness.rag.document_parser import parse_document
 from microharness.rag.template_binding import TwoStageBinder
+from microharness.observability.logger import rag_logger
 from microharness.rag.template_binding_v2 import ThreeStageBinder
 from microharness.agent.tools import TOOLS as TOOLS
 
@@ -1049,27 +1050,172 @@ async def remove_intent(intent_name: str):
 
 
 # ──────────────────────────────────────────────────
+# ──────────────────────────────────────────────────
+# Ollama API
+# ──────────────────────────────────────────────────
+
+@app.get("/api/ollama/models")
+async def get_ollama_models():
+    """Get available Ollama models."""
+    from microharness.ollama import get_client
+    client = get_client()
+    try:
+        models = client.list_models()
+        return {"models": models}
+    except Exception as e:
+        return {"models": [], "error": str(e)}
+
+
+# ──────────────────────────────────────────────────
 # RAG API
+# ──────────────────────────────────────────────────
 # ──────────────────────────────────────────────────
 
 @app.post("/api/rag/upload")
-async def upload_document(file: UploadFile, description: str = ""):
-    """Upload a document to the knowledge base."""
+async def upload_document(file: UploadFile, visit_id: str = Form(...), description: str = "", model: str = Form(""), mode: str = Form("")):
+    """Upload a document to the knowledge base with optional LLM processing.
+
+    Args:
+        mode: Chunking mode - "llm" for heading-based, "field_llm" for field extraction.
+              If empty, uses system's default chunking configuration.
+    """
     from microharness.rag.rag import rag
-    from microharness.rag.document_parser import parse_document
+    from microharness.ollama import OllamaClient
+    from microharness.rag.chunker import chunk_by_fields, _chunk_by_chapter
 
-    # Read file content
-    content = await file.read()
+    # Read raw file content
+    raw_content = await file.read()
 
-    # Parse document based on extension (handles HTML, PDF, MD, TXT, JSON)
-    text = parse_document(content, file.filename)
+    # Try different encodings
+    content = None
+    for enc in ['utf-8', 'gbk', 'latin-1']:
+        try:
+            content = raw_content.decode(enc)
+            break
+        except Exception:
+            continue
+    if content is None:
+        content = raw_content.decode('utf-8', errors='replace')
 
-    # Add to RAG index
+    # Check if content looks garbled
+    if content.count('�') > len(content) * 0.05:
+        return {"error": f"文件编码无法正确解码，请确保文件是UTF-8编码。当前内容包含 {content.count('ufffd')} 个乱码字符。"}, 400
+
     metadata = {"description": description, "original_filename": file.filename}
-    doc_id = rag.add_document(text, file.filename, metadata)
+    metadata['visit_id'] = visit_id
+
+    # LLM preprocessing if mode is specified
+    if mode in ("llm", "field_llm") and model:
+        client = OllamaClient(model=model) if model else OllamaClient()
+
+        if mode == "field_llm":
+            # Field extraction mode
+            try:
+                chunks = chunk_by_fields(content, client)
+                structured = "\n\n".join(chunks)
+                # Add pre-chunked content directly (already split into semantic chunks)
+                doc_id = rag.add_document_with_chunks(structured, file.filename, metadata, chunks)
+            except Exception as e:
+                return {"error": f"字段提取失败: {str(e)}"}, 500
+        else:
+            # Heading mode
+            from microharness.ollama.prompts import format_llm_chunk_prompt
+            system_prompt, user_prompt = format_llm_chunk_prompt(content)
+            try:
+                structured = client.chat(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.0
+                )
+                chunks = _chunk_by_chapter(structured)
+                doc_id = rag.add_document_with_chunks(structured, file.filename, metadata, chunks)
+            except Exception as e:
+                return {"error": f"LLM转换失败: {str(e)}"}, 500
+    else:
+        # Use default behavior with system's chunking configuration
+        doc_id = rag.add_document_raw(raw_content, file.filename, visit_id, metadata)
+
     rag.save_index()
 
-    return {"doc_id": doc_id, "filename": file.filename, "status": "success"}
+    return {"doc_id": doc_id, "filename": file.filename, "visit_id": visit_id, "status": "success", "mode": mode or "default"}
+
+
+@app.post("/api/rag/llm_preview")
+async def llm_preview(file: UploadFile, model: str = Form(""), mode: str = Form("llm")):
+    """
+    Preview HTML conversion with LLM.
+    mode='llm': add ## headings to text
+    mode='field_llm': extract fields and group by semantic section
+    """
+    from microharness.ollama import OllamaClient
+    from microharness.rag.chunker import chunk_by_fields, _chunk_by_chapter
+
+    raw_content = await file.read()
+    filename = file.filename
+
+    # Try different encodings
+    content = None
+    for enc in ['utf-8', 'gbk', 'latin-1']:
+        try:
+            content = raw_content.decode(enc)
+            break
+        except Exception:
+            continue
+    if content is None:
+        content = raw_content.decode('utf-8', errors='replace')
+
+    # Check if content looks garbled
+    if content.count('�') > len(content) * 0.05:
+        return {
+            "status": "error",
+            "error": f"文件编码无法正确解码，请确保文件是UTF-8编码。当前内容包含 {content.count('ufffd')} 个乱码字符。"
+        }
+
+    # Get LLM client
+    client = OllamaClient(model=model) if model else OllamaClient()
+
+    if mode == "field_llm":
+        # Field extraction mode: extract fields and group by semantic section
+        try:
+            chunks = chunk_by_fields(content, client)
+            structured = "\n\n".join(chunks)
+            return {
+                "status": "success",
+                "filename": filename,
+                "model": client.model,
+                "mode": "field_llm",
+                "structured_content": structured,
+                "chunks": [{"index": i, "content": c, "chars": len(c)} for i, c in enumerate(chunks)]
+            }
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+    else:
+        # Heading mode: add ## headings to text
+        from microharness.ollama.prompts import format_llm_chunk_prompt
+        system_prompt, user_prompt = format_llm_chunk_prompt(content)
+
+        try:
+            structured = client.chat(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.0
+            )
+
+            chunks = _chunk_by_chapter(structured)
+            return {
+                "status": "success",
+                "filename": filename,
+                "model": client.model,
+                "mode": "llm",
+                "structured_content": structured,
+                "chunks": [{"index": i, "content": c, "chars": len(c)} for i, c in enumerate(chunks)]
+            }
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
 
 
 @app.get("/api/rag/documents")
@@ -1133,12 +1279,298 @@ async def update_rag_config(request: Request):
     config = load_config()
 
     # Update fields
-    for key in ["chunk_mode", "chunk_size", "chunk_overlap", "search_mode", "vector_weight", "bm25_weight"]:
+    for key in ["chunk_mode", "chunk_size", "chunk_overlap", "search_mode", "vector_weight", "bm25_weight", "enhance_query_mode"]:
         if key in data and hasattr(config, key):
             setattr(config, key, data[key])
 
     save_config(config)
     return {"status": "success", "config": config.to_dict()}
+
+
+@app.post("/api/rag/filter")
+async def filter_records(request: Request):
+    """Filter medical records using natural language conditions."""
+    from microharness.rag.record_filter import RecordFilter
+
+    data = await request.json()
+    condition = data.get("condition", "")
+    visit_id = data.get("visit_id")
+    model = data.get("model", "qwen2.5:7b")
+    top_k = data.get("top_k", 20)
+    only_matched = data.get("only_matched", False)
+    enhance_mode = data.get("enhance_mode", "simple")
+    enhance_model = data.get("enhance_model")
+
+    if not condition:
+        return {"error": "condition is required"}, 400
+
+    try:
+        record_filter = RecordFilter(
+            model=model,
+            retrieval_top_k=top_k,
+            enhance_query_mode=enhance_mode,
+            enhance_model=enhance_model
+        )
+        filter_result = record_filter.filter(condition, visit_id=visit_id, only_matched=only_matched)
+
+        results = filter_result["results"]
+        enhanced_query = filter_result.get("enhanced_query", "")
+        enhance_query_mode = filter_result.get("enhance_query_mode", "simple")
+
+        return {
+            "condition": condition,
+            "visit_id": visit_id,
+            "model": model,
+            "total_candidates": top_k,
+            "matched_count": len(results),
+            "enhanced_query": enhanced_query,
+            "enhance_query_mode": enhance_query_mode,
+            "step_timings": filter_result.get("step_timings", {}),
+            "results": [
+                {
+                    "doc_id": r.doc_id,
+                    "filename": r.filename,
+                    "score": min(1.0, max(0.0, r.score)),  # 向量相似度 0-1
+                    "matched": r.matched,
+                    "reason": r.reason,  # LLM判断理由
+                    "matched_keywords": r.matched_keywords or [],  # 匹配上的关键词
+                    "retrieved_chunk": r.retrieved_chunk or "",  # RAG检索到的chunk内容
+                    "content_preview": (r.retrieved_chunk or r.content)[:500] + "..." if len(r.retrieved_chunk or r.content) > 500 else (r.retrieved_chunk or r.content),  # 检索内容预览
+                }
+                for r in results
+            ]
+        }
+    except Exception as e:
+        rag_logger.error(f"Filter error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}, 500
+
+
+@app.post("/api/rag/filter_batch")
+async def filter_records_batch(request: Request):
+    """Batch filter: retrieve chunks then judge all together."""
+    from microharness.rag.record_filter import RecordFilter
+
+    data = await request.json()
+    condition = data.get("condition", "")
+    visit_id = data.get("visit_id")
+    model = data.get("model", "qwen2.5:7b")
+    top_k = data.get("top_k", 20)
+    score_threshold = float(data.get("score_threshold", 0.0))
+    enhance_mode = data.get("enhance_mode", "simple")
+    enhance_model = data.get("enhance_model")
+
+    if not condition:
+        return {"error": "condition is required"}, 400
+
+    try:
+        record_filter = RecordFilter(
+            model=model,
+            enhance_query_mode=enhance_mode,
+            enhance_model=enhance_model
+        )
+        result = record_filter.filter_batch(condition, visit_id=visit_id, top_k=top_k, score_threshold=score_threshold)
+
+        return {
+            "condition": condition,
+            "visit_id": visit_id,
+            "model": model,
+            "top_k": top_k,
+            "score_threshold": score_threshold,
+            "enhanced_query": result.get("enhanced_query", ""),
+            "enhance_query_mode": result.get("enhance_query_mode", "simple"),
+            "step_timings": result.get("step_timings", {}),
+            "matched": result.get("matched", False),
+            "matched_docs": result.get("matched_docs", []),
+            "all_chunks": result.get("all_chunks", []),
+            "summary": result.get("summary", "")
+        }
+    except Exception as e:
+        rag_logger.error(f"Filter batch error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}, 500
+
+
+@app.get("/api/rag/documents/{doc_id}/chunks")
+async def get_document_chunks(doc_id: str):
+    """List all chunks for a specific document."""
+    from microharness.rag.rag import rag
+
+    doc = rag.get_document(doc_id)
+    if not doc:
+        return {"error": "Document not found"}, 404
+
+    # Get all chunk IDs for this document
+    chunk_ids = rag._get_document_chunks(doc_id)
+
+    # Fetch chunk contents from ChromaDB
+    collection = rag._get_chroma_collection()
+    chunks = []
+
+    if chunk_ids and chunk_ids[0] == doc_id:
+        # Single chunk (doc_id stored as chunk_id)
+        try:
+            chunk_data = collection.get(ids=[doc_id], include=["documents", "metadatas"])
+            if chunk_data["documents"]:
+                chunks.append({
+                    "chunk_id": doc_id,
+                    "chunk_index": 0,
+                    "total_chunks": 1,
+                    "content": chunk_data["documents"][0],
+                    "metadata": chunk_data["metadatas"][0] if chunk_data["metadatas"] else {}
+                })
+        except Exception:
+            pass
+    else:
+        # Multiple chunks (doc_id_chunk_N format)
+        try:
+            chunk_data = collection.get(ids=chunk_ids, include=["documents", "metadatas"])
+            for i, (cid, content, meta) in enumerate(zip(
+                chunk_data["ids"],
+                chunk_data["documents"],
+                chunk_data["metadatas"]
+            )):
+                chunks.append({
+                    "chunk_id": cid,
+                    "chunk_index": meta.get("chunk_index", i),
+                    "total_chunks": meta.get("total_chunks", len(chunk_ids)),
+                    "content": content,
+                    "metadata": meta
+                })
+        except Exception:
+            pass
+
+    return {
+        "doc_id": doc_id,
+        "filename": doc.filename,
+        "created_at": doc.created_at,
+        "chunk_count": len(chunks),
+        "chunks": chunks
+    }
+
+
+@app.get("/api/rag/chunks/{chunk_id}")
+async def get_chunk(chunk_id: str):
+    """Get specific chunk content by ID."""
+    from microharness.rag.rag import rag
+
+    collection = rag._get_chroma_collection()
+    try:
+        chunk_data = collection.get(ids=[chunk_id], include=["documents", "metadatas"])
+        if not chunk_data["documents"]:
+            return {"error": "Chunk not found"}, 404
+
+        return {
+            "chunk_id": chunk_id,
+            "content": chunk_data["documents"][0],
+            "metadata": chunk_data["metadatas"][0] if chunk_data["metadatas"] else {}
+        }
+    except Exception:
+        return {"error": "Chunk not found"}, 404
+
+
+@app.post("/api/rag/clear")
+async def clear_index():
+    """
+    Clear all RAG index data (ChromaDB + in-memory documents).
+    Use this when documents are corrupted and need to be re-imported.
+    """
+    from microharness.rag.rag import rag as rag_instance
+
+    doc_count = len(rag_instance._documents)
+    doc_ids = list(rag_instance._documents.keys())
+
+    # Clear ChromaDB
+    try:
+        collection = rag_instance._get_chroma_collection()
+        all_chunks = collection.get(include=["ids"])
+        if all_chunks["ids"]:
+            collection.delete(ids=all_chunks["ids"])
+    except Exception:
+        pass
+
+    # Clear in-memory documents
+    rag_instance._documents.clear()
+    rag_instance._chunk_to_parent.clear()
+    rag_instance._bm25 = None
+
+    # Delete index.json
+    index_file = rag_instance.index_dir / "index.json"
+    if index_file.exists():
+        index_file.unlink()
+
+    return {
+        "status": "cleared",
+        "documents_removed": doc_count,
+        "doc_ids": doc_ids
+    }
+
+
+@app.post("/api/rag/rebuild")
+async def rebuild_index():
+    """
+    Rebuild the entire RAG index with current chunking configuration.
+    Re-adds all documents from memory using the latest chunk_size/overlap settings.
+    Returns progress information.
+    """
+    from microharness.rag.rag import rag as rag_instance
+
+    if not rag_instance._documents:
+        return {"status": "no_documents", "message": "No documents to rebuild"}
+
+    total = len(rag_instance._documents)
+    results = []
+
+    for doc_id, doc in list(rag_instance._documents.items()):
+        try:
+            # Delete existing chunks from ChromaDB
+            chunk_ids = rag_instance._get_document_chunks(doc_id)
+            if chunk_ids:
+                rag_instance._get_chroma_collection().delete(ids=chunk_ids)
+
+            # Re-chunk and re-index
+            chunks = rag_instance._chunk_content(doc.content)
+            if len(chunks) == 1:
+                rag_instance._add_single_chunk(
+                    rag_instance._get_chroma_collection(),
+                    doc_id, chunks[0], doc.filename
+                )
+            else:
+                rag_instance._add_multiple_chunks(
+                    rag_instance._get_chroma_collection(),
+                    doc_id, doc.filename, chunks
+                )
+
+            results.append({
+                "doc_id": doc_id,
+                "filename": doc.filename,
+                "status": "success",
+                "chunk_count": len(chunks)
+            })
+        except Exception as e:
+            results.append({
+                "doc_id": doc_id,
+                "filename": doc.filename,
+                "status": "error",
+                "error": str(e)
+            })
+
+    # Rebuild BM25
+    rag_instance._rebuild_bm25_index()
+
+    # Save updated index
+    rag_instance.save_index()
+
+    success_count = sum(1 for r in results if r["status"] == "success")
+    return {
+        "status": "done",
+        "total": total,
+        "success_count": success_count,
+        "error_count": total - success_count,
+        "results": results
+    }
 
 
 @app.get("/api/rag/preview_chunk")

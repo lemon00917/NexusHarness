@@ -17,6 +17,9 @@ from typing_extensions import TypedDict, NotRequired, Literal
 
 logger = logging.getLogger(__name__)
 
+# Import unified logger for structured logging
+from microharness.observability.logger import session_logger, agent_logger
+
 # ──────────────────────────────────────────────────
 # Types
 # ──────────────────────────────────────────────────
@@ -41,7 +44,7 @@ class ReplayRecord(TypedDict):
 
 def _get_replays_dir() -> Path:
     """Return the replays directory path."""
-    return Path(__file__).parent.parent / "replays"
+    return Path(__file__).parent.parent.parent / "sessions" / "replays"
 
 
 # ──────────────────────────────────────────────────
@@ -78,6 +81,7 @@ class ReplayLogger:
         with self._lock:
             if session_id not in self._buffers:
                 self._buffers[session_id] = []
+                agent_logger.info(f"回放记录开始 | 会话: {session_id}")
                 logger.debug(f"Started replay session: {session_id}")
 
     def log_step(self, session_id: str, record: ReplayRecord) -> None:
@@ -157,6 +161,7 @@ class ReplayLogger:
             "type": "complete",
         })
         self.flush(session_id)
+        agent_logger.info(f"会话完成 | 会话: {session_id} | 总步骤: {step}")
 
     def log_interrupt(self, session_id: str, step: int) -> None:
         """Log session interrupt and flush."""
@@ -165,6 +170,7 @@ class ReplayLogger:
             "type": "interrupt",
         })
         self.flush(session_id)
+        agent_logger.warning(f"会话中断 | 会话: {session_id} | 已执行步骤: {step}")
 
     def _flush_session(self, session_id: str) -> None:
         """Flush buffer for a specific session to disk."""
