@@ -46,7 +46,9 @@ class SearchResult:
     """Structured search result with relevance metadata."""
     document: Document
     score: float
-    matched_chunk: Optional[str] = None
+    chunk_id: Optional[str] = None  # ChromaDB chunk ID (doc_id_chunk_N format)
+    matched_chunk: Optional[str] = None  # alias for chunk_id for backward compat
+    matched_chunk_content: Optional[str] = None  # actual chunk text from ChromaDB
 
 
 # ──────────────────────── Exceptions ────────────────────────
@@ -70,7 +72,7 @@ class IndexLoadError(RAGException):
 
 # Embedding model settings
 # Use multilingual model for better Chinese/CJK support
-DEFAULT_EMBEDDING_MODEL = 'paraphrase-multilingual-MiniLM-L12-v2'
+DEFAULT_EMBEDDING_MODEL = 'bge-m3'
 
 # ChromaDB settings
 CHROMA_COLLECTION_NAME = "documents"
@@ -99,13 +101,14 @@ class SimpleRAG:
         results = rag.search("query", top_k=3)
     """
 
-    def __init__(self, index_dir: str = "rag_index", auto_save: bool = True):
+    def __init__(self, index_dir: str = "rag_index", auto_save: bool = True, use_ollama: bool = True):
         """
         Initialize RAG system with persistent storage.
 
         Args:
             index_dir: Directory for index persistence
             auto_save: Automatically save index after modifications
+            use_ollama: Use Ollama for embeddings (nomic-embed-text) instead of HuggingFace
         """
         self.index_dir = Path(index_dir)
         self.index_dir.mkdir(parents=True, exist_ok=True)
@@ -122,6 +125,8 @@ class SimpleRAG:
         self._chroma_client = None
         self._collection = None
         self._bm25: Optional[BM25] = None
+        self._use_ollama = use_ollama
+        self._ollama_client = None
 
         # Configuration
         self._config = None
@@ -132,7 +137,8 @@ class SimpleRAG:
         self,
         content: str,
         filename: str,
-        metadata: Optional[dict] = None
+        metadata: Optional[dict] = None,
+        is_html: bool = False,
     ) -> str:
         """
         Add a document to the knowledge base with automatic chunking.
@@ -145,9 +151,10 @@ class SimpleRAG:
         5. Update keyword index
 
         Args:
-            content: Document text content
+            content: Document text content (HTML or plain text)
             filename: Original filename for reference
             metadata: Optional metadata dictionary
+            is_html: If True, convert HTML to Markdown before chunking
 
         Returns:
             Document ID string
@@ -161,9 +168,9 @@ class SimpleRAG:
         # Generate unique ID
         doc_id = self._generate_doc_id(content, filename)
 
-        # Skip duplicates
+        # If document already exists, delete it first to allow overwrite
         if doc_id in self._documents:
-            return doc_id
+            self.delete_document(doc_id)
 
         # Create document record
         document = Document(
@@ -177,8 +184,16 @@ class SimpleRAG:
         # Store document
         self._documents[doc_id] = document
 
-        # Chunk and index
+        # Chunk and index (convert HTML to Markdown first if needed)
+        if is_html:
+            from microharness.rag.chunker import html_to_markdown
+            content = html_to_markdown(content)
+
         chunks = self._chunk_content(content)
+        # Store chunk contents map for retrieval (chunk_id -> content)
+        document.metadata["_chunk_contents"] = {
+            f"{doc_id}_chunk_{i}": chunk for i, chunk in enumerate(chunks)
+        }
         self._index_chunks(doc_id, filename, chunks)
 
         # Update keyword index
@@ -190,12 +205,93 @@ class SimpleRAG:
 
         return doc_id
 
+    def add_document_with_chunks(
+        self,
+        content: str,
+        filename: str,
+        metadata: Optional[dict] = None,
+        chunks: Optional[List[str]] = None
+    ) -> str:
+        """
+        Add a document with pre-computed chunks (skip internal chunking).
+
+        Args:
+            content: Document text content
+            filename: Original filename for reference
+            metadata: Optional metadata dictionary
+            chunks: Pre-computed chunks (if None, uses internal chunking)
+
+        Returns:
+            Document ID string
+        """
+        if not content or not content.strip():
+            raise ValueError("Document content cannot be empty")
+
+        doc_id = self._generate_doc_id(content, filename)
+
+        if doc_id in self._documents:
+            return doc_id
+
+        document = Document(
+            doc_id=doc_id,
+            content=content,
+            filename=filename,
+            created_at=datetime.now().isoformat(),
+            metadata=metadata or {},
+        )
+
+        self._documents[doc_id] = document
+
+        # Store original chunks in metadata for rebuild
+        if chunks:
+            document.metadata["_original_chunks"] = chunks
+            # Also store chunk contents map for retrieval (chunk_id -> content)
+            document.metadata["_chunk_contents"] = {
+                f"{doc_id}_chunk_{i}": chunk for i, chunk in enumerate(chunks)
+            }
+            self._index_chunks(doc_id, filename, chunks)
+        else:
+            chunks = self._chunk_content(content)
+            self._index_chunks(doc_id, filename, chunks)
+
+        self._rebuild_bm25_index()
+
+        if self.auto_save:
+            self.save_index()
+
+        return doc_id
+
+    def add_document_raw(
+        self,
+        content: str,
+        filename: str,
+        visit_id: str,
+        metadata: Optional[dict] = None
+    ) -> str:
+        """
+        Add a raw document with visit_id in metadata.
+
+        Args:
+            content: Document text content
+            filename: Original filename for reference
+            visit_id: Visit ID to store in metadata
+            metadata: Optional metadata dictionary
+
+        Returns:
+            Document ID string
+        """
+        if metadata is None:
+            metadata = {}
+        metadata['visit_id'] = visit_id
+        return self.add_document(content, filename, metadata)
+
     def search(
         self,
         query: str,
         top_k: int = DEFAULT_TOP_K,
         vector_weight: float = 1.0,
         bm25_weight: float = 0.0,
+        deduplicate: bool = True,
     ) -> List[SearchResult]:
         """
         Search for relevant documents.
@@ -209,6 +305,8 @@ class SimpleRAG:
             top_k: Number of results to return
             vector_weight: Weight for vector similarity (0.0-1.0)
             bm25_weight: Weight for BM25 keyword score (0.0-1.0)
+            deduplicate: If True, keep only best chunk per document (default).
+                        If False, return all chunks with scores.
 
         Returns:
             List of SearchResult objects sorted by relevance
@@ -222,9 +320,9 @@ class SimpleRAG:
         self._validate_search_weights(vector_weight, bm25_weight)
 
         if self._is_hybrid_search(bm25_weight):
-            return self._hybrid_search(query, top_k, vector_weight, bm25_weight)
+            return self._hybrid_search(query, top_k, vector_weight, bm25_weight, deduplicate)
         else:
-            return self._vector_search(query, top_k)
+            return self._vector_search(query, top_k, deduplicate)
 
     def delete_document(self, doc_id: str) -> bool:
         """
@@ -277,14 +375,20 @@ class SimpleRAG:
         """Get a document by ID."""
         return self._documents.get(doc_id)
 
-    def preview_chunking(self, content: str) -> List[dict]:
-        """Preview how content would be chunked."""
+    def preview_chunking(self, content: str, is_html: bool = False) -> List[dict]:
+        """Preview how content would be chunked.
+
+        Args:
+            content: Text content to preview
+            is_html: If True, convert HTML to Markdown before chunking
+        """
         config = self._get_config()
         return preview_chunks(
             content,
             mode=config.chunk_mode,
             chunk_size=config.chunk_size,
-            overlap=config.chunk_overlap
+            overlap=config.chunk_overlap,
+            is_html=is_html
         )
 
     def load_documents_from_dir(self, dir_path: str) -> int:
@@ -378,9 +482,10 @@ class SimpleRAG:
                     if chroma_count == 0 and self._documents:
                         print("[RAG] Warning: ChromaDB empty but documents exist. Rebuilding...")
                         self._rebuild_chroma_from_documents()
-                    elif chroma_count != expected_count:
-                        print(f"[RAG] Warning: ChromaDB count mismatch ({chroma_count} vs {expected_count}). Rebuilding...")
+                    elif chroma_count > expected_count:
+                        print(f"[RAG] Warning: ChromaDB has extra chunks ({chroma_count} vs {expected_count}). Cleaning up...")
                         self._rebuild_chroma_from_documents()
+                    # Note: chroma_count < expected_count is ignored - existing data is valid, just incomplete
                 except Exception as e:
                     print(f"[RAG] Warning: ChromaDB verification failed: {e}. Rebuilding...")
                     self._rebuild_chroma_from_documents()
@@ -410,19 +515,28 @@ class SimpleRAG:
 
     # ──────────────────────── Search Implementation ────────────────────────
 
-    def _vector_search(self, query: str, top_k: int) -> List[SearchResult]:
+    def _vector_search(self, query: str, top_k: int, deduplicate: bool = True) -> List[SearchResult]:
         """Pure vector similarity search."""
         query_embedding = self._embed_texts([query])[0]
 
         results = self._get_chroma_collection().query(
             query_embeddings=[query_embedding],
-            n_results=top_k
+            n_results=top_k,
+            include=["documents"]
         )
 
-        return self._deduplicate_results(
-            results["ids"][0],
-            results.get("distances", [[None]])[0]
-        )[:top_k]
+        if deduplicate:
+            return self._deduplicate_results(
+                results["ids"][0],
+                results.get("distances", [[None]])[0]
+            )[:top_k]
+        else:
+            # Return all chunks without dedup, with chunk content
+            return self._results_from_chroma(
+                results["ids"][0],
+                results.get("distances", [[None]])[0],
+                results.get("documents", [[]])[0]
+            )[:top_k]
 
     def _hybrid_search(
         self,
@@ -430,6 +544,7 @@ class SimpleRAG:
         top_k: int,
         vector_weight: float,
         bm25_weight: float,
+        deduplicate: bool = True,
     ) -> List[SearchResult]:
         """Combine vector and BM25 scores for improved retrieval."""
         # Get vector search candidates (more than needed for scoring)
@@ -437,7 +552,7 @@ class SimpleRAG:
         vector_results = self._get_chroma_collection().query(
             query_embeddings=[query_embedding],
             n_results=self._calculate_hybrid_candidate_count(top_k),
-            include=["distances"]
+            include=["distances", "documents"]
         )
 
         # Get BM25 scores
@@ -465,7 +580,16 @@ class SimpleRAG:
         # Sort and deduplicate
         sorted_ids = sorted(combined.keys(), key=lambda x: combined[x], reverse=True)
         sorted_scores = [combined[cid] for cid in sorted_ids]
-        return self._deduplicate_results(sorted_ids, scores=sorted_scores)[:top_k]
+
+        if deduplicate:
+            return self._deduplicate_results(sorted_ids, scores=sorted_scores)[:top_k]
+        else:
+            # Return all chunks without dedup, with chunk content
+            return self._results_from_chroma(
+                sorted_ids,
+                sorted_scores,
+                vector_results.get("documents", [[]])[0]
+            )[:top_k]
 
     def _compute_bm25_scores(self, query: str) -> Dict[str, float]:
         """Compute BM25 scores and map to document IDs."""
@@ -528,7 +652,44 @@ class SimpleRAG:
             results.append(SearchResult(
                 document=document,
                 score=score,
-                matched_chunk=chunk_id if chunk_id != parent_id else None
+                chunk_id=chunk_id,
+                matched_chunk=chunk_id if chunk_id != parent_id else None,
+                matched_chunk_content=None
+            ))
+
+        return results
+
+    def _results_from_chroma(
+        self,
+        chunk_ids: List[str],
+        scores: List[float],
+        documents: List[str],
+    ) -> List[SearchResult]:
+        """
+        Convert raw ChromaDB results to SearchResult objects without deduplication.
+        Used when deduplicate=False to return all chunks individually.
+
+        Args:
+            chunk_ids: List of chunk IDs from ChromaDB
+            scores: Pre-computed scores for each chunk
+            documents: List of document texts from ChromaDB
+        """
+        results = []
+        for i, chunk_id in enumerate(chunk_ids):
+            parent_id = self._chunk_to_parent.get(chunk_id, chunk_id)
+            document = self._documents.get(parent_id)
+            if document is None:
+                continue
+
+            # Get chunk content from ChromaDB documents list, or fall back to document content
+            chunk_content = documents[i] if documents and i < len(documents) else document.content
+
+            results.append(SearchResult(
+                document=document,
+                score=scores[i] if i < len(scores) else 0.0,
+                chunk_id=chunk_id,
+                matched_chunk=chunk_id if chunk_id != parent_id else None,
+                matched_chunk_content=chunk_content
             ))
 
         return results
@@ -618,8 +779,22 @@ class SimpleRAG:
             print(f"[RAG] Embedding model loaded: {DEFAULT_EMBEDDING_MODEL}")
         return self._embedding_model
 
+    def _get_ollama_client(self):
+        """Lazy initialize Ollama client for embeddings."""
+        if self._ollama_client is None:
+            from microharness.ollama.client import OllamaClient
+            self._ollama_client = OllamaClient(model=DEFAULT_EMBEDDING_MODEL)
+        return self._ollama_client
+
     def _embed_texts(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings for a batch of texts."""
+        """Generate embeddings for a batch of texts. Truncates to 10000 chars per text."""
+        # Truncate each text to avoid Ollama embedding limit
+        MAX_EMBED_CHARS = 10000
+        texts = [t[:MAX_EMBED_CHARS] for t in texts]
+
+        if self._use_ollama:
+            client = self._get_ollama_client()
+            return client.embed_batch(texts)
         model = self._get_embedding_model()
         embeddings = model.encode(texts, show_progress_bar=False)
         return embeddings.tolist()
@@ -690,7 +865,10 @@ class SimpleRAG:
         # Re-add all documents using the fresh collection reference
         if self._documents:
             for doc in self._documents.values():
-                chunks = self._chunk_content(doc.content)
+                # Use stored original chunks if available (from field_llm mode)
+                chunks = doc.metadata.get("_original_chunks")
+                if not chunks:
+                    chunks = self._chunk_content(doc.content)
                 if len(chunks) == 1:
                     self._add_single_chunk(self._collection, doc.doc_id, chunks[0], doc.filename)
                 else:
@@ -778,4 +956,4 @@ class SimpleRAG:
 # ──────────────────────── Global Instance ────────────────────────
 
 # Singleton RAG instance for convenience
-rag = SimpleRAG()
+rag = SimpleRAG(index_dir=str(Path(__file__).parent.parent.parent / "web" / "rag_index"))
