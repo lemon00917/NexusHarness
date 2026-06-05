@@ -55,15 +55,22 @@ def html_to_markdown(html: str) -> str:
 
     try:
         hm = _get_html_to_markdown()
-        # 分片转换，从根源解决大HTML卡死问题
         html_chunks = split_html_by_table(html)
         full_md = ""
+
+        # Timeout protection: each chunk must convert within 5s
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
         for chunk in html_chunks:
-            res = hm.convert(chunk)
-            full_md += res.content + "\n"
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(lambda c=chunk: hm.convert(c))
+                try:
+                    res = future.result(timeout=5)
+                    full_md += res.content + "\n"
+                except FutureTimeout:
+                    # Rust parser hung on this chunk, fall back to pure Python
+                    return _html_to_markdown_fallback(html)
         return full_md.strip()
     except ImportError:
-        # Fallback to regex-based stripping
         return _html_to_markdown_fallback(html)
 
 

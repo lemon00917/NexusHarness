@@ -894,11 +894,15 @@ class SimpleRAG:
     # ──────────────────────── Configuration ────────────────────────
 
     def _get_config(self):
-        """Get cached RAG configuration."""
-        if self._config is None:
-            from .rag_config import load_config
-            self._config = load_config()
+        """Get RAG configuration. Reloads from disk each time to pick up changes."""
+        from .rag_config import load_config
+        self._config = load_config()
         return self._config
+
+    def reload_config(self):
+        """Force reload configuration from disk."""
+        self._config = None
+        return self._get_config()
 
     # ──────────────────────── Utility Methods ────────────────────────
 

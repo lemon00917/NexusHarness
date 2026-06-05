@@ -615,6 +615,53 @@ class RecordFilter:
         """
         return self.rag.load_documents_from_dir(dir_path, visit_id)
 
+    def _validate_judgment(self, result_data: dict, chunks: list, condition: str) -> dict:
+        """Post-validate LLM judgment: if matched=True but no concrete evidence, flip to False."""
+        reason = result_data.get("summary", "")
+        matched_docs = result_data.get("matched_docs", [])
+
+        # Check if reason contains concrete evidence (dates, numbers, specific terms)
+        has_date = bool(re.search(r'\d{4}[-年]\d{1,2}[-月]\d{1,2}', reason))
+        has_number = bool(re.search(r'\d+[天岁次个项]', reason))
+        has_diagnosis = bool(re.search(r'(诊断|确诊|病理|报告|检查).{0,10}(癌|肿瘤|骨折|感染|炎|病)', reason))
+
+        # Collect all chunk text for evidence verification
+        all_chunk_text = " ".join(c.content[:500] for c in chunks)
+
+        # If reason is vague, verify claimed evidence actually exists in chunks
+        if not (has_date or has_number or has_diagnosis):
+            filter_logger.warning(
+                f"[验证] LLM判符合但reason无具体证据: {reason[:100]}"
+            )
+            result_data["matched"] = False
+            result_data["summary"] = f"证据不足（LLM原判: {reason[:100]}）"
+            result_data["matched_docs"] = []
+        else:
+            # Verify claimed evidence exists in chunks
+            evidence_found = False
+            for m in re.finditer(r'\d{4}[-年]\d{1,2}[-月]\d{1,2}', reason):
+                date_str = m.group()
+                if date_str in all_chunk_text:
+                    evidence_found = True
+                    break
+            if not evidence_found and has_number:
+                for m in re.finditer(r'(\d+)([天岁次个项])', reason):
+                    if m.group() in all_chunk_text:
+                        evidence_found = True
+                        break
+            if not evidence_found and has_diagnosis:
+                evidence_found = True  # Diagnostic terms are hard to fake
+
+            if not evidence_found and (has_date or has_number):
+                filter_logger.warning(
+                    f"[验证] LLM声称的证据未在chunks中找到: {reason[:100]}"
+                )
+                result_data["matched"] = False
+                result_data["summary"] = f"声称证据未找到（LLM原判: {reason[:100]}）"
+                result_data["matched_docs"] = []
+
+        return result_data
+
     def _filter_batch_finish(
         self,
         result_data: dict,
@@ -1012,6 +1059,9 @@ class RecordFilter:
             result_data = _try_parse_json(response)
             if result_data.get("summary") == "JSON解析失败":
                 filter_logger.error(f"JSON解析失败，原始响应: {response[:500]}")
+            # Post-validation: if matched=True but reason is vague/unsupported, flip to False
+            if result_data.get("matched"):
+                result_data = self._validate_judgment(result_data, chunks, condition)
         except Exception as e:
             filter_logger.error(f"LLM批量判断失败: {e}")
             result_data = {

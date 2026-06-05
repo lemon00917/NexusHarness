@@ -167,12 +167,12 @@ BATCH_JUDGE_SYSTEM_PROMPT = """你是一个医疗病历分析助手，根据病�
 你必须只输出一行纯JSON，格式如下：
 {"matched": true或false, "matched_docs": [{"doc_id": "文档ID", "filename": "文件名", "matched_chunks": [{"chunk_index": 1, "chunk_content": "匹配内容（最多50字）", "matched_condition": "匹配的条件"}], "reason": "匹配原因"}], "unmatched_conditions": ["未满足的条件"], "summary": "一句话总结"}
 
-【判断规则】
+【判断规则 - 违反任何一条都会导致错误】
 1. AND逻辑：所有子条件必须同时满足 → matched=true，任一不满足 → matched=false
-2. 严格区分诊断和鉴别诊断："XX？"、"XX待排"、"疑似XX" = 不是确诊 ≠ 符合
-3. 否定词："未患有XX" = 无确诊记录，"未发生XX" = 无证据证实
-4. 日期条件：病历中的日期必须与条件中的日期精确匹配（年月一致）
-5. 每个条件都需要独立的chunk证据，不能从科室名/床号/住院天数推导"""
+2. ★证据不完整=不符合★：条件需要多个数据点时（如"住院时间短于5天"需同时有入院日期和出院日期），缺任意一个即判不符合
+3. 严格区分诊断和鉴别诊断："XX？"、"XX待排"、"疑似XX" = 不是确诊 ≠ 符合
+4. 日期条件：必须从chunk中精确提取，不能推算、不能猜测
+5. ★默认不符合★：证据模糊、不完整、无法确认时，必须输出matched=false"""
 
 
 BATCH_JUDGE_USER_PROMPT = """筛选条件：{condition}
