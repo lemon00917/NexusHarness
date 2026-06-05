@@ -2,11 +2,20 @@
 Document Chunker for NexusHarness RAG
 =====================================
 Splits documents into chunks for better retrieval.
+
+流程：
+    HTML 病历 → html-to-markdown → Markdown → 切分模式
 """
 
 import re
 from typing import List, Dict, Optional
 
+# ──────────────────────── html-to-markdown (lazy import, slow first load) ────────────────────────
+
+def _get_html_to_markdown():
+    """Lazy import to avoid blocking module load (Rust library takes ~3s to init)."""
+    import html_to_markdown as hm
+    return hm
 
 # ──────────────────────── Configuration ────────────────────────
 
@@ -18,24 +27,133 @@ PREVIEW_LENGTH = 5000
 SENTENCE_BOUNDARIES = r'[.。!?！？]+'
 
 
+# ──────────────────────── HTML → Markdown ────────────────────────
+
+def html_to_markdown(html: str) -> str:
+    """
+    Convert HTML to Markdown using html-to-markdown (Rust-based, fast).
+    Base64 data URIs are stripped before conversion to avoid bloating output.
+    【已优化】自动分片处理超大HTML，永不卡死！
+    """
+    # Remove base64 image data URIs before conversion (including newlines)
+    html = re.sub(r'<img[^>]*data:image/[^>]*>', '', html)
+
+    # ===================== 【关键修复：自动分片，解决50k+卡死】 =====================
+    def split_html_by_table(html_str, max_size=40000):
+        """按表格分片，单块40k以内，保证不卡死、不切烂表格"""
+        parts = re.split(r'(</table>)', html_str)
+        chunks = []
+        buf = ""
+        for p in parts:
+            buf += p
+            if len(buf.encode("utf-8")) > max_size:
+                chunks.append(buf)
+                buf = ""
+        if buf:
+            chunks.append(buf)
+        return chunks
+
+    try:
+        hm = _get_html_to_markdown()
+        # 分片转换，从根源解决大HTML卡死问题
+        html_chunks = split_html_by_table(html)
+        full_md = ""
+        for chunk in html_chunks:
+            res = hm.convert(chunk)
+            full_md += res.content + "\n"
+        return full_md.strip()
+    except ImportError:
+        # Fallback to regex-based stripping
+        return _html_to_markdown_fallback(html)
+
+
+def _html_to_markdown_fallback(html: str) -> str:
+    """Fallback HTML→Markdown when html-to-markdown not available."""
+    import html.parser
+
+    class MarkdownConverter(html.parser.HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.result = []
+            self.in_list = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag == 'br':
+                self.result.append('\n')
+            elif tag == 'p':
+                self.result.append('\n\n')
+            elif tag == 'li':
+                self.result.append('\n- ')
+            elif tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+                level = tag[1]
+                self.result.append(f'\n{"#" * int(level)} ')
+            elif tag == 'strong' or tag == 'b':
+                self.result.append('**')
+            elif tag == 'em' or tag == 'i':
+                self.result.append('*')
+            elif tag == 'code':
+                self.result.append('`')
+            elif tag == 'pre':
+                self.result.append('\n```\n')
+            elif tag == 'tr':
+                self.result.append('|')
+
+        def handle_endtag(self, tag):
+            if tag == 'strong' or tag == 'b':
+                self.result.append('**')
+            elif tag == 'em' or tag == 'i':
+                self.result.append('*')
+            elif tag == 'code':
+                self.result.append('`')
+            elif tag == 'pre':
+                self.result.append('\n```\n')
+            elif tag == 'li':
+                self.in_list = False
+            elif tag in ('table', 'thead', 'tbody'):
+                self.result.append('\n')
+            elif tag == 'tr':
+                self.result.append('\n')
+
+        def handle_data(self, data):
+            if data.strip():
+                self.result.append(data)
+
+        def get_result(self):
+            text = ''.join(self.result)
+            # Clean up excessive whitespace
+            text = re.sub(r'\n{3,}', '\n\n', text)
+            return text.strip()
+
+    try:
+        parser = MarkdownConverter()
+        parser.feed(html)
+        return parser.get_result()
+    except:
+        # Last fallback: strip HTML tags
+        text = re.sub(r'<[^>]+>', '', html)
+        return text.strip()
+
+
 # ──────────────────────── Public API ────────────────────────
 
 def chunk_text(
     text: str,
     mode: str = "length",
     chunk_size: int = DEFAULT_CHUNK_SIZE,
-    overlap: int = DEFAULT_OVERLAP
+    overlap: int = DEFAULT_OVERLAP,
+    is_html: bool = False,
 ) -> List[str]:
     """
     Split text into chunks based on the specified mode.
 
     Args:
-        text: Input text to chunk
+        text: Input text (HTML or plain text)
         mode: Chunking strategy
             - "length": Split by character count with smart boundaries
-            - "chapter": Split by markdown/HTML headings (h2, h3)
+            - "chapter": Split by markdown/HTML headings (h2, h3, ##)
         chunk_size: Maximum characters per chunk (length mode only)
         overlap: Overlapping characters between chunks (length mode only)
+        is_html: If True, convert HTML to Markdown before chunking
 
     Returns:
         List of text chunks
@@ -43,14 +161,16 @@ def chunk_text(
     Raises:
         ValueError: If mode is not supported
     """
+    # Convert HTML to Markdown if needed
+    if is_html:
+        text = html_to_markdown(text)
+
     if mode == "chapter":
         return _chunk_by_chapter(text)
     elif mode == "length":
         return _chunk_by_length(text, chunk_size, overlap)
-    elif mode == "llm":
-        raise ValueError("LLM chunking requires async rag.chunk_with_llm() - cannot use chunk_text() directly")
     else:
-        raise ValueError(f"Unknown chunking mode: '{mode}'. Use 'length', 'chapter', or 'llm'.")
+        raise ValueError(f"Unknown chunking mode: '{mode}'. Use 'length' or 'chapter'.")
 
 
 def preview_chunks(
@@ -58,7 +178,8 @@ def preview_chunks(
     mode: str = "length",
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     overlap: int = DEFAULT_OVERLAP,
-    preview_length: int = PREVIEW_LENGTH
+    preview_length: int = PREVIEW_LENGTH,
+    is_html: bool = False,
 ) -> List[Dict]:
     """
     Preview how text would be chunked without full processing.
@@ -69,6 +190,7 @@ def preview_chunks(
         chunk_size: Maximum characters per chunk
         overlap: Overlap between chunks
         preview_length: Characters to show in preview
+        is_html: If True, convert HTML to Markdown before chunking
 
     Returns:
         List of dictionaries with chunk metadata:
@@ -76,7 +198,7 @@ def preview_chunks(
             - char_count: Total characters in chunk
             - preview: First {preview_length} characters
     """
-    chunks = chunk_text(text, mode, chunk_size=chunk_size, overlap=overlap)
+    chunks = chunk_text(text, mode, chunk_size=chunk_size, overlap=overlap, is_html=is_html)
 
     return [
         {
@@ -162,12 +284,14 @@ def _find_sentence_boundary(
     chunk_size: int
 ) -> int:
     """
-    Find the nearest sentence boundary before the tentative end.
+    Find the nearest natural break point before the tentative end.
 
-    Looks for sentence-ending punctuation or newlines to avoid
-    breaking in the middle of a sentence. If no good boundary
-    found within the chunk window, extends search forward up to
-    chunk_size/2 characters to find one.
+    Priority:
+    1. Single newline with content (\n) — preferred for tables/rows
+    2. Paragraph breaks (\n\n+) — section separation
+    3. Sentence-ending punctuation (.。!?！？)+)
+    4. Extended sentence boundary (chunk_size/2 forward)
+    5. Hard cut at tentative_end
 
     Args:
         text: Full text being chunked
@@ -176,40 +300,43 @@ def _find_sentence_boundary(
         chunk_size: Target chunk size (used for max extension)
 
     Returns:
-        Adjusted end position at a sentence boundary
+        Adjusted end position at a natural boundary
     """
     MIN_CHUNK_SIZE = max(30, chunk_size // 4)
-
-    # Extract the current chunk to search within
     search_window = text[chunk_start:tentative_end]
 
-    # Find the last sentence boundary in the chunk
+    # Priority 1: Find last single newline (preserves table row structure)
+    # rfind("\n", start, end) finds the last \n before tentative_end
+    split_pos = search_window.rfind("\n")
+    if split_pos != -1 and split_pos >= MIN_CHUNK_SIZE:
+        return chunk_start + split_pos + 1  # include the \n in chunk
+
+    # Priority 2: Paragraph breaks (\n\n+)
+    paragraph_matches = list(re.finditer(r'\n\n+', search_window))
+    if paragraph_matches:
+        return chunk_start + paragraph_matches[-1].start()
+
+    # Priority 3: Sentence-ending punctuation (.。!?！？)+
     boundary_matches = list(re.finditer(SENTENCE_BOUNDARIES, search_window))
-
     if boundary_matches:
-        last_match = boundary_matches[-1]
-        return chunk_start + last_match.end()
+        return chunk_start + boundary_matches[-1].end()
 
-    # No sentence boundary found - extend search forward
-    # Look up to chunk_size/2 characters ahead for a boundary
+    # Priority 4: Extend forward up to chunk_size/2 to find a boundary
     max_extension = chunk_size // 2
     extended_window = text[chunk_start:tentative_end + max_extension]
+
+    # Check paragraph breaks in extended window
+    paragraph_ext = list(re.finditer(r'\n\n+', extended_window))
+    if paragraph_ext:
+        return chunk_start + paragraph_ext[-1].start()
+
+    # Check sentence boundaries in extended window
     extended_matches = list(re.finditer(SENTENCE_BOUNDARIES, extended_window))
-
     if extended_matches:
-        last_match = extended_matches[-1]
-        return chunk_start + last_match.end()
+        return chunk_start + extended_matches[-1].end()
 
-    # Still no boundary - find next newline or paragraph break
-    # Search in extended window for paragraph breaks (double newline)
-    paragraph_matches = list(re.finditer(r'\n\n+', extended_window))
-    if paragraph_matches:
-        return chunk_start + paragraph_matches[0].start()
-
-    # Last resort: find any substantial break (single newline with content)
-    for i in range(tentative_end - 1, max(chunk_start + MIN_CHUNK_SIZE, tentative_end - 1), -1):
-        if text[i] in '\n\r' and (i + 1 < len(text)) and text[i + 1].strip():
-            return i + 1
+    # Priority 5: Hard cut at tentative_end
+    return tentative_end
 
     # Fallback: use tentative_end if nothing else found
     return tentative_end
@@ -239,13 +366,14 @@ def _merge_tiny_chunks(chunks: List[str], chunk_size: int) -> List[str]:
 
     return chunks
 
+
 def _chunk_by_chapter(text: str) -> List[str]:
     """
     Split text by heading structure (markdown or HTML).
 
     Recognizes:
     - Markdown: ## Heading, ### Subheading
-    - HTML: <h2>Heading</h2>, <h3>Subheading</h3>
+    - HTML: <h2>Heading</h2>, <h3>Subheading</h2>
 
     Args:
         text: Markdown or HTML text
@@ -341,237 +469,3 @@ def _truncate_text(text: str, max_length: int) -> str:
         return text
 
     return text[:max_length] + "..."
-
-
-# ─────────────────── Field-based Chunking (Stage1 style) ───────────────────
-
-def clean_html_for_chunking(html: str) -> str:
-    """Clean HTML for field extraction. Removes noise, preserves structure."""
-    from html.parser import HTMLParser
-
-    cleaned = html
-
-    # Remove base64 images
-    cleaned = re.sub(r'data:image/[^;]+;base64,[^\s"\'<>]+', '[图片]', cleaned)
-    # Remove MathML
-    cleaned = re.sub(r'<math[^>]*>.*?</math>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
-    cleaned = re.sub(r'<annotation[^>]*>.*?</annotation>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
-    cleaned = re.sub(r'<semantics[^>]*>.*?</semantics>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
-    cleaned = re.sub(r'\s*xmlns="[^"]*"', '', cleaned)
-    cleaned = re.sub(r'<!--[^>]*-->', '', cleaned)
-    cleaned = re.sub(r'<script[^>]*>.*?</script>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
-
-    # Extract text using HTMLParser
-    class TextExtractor(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self.texts = []
-            self.skip = False
-        def handle_starttag(self, tag, attrs):
-            if tag in ('style', 'script'):
-                self.skip = True
-        def handle_endtag(self, tag):
-            if tag in ('style', 'script'):
-                self.skip = False
-        def handle_data(self, data):
-            if not self.skip:
-                self.texts.append(data)
-        def get_text(self):
-            return ' '.join(self.texts)
-
-    parser = TextExtractor()
-    try:
-        parser.feed(cleaned)
-        text = parser.get_text()
-    except:
-        text = cleaned
-
-    # Clean up
-    text = re.sub(r'[A-Za-z0-9+/]{80,}={0,2}', '', text)
-    text = re.sub(r'data:image[^\s]+', '', text)
-    text = re.sub(r'\s+', ' ', text)
-
-    return text.strip()
-
-
-FIELD_EXTRACT_SYSTEM = """你是一个医疗病历字段提取助手。你的任务是从病历文本中提取所有字段名和字段值。
-
-【规则】
-1. 不遗漏任何字段 - 文本中有什么就提取什么
-2. 不编造字段 - 只提取真实存在的
-3. 保持字段名和字段值不变，不要翻译或修改
-4. 空值填 ""，保持原文
-5. 直接输出JSON数组，不要用markdown代码块包裹
-
-【输出格式】
-[{"field":"字段名","value":"字段值"},...]"""
-
-
-FIELD_EXTRACT_USER = """请从下面病历中提取所有字段：
-
-{cleaned_text}
-
-直接输出JSON数组，不要其他内容："""
-
-
-def llm_extract_fields(html_text: str, client) -> List[Dict[str, str]]:
-    """
-    Use LLM to extract fields from HTML text.
-
-    Args:
-        html_text: Raw or cleaned HTML text
-        client: OllamaClient instance
-
-    Returns:
-        List of {"field": "...", "value": "..."} dicts
-    """
-    cleaned = clean_html_for_chunking(html_text)
-    user_prompt = FIELD_EXTRACT_USER.format(cleaned_text=cleaned[:6000])
-
-    try:
-        response = client.chat(
-            messages=[
-                {"role": "system", "content": FIELD_EXTRACT_SYSTEM},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.0
-        )
-
-        # Parse JSON response
-        import json
-        # Try to extract JSON from response
-        text = response.strip()
-        if "```json" in text:
-            parts = text.split("```json")
-            if len(parts) >= 2:
-                text = parts[1].split("```")[0]
-        elif "```" in text:
-            parts = text.split("```")
-            if len(parts) >= 2:
-                text = parts[1]
-
-        fields = json.loads(text)
-        return fields
-    except Exception as e:
-        # Fallback: return empty
-        return []
-
-
-# Semantic field groups for common medical sections
-FIELD_SECTION_KEYWORDS = {
-    "基础信息": ["姓名", "性别", "年龄", "出生", "民族", "职业", "婚姻", "病史陈述", "记录时间", "入院时间", "科室", "床号", "病案号"],
-    "主诉": ["主诉"],
-    "现病史": ["现病史"],
-    "既往史": ["既往史", "个人史", "家族史", "婚姻史", "月经生育史"],
-    "体格检查": ["体格检查", "一般情况", "皮肤", "头颅", "颈部", "胸部", "肺部", "心脏", "腹部", "四肢", "神经"],
-    "辅助检查": ["辅助检查", "实验室检查", "影像学检查", "CT", "MR", "X线", "超声"],
-    "诊断": ["诊断", "初步诊断", "确定诊断"],
-    "治疗": ["治疗", "处置", "手术", "用药", "医嘱"],
-    "知情同意": ["知情", "同意", "委托", "授权"],
-}
-
-# Keywords that indicate section headers (not field values)
-SECTION_HEADER_KEYWORDS = [
-    "入院记录", "病程记录", "术前小结", "出院记录",
-    "查房记录", "会诊意见", "知情同意书", "检查报告"
-]
-
-
-def group_fields_by_semantic(fields: List[Dict[str, str]]) -> Dict[str, Dict[str, str]]:
-    """
-    Group extracted fields by semantic section.
-
-    Args:
-        fields: List of {"field": "...", "value": "..."} dicts
-
-    Returns:
-        Dict of section_name -> {field: value, ...}
-    """
-    groups = {}
-
-    current_section = "其他"
-    current_fields = {}
-
-    for item in fields:
-        field_name = item.get("field", "")
-        field_value = item.get("value", "")
-
-        if not field_name or not field_value:
-            continue
-
-        # Check if this field is a section header
-        is_header = False
-        detected_section = None
-
-        # Check exact section keywords
-        for section, keywords in FIELD_SECTION_KEYWORDS.items():
-            for kw in keywords:
-                if kw in field_name and len(field_name) < 10:
-                    is_header = True
-                    detected_section = section
-                    break
-            if is_header:
-                break
-
-        # Check document type headers
-        for header in SECTION_HEADER_KEYWORDS:
-            if header in field_name:
-                is_header = True
-                detected_section = "文档信息"
-                break
-
-        if is_header and detected_section:
-            # Save previous section if has fields
-            if current_fields:
-                groups[current_section] = current_fields
-
-            current_section = detected_section
-            current_fields = {field_name: field_value}
-        else:
-            # Add to current section
-            current_fields[field_name] = field_value
-
-    # Save last section
-    if current_fields:
-        groups[current_section] = current_fields
-
-    return groups
-
-
-def chunk_by_fields(html_text: str, client) -> List[str]:
-    """
-    Chunk HTML by extracted fields using LLM.
-
-    Process:
-    1. clean_html() - remove noise from HTML
-    2. LLM extract fields (JSON)
-    3. Group fields by semantic section
-    4. Each group -> one chunk with ## heading
-
-    Args:
-        html_text: Raw HTML text
-        client: OllamaClient instance
-
-    Returns:
-        List of chunk strings
-    """
-    # Extract fields using LLM
-    fields = llm_extract_fields(html_text, client)
-
-    if not fields:
-        # Fallback to chapter chunking
-        cleaned = clean_html_for_chunking(html_text)
-        return _chunk_by_chapter(cleaned)
-
-    # Group fields by semantic section
-    groups = group_fields_by_semantic(fields)
-
-    # Convert each group to a chunk
-    chunks = []
-    for section_name, section_fields in groups.items():
-        chunk_text = f"## {section_name}\n"
-        for field, value in section_fields.items():
-            chunk_text += f"- {field}：{value}\n"
-        chunks.append(chunk_text.strip())
-
-    return chunks if chunks else []

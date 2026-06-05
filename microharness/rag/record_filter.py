@@ -43,6 +43,15 @@ class _SearchChunkWrapper:
     content: str
     filename: str
     score: float
+    chunk_id: Optional[str] = None  # ChromaDB chunk ID (doc_id_chunk_N)
+    visit_id: Optional[str] = None
+
+
+from pathlib import Path as PathFn
+
+def _get_record_filter_index_dir():
+    """Get absolute path for rag_index, resolved relative to record_filter.py location."""
+    return str(PathFn(__file__).parent.parent.parent / "web" / "rag_index")
 
 
 class RecordFilter:
@@ -58,7 +67,7 @@ class RecordFilter:
 
     def __init__(
         self,
-        index_dir: str = "cache/rag_index",
+        index_dir: str = _get_record_filter_index_dir(),
         collection_name: str = "medical_records",
         ollama_client: Optional[OllamaClient] = None,
         retrieval_top_k: int = 100,
@@ -149,8 +158,7 @@ class RecordFilter:
             query=enhanced_query,
             top_k=self.retrieval_top_k,
             vector_weight=self.vector_weight,
-            bm25_weight=self.bm25_weight,
-            visit_id=visit_id
+            bm25_weight=self.bm25_weight
         )
         step3_duration = (time.time() - step3_start) * 1000
         filter_logger.info(f"[Step 3/4] 检索完成 | 候选: {len(candidates)} | 耗时: {step3_duration:.0f}ms")
@@ -299,7 +307,7 @@ class RecordFilter:
     def _build_enhanced_query_simple(self, original: str, parsed: ParsedCondition) -> str:
         """Simple string-join approach."""
         enhanced_parts = [original]
-        if parsed.keywords:
+        if parsed and parsed.keywords:
             enhanced_parts.extend(parsed.keywords[:8])
         return " ".join(enhanced_parts)
 
@@ -352,8 +360,11 @@ class RecordFilter:
         Returns:
             FilterResult with matched=True/False
         """
-        # 使用检索到的chunk内容判断，如果没有则用文档内容
-        retrieved_chunk = candidate.matched_chunk_content or candidate.document.content
+        # 使用检索到的chunk内容判断（通过matched_chunk获取实际chunk内容）
+        if candidate.matched_chunk and candidate.matched_chunk in candidate.document.metadata.get("_chunk_contents", {}):
+            retrieved_chunk = candidate.document.metadata["_chunk_contents"][candidate.matched_chunk]
+        else:
+            retrieved_chunk = candidate.document.content
         # 使用chunk内容（限制长度避免过长）
         content_for_judge = retrieved_chunk[:2000] if retrieved_chunk else candidate.document.content[:2000]
 
@@ -431,6 +442,40 @@ class RecordFilter:
         """
         return self.rag.load_documents_from_dir(dir_path, visit_id)
 
+    def _filter_batch_finish(
+        self,
+        result_data: dict,
+        enhanced_query: str,
+        step1_duration: float,
+        step_retrieve_duration: float,
+        start_time: float,
+        chunks: list,
+    ) -> dict:
+        """Shared finish logic for filter_batch results."""
+        total_duration = (time.time() - start_time) * 1000
+        filter_logger.info(f"批量筛选完成 | 匹配: {result_data.get('matched', False)} | 总耗时: {total_duration:.0f}ms")
+        filter_logger.info(f"=" * 50)
+
+        result_data["enhanced_query"] = enhanced_query
+        result_data["enhance_query_mode"] = self.enhance_query_mode
+        result_data["step_timings"] = {
+            "step1_enhance_ms": step1_duration,
+            "step2_retrieve_ms": step_retrieve_duration,
+            "step3_judge_ms": (time.time() - start_time) * 1000 - step1_duration - step_retrieve_duration,
+            "total_ms": total_duration
+        }
+        result_data["all_chunks"] = [
+            {
+                "chunk_index": i + 1,
+                "chunk_id": getattr(c, 'chunk_id', c.filename),
+                "filename": c.filename,
+                "score": round(c.score, 4),
+                "content_preview": c.content[:1000]
+            }
+            for i, c in enumerate(chunks)
+        ]
+        return result_data
+
     def list_records(self) -> List[dict]:
         """List all indexed records."""
         return self.rag.list_documents()
@@ -441,6 +486,7 @@ class RecordFilter:
         visit_id: Optional[str] = None,
         top_k: int = 20,
         score_threshold: float = 0.0,
+        merge_mode: str = "combined",
     ) -> dict:
         """
         Batch filter: retrieve chunks then judge all together.
@@ -449,13 +495,16 @@ class RecordFilter:
             Step 1: Parse condition with LLM (extract keywords/summary)
             Step 2: Build enhanced query from original + parsed keywords
             Step 3: Retrieve top-k chunks via RAG (no dedup, keeping all chunks)
-            Step 4: Send ALL chunks to LLM for batch judgment
+            Step 4: Group chunks by visit_id (if merge_mode="combined")
+            Step 5: Send chunks to LLM for batch judgment
 
         Args:
             condition: Natural language filter condition
             visit_id: Optional visit/patient ID to filter documents
             top_k: Number of chunks to retrieve for batch judgment
             score_threshold: Minimum vector similarity score (0.0-1.0) to include chunk
+            merge_mode: "combined" = merge same visit_id chunks before LLM judgment,
+                       "per_doc" = judge each chunk independently
 
         Returns:
             Dict with matched status, matched docs info, and summary
@@ -490,11 +539,19 @@ class RecordFilter:
             query=enhanced_query,
             top_k=top_k,
             vector_weight=self.vector_weight,
-            bm25_weight=self.bm25_weight
+            bm25_weight=self.bm25_weight,
+            deduplicate=False  # 返回所有chunks不过去重，用于all_chunks显示
         )
-        # 适配 search() 返回 SearchResult[document, score, matched_chunk] → 同 filter() 格式
+        # 适配 search() 返回 SearchResult → _SearchChunkWrapper 格式
+        # 优先使用 matched_chunk_content（ChromaDB原始chunk内容），否则用 document.content
         chunks = [
-            _SearchChunkWrapper(r.document.content, r.document.filename, r.score)
+            _SearchChunkWrapper(
+                content=r.matched_chunk_content or r.document.content,
+                filename=r.document.filename,
+                score=r.score,
+                chunk_id=r.chunk_id,  # ChromaDB chunk ID (doc_id_chunk_N)
+                visit_id=r.document.metadata.get("visit_id")
+            )
             for r in results
         ]
         step_retrieve_duration = (time.time() - step_retrieve_start) * 1000
@@ -524,23 +581,84 @@ class RecordFilter:
                 "summary": "无相关文档"
             }
 
-        # ========== Step 4: LLM批量判断 ==========
-        # 构建文档列表字符串（包含chunk索引供LLM引用）
-        docs_text = ""
-        for i, chunk in enumerate(chunks):
-            docs_text += f"\n--- Chunk{i+1} ---\n"
-            docs_text += f"[文件名: {chunk.filename}]\n"
-            docs_text += f"[Chunk索引: {i+1}]\n"
-            docs_text += f"[内容]\n{chunk.content[:2000]}\n"
+        # ========== Step 4: 构建判断文本 ==========
+        # per_doc = 每个文档各自的 chunks 拼接后独立 LLM 判断
+        # combined = 所有文档所有 chunks 合并后一次 LLM 判断
+        if merge_mode == "per_doc":
+            # 按 (visit_id, filename) 分组，每个文档单独判断
+            from collections import defaultdict
+            doc_groups = defaultdict(list)
+            for chunk in chunks:
+                key = (chunk.visit_id or "_unknown_", chunk.filename)
+                doc_groups[key].append(chunk)
 
-        from microharness.ollama.prompts import format_batch_judge_prompt
-        system_prompt, user_prompt = format_batch_judge_prompt(condition, docs_text)
+            # 每个文档的 chunks 拼接成一份文本
+            doc_texts = []
+            for (vid, fname), doc_chunks in doc_groups.items():
+                text = f"[就诊号: {vid}]\n[文档: {fname}]\n"
+                for c in doc_chunks:
+                    text += f"【{c.filename}】\n{c.content[:3000]}\n\n"
+                doc_texts.append((vid, fname, text))
+            filter_logger.info(f"[Step 4/5] per_doc模式 | 文档数: {len(doc_texts)}")
+        else:
+            # combined: 先按文档合并chunks，再汇总所有文档
+            from collections import defaultdict
+            visit_groups = defaultdict(list)
+            for chunk in chunks:
+                vid = chunk.visit_id or "_unknown_"
+                visit_groups[vid].append(chunk)
+            doc_texts = None
+            docs_text = ""
+            for i, (vid, group_chunks) in enumerate(visit_groups.items()):
+                # 按文档名合并chunks
+                from collections import defaultdict
+                doc_contents = defaultdict(list)
+                for chunk in group_chunks:
+                    doc_contents[chunk.filename].append(chunk)
+                docs_text += f"\n=== 患者/就诊记录 {i+1} | 就诊号: {vid} ===\n"
+                for fname, file_chunks in doc_contents.items():
+                    merged = "\n".join(c.content[:3000] for c in file_chunks)
+                    docs_text += f"【{fname}】\n{merged}\n\n"
+            filter_logger.info(f"[Step 4/5] combined模式 | 患者数: {len(visit_groups)}")
 
+        # ========== Step 5: LLM批量判断 ==========
         try:
-            response = self.ollama.chat(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+            from microharness.ollama.prompts import format_batch_judge_prompt
+            if merge_mode == "per_doc":
+                # 每个文档单独调用 LLM
+                doc_results = []
+                for vid, fname, text in doc_texts:
+                    system_prompt, user_prompt = format_batch_judge_prompt(condition, text)
+                    response = self.ollama.chat(
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        temperature=0.1
+                    )
+                    try:
+                        rd = json.loads(response.strip())
+                    except Exception:
+                        rd = {"matched": False, "summary": f"解析失败: {response[:100]}"}
+                    doc_results.append({"visit_id": vid, "filename": fname, "result": rd})
+                    filter_logger.info(f"  文档 {fname}: matched={rd.get('matched')}")
+
+                # 汇总：任一文档 matched=True 则整体 matched
+                any_matched = any(r["result"].get("matched") for r in doc_results)
+                result_data = {
+                    "matched": any_matched,
+                    "matched_docs": [r for r in doc_results if r["result"].get("matched")],
+                    "summary": f"per_doc模式：{len(doc_results)}个文档，{'有' if any_matched else '无'}匹配"
+                }
+                # 直接跳到汇总步骤，避免执行 combined 模式的 response 解析代码
+                return self._filter_batch_finish(result_data, enhanced_query, step1_duration, step_retrieve_duration, start_time, chunks)
+            else:
+                # combined: 一次调用
+                system_prompt, user_prompt = format_batch_judge_prompt(condition, docs_text)
+                response = self.ollama.chat(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.1
             )
@@ -593,7 +711,6 @@ class RecordFilter:
                             "matched_docs": [],
                             "summary": f"JSON解析失败: {str(je)[:100]}"
                         }
-
         except Exception as e:
             filter_logger.error(f"LLM批量判断失败: {e}")
             result_data = {
@@ -625,7 +742,7 @@ class RecordFilter:
                 "chunk_id": getattr(c, 'chunk_id', c.filename),  # 兼容 SearchResult 和 _SearchChunkWrapper
                 "filename": c.filename,
                 "score": round(c.score, 4),
-                "content_preview": c.content[:200]
+                "content_preview": c.content[:1000]
             }
             for i, c in enumerate(chunks)
         ]

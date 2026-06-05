@@ -351,45 +351,42 @@
         </div>
 
         <div class="upload-section">
-            <h3>上传文档</h3>
+            <h3>📤 上传文档</h3>
             <div id="currentConfig" style="font-size:12px;color:var(--text-dim);margin-bottom:10px;padding:8px;background:var(--bg-tertiary);border-radius:6px;">
                 <span id="configLoading">加载配置中...</span>
             </div>
+
+            <!-- 上传流程说明 -->
+            <div style="margin:12px 0;padding:10px;background:rgba(74, 158, 255, 0.08);border-radius:8px;border-left:3px solid var(--accent-blue);font-size:12px;color:var(--text-secondary);">
+                <div style="margin-bottom:6px;color:var(--text);font-weight:bold;">📋 上传流程</div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span style="background:var(--accent-blue);color:white;padding:2px 8px;border-radius:4px;font-size:11px;">1</span>
+                    <span>HTML 病历</span>
+                    <span style="color:var(--accent-green);">→</span>
+                    <span style="background:var(--accent-green);color:white;padding:2px 8px;border-radius:4px;font-size:11px;">html-to-markdown</span>
+                    <span style="color:var(--accent-green);">→</span>
+                    <span>Markdown</span>
+                    <span style="color:var(--accent-green);">→</span>
+                    <span style="background:var(--accent-yellow);color:black;padding:2px 8px;border-radius:4px;font-size:11px;" id="chunkModeLabel">切分</span>
+                </div>
+            </div>
+
             <div class="upload-form">
                 <input type="file" id="fileInput" accept=".txt,.md,.json,.py,.js,.html,.css">
                 <input type="text" id="visitIdInput" placeholder="就诊号（必填）" required style="padding:8px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text);">
                 <input type="text" id="descInput" placeholder="文档描述（可选）">
-                <select id="previewMode" style="padding:6px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text);">
-                    <option value="llm">标题标注模式</option>
-                    <option value="field_llm">字段提取模式</option>
-                </select>
-                <select id="previewModel" style="padding:6px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text);">
-                    <option value="qwen2.5:7b">qwen2.5:7b</option>
-                    <option value="qwen2:7b-instruct">qwen2:7b-instruct</option>
-                    <option value="medaibase/medgemma1.5:4b">medaibase/medgemma1.5:4b</option>
-                    <option value="llama3:8b">llama3:8b</option>
-                </select>
-                <button onclick="previewHtmlConversion()" style="padding:10px 16px;border:none;border-radius:6px;background:rgba(74, 222, 128, 0.15);color:var(--accent-green);cursor:pointer;">🔍 预览转换</button>
-                <button onclick="previewFileChunks()" style="padding:10px 16px;border:none;border-radius:6px;background:var(--bg-tertiary);color:var(--text);cursor:pointer;">📋 预览分块</button>
+                <button onclick="previewMarkdown()" style="padding:10px 16px;border:none;border-radius:6px;background:rgba(74, 222, 128, 0.15);color:var(--accent-green);cursor:pointer;">📄 转Markdown</button>
+                <button onclick="previewFileChunks()" style="padding:10px 16px;border:none;border-radius:6px;background:rgba(74, 158, 255, 0.15);color:var(--accent-blue);cursor:pointer;">📋 预览分块</button>
                 <button onclick="uploadDocument()" style="padding:10px 20px;border:none;border-radius:6px;background:var(--accent-blue);color:white;cursor:pointer;">上传</button>
             </div>
             <p style="font-size:11px;color:var(--text-dim);margin-top:10px;">支持格式: txt, md, json, py, js, html, css</p>
 
-            <div id="llmPreviewSection" style="display:none;margin-top:15px;padding:12px;background:var(--bg-tertiary);border-radius:8px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                    <strong>📄 HTML 转 Markdown 结果</strong>
-                    <button onclick="document.getElementById('llmPreviewSection').style.display='none'" style="background:none;border:none;color:var(--text-dim);cursor:pointer;">✕</button>
-                </div>
-                <div id="llmStructuredContent" style="max-height:400px;overflow-y:auto;white-space:pre-wrap;font-size:13px;padding:10px;background:var(--bg-primary);border-radius:6px;margin-bottom:10px;line-height:1.6;"></div>
-                <div id="llmChunkList" style="font-size:12px;color:var(--text-dim);"></div>
-            </div>
-
             <div id="previewSection" style="display:none;margin-top:15px;padding:12px;background:var(--bg-tertiary);border-radius:8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                    <strong>📋 分块预览</strong>
+                    <strong id="previewTitle">📋 预览</strong>
                     <button onclick="document.getElementById('previewSection').style.display='none'" style="background:none;border:none;color:var(--text-dim);cursor:pointer;">✕</button>
                 </div>
-                <div id="previewChunks" style="max-height:300px;overflow-y:auto;"></div>
+                <div id="previewChunks" style="max-height:500px;overflow-y:auto;"></div>
             </div>
         </div>
 
@@ -453,6 +450,10 @@
                             <option value="reader-lm:1.5b-q4_0">reader-lm:1.5b-q4_0</option>
                             <option value="qwen2.5:7b">qwen2.5:7b</option>
                         </select>
+                        <select id="mergeModeSelect" title="合并模式" style="padding:8px 12px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:13px;min-width:120px;">
+                            <option value="combined">📋 按患者合并</option>
+                            <option value="per_doc">📄 按文档独立</option>
+                        </select>
                         <label style="font-size:12px;color:var(--text-dim);cursor:pointer;white-space:nowrap;"><input type="checkbox" id="filterShowScore" style="margin-right:4px;">显示分数</label>
                     </div>
                 </div>
@@ -482,20 +483,27 @@
             try {
                 const res = await fetch('/api/rag/config');
                 const config = await res.json();
+                const validModes = ['length', 'chapter'];
+                const chunkMode = validModes.includes(config.chunk_mode) ? config.chunk_mode : 'length';
                 const modeMap = {
                     'length': '按长度',
-                    'chapter': '按章节 (h2/h3)',
-                    'llm': 'LLM 智能分块',
-                    'field_llm': '字段智能分块'
+                    'chapter': '按章节'
                 };
-                const modeText = modeMap[config.chunk_mode] || config.chunk_mode;
-                const sizeInfo = config.chunk_mode === 'chapter' || config.chunk_mode === 'llm' || config.chunk_mode === 'field_llm'
+                const modeText = modeMap[chunkMode] || config.chunk_mode;
+                const sizeInfo = chunkMode === 'chapter'
                     ? ''
                     : ` | chunk_size: <strong>${config.chunk_size}</strong> | overlap: <strong>${config.chunk_overlap}</strong>`;
                 document.getElementById('configLoading').innerHTML = `
                     当前分块配置: <strong>${modeText}</strong>${sizeInfo} |
                     <a href="/rag_config" style="color:var(--accent-blue);">去配置</a>
                 `;
+                // 更新上传流程中的切分模式标签
+                const chunkModeLabel = document.getElementById('chunkModeLabel');
+                if (chunkModeLabel) {
+                    chunkModeLabel.textContent = chunkMode === 'chapter' ? '按章节' : '按长度';
+                    chunkModeLabel.style.background = chunkMode === 'chapter' ? 'var(--accent-green)' : 'var(--accent-yellow)';
+                    chunkModeLabel.style.color = chunkMode === 'chapter' ? 'white' : 'black';
+                }
             } catch (e) {
                 document.getElementById('configLoading').textContent = '配置加载失败';
             }
@@ -587,7 +595,13 @@
             `).join('');
         }
 
+        // previewHtmlConversion 已移除 - HTML 转 Markdown 已整合到上传流程
+        // 保留函数定义避免 JS 错误
         async function previewHtmlConversion() {
+            showToast('HTML 转 Markdown 已整合到上传流程', 'info');
+        }
+
+        async function previewMarkdown() {
             const fileInput = document.getElementById('fileInput');
             if (!fileInput.files.length) {
                 showToast('请先选择文件', 'error');
@@ -595,62 +609,45 @@
             }
 
             const file = fileInput.files[0];
-            const previewMode = document.getElementById('previewMode').value;
-            const modelSelect = document.getElementById('previewModel')?.value || '';
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                const text = e.target.result;
+                try {
+                    const res = await fetch('/api/rag/preview_chunk', {
+                        method: 'POST',
+                        body: JSON.stringify({ text: text, filename: file.name }),
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    const data = await res.json();
 
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('mode', previewMode);
-            if (modelSelect) formData.append('model', modelSelect);
+                    const previewSection = document.getElementById('previewSection');
+                    const chunksDiv = document.getElementById('previewChunks');
+                    const previewTitle = document.getElementById('previewTitle');
 
-            const section = document.getElementById('llmPreviewSection');
-            const contentDiv = document.getElementById('llmStructuredContent');
-            const chunkList = document.getElementById('llmChunkList');
+                    previewTitle.textContent = '📄 Markdown 预览';
+                    chunksDiv.innerHTML = '';
 
-            section.style.display = 'block';
-            contentDiv.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim);">⏳ 正在转换，请稍候...</div>';
-            chunkList.textContent = '';
-
-            try {
-                const res = await fetch('/api/rag/llm_preview', {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await res.json();
-
-                if (data.status === 'success') {
-                    const md = data.structured_content || '（无结果）';
-                    const modeLabel = data.mode === 'field_llm' ? '字段提取' : '标题标注';
-
-                    // Highlight based on mode
-                    let highlighted = md;
-                    if (data.mode === 'field_llm') {
-                        // Field mode: highlight ## section headers
-                        highlighted = highlighted.replace(/(## [^\n]+)/g, '<span style="color:var(--accent-blue);font-weight:bold;">$1</span>');
-                        highlighted = highlighted.replace(/(- [^\n]+)/g, '<span style="color:var(--text-secondary);">$1</span>');
+                    if (data.markdown) {
+                        const md = data.markdown;
+                        // Highlight headers and show as pre-formatted text
+                        let highlighted = escapeHtml(md)
+                            .replace(/^## (.+)$/gm, '<span style="color:var(--accent-blue);font-weight:bold;">## $1</span>')
+                            .replace(/^### (.+)$/gm, '<span style="color:var(--accent-green);font-weight:bold;">### $1</span>');
+                        chunksDiv.innerHTML = `
+                            <div style="padding:12px;background:var(--bg-primary);border-radius:6px;border-left:3px solid var(--accent-yellow);font-size:12px;line-height:1.6;max-height:500px;overflow:auto;white-space:pre-wrap;word-break:break-all;">
+                                ${highlighted}
+                            </div>
+                        `;
                     } else {
-                        // Heading mode: highlight ## and ###
-                        highlighted = highlighted.replace(/## ([^\n]+)/g, '<span style="color:var(--accent-blue);font-weight:bold;">## $1</span>');
-                        highlighted = highlighted.replace(/### ([^\n]+)/g, '<span style="color:var(--accent-green);font-weight:bold;">### $1</span>');
+                        chunksDiv.innerHTML = '<div style="color:var(--text-dim);padding:10px;">无 Markdown 内容</div>';
                     }
-                    highlighted = highlighted.replace(/\n/g, '<br>');
-                    contentDiv.innerHTML = `<div style="margin-bottom:8px;font-size:12px;color:var(--text-dim);">模式: ${modeLabel} | 模型: ${data.model || 'default'}</div>${highlighted}`;
 
-                    if (data.chunks && data.chunks.length > 0) {
-                        const chunksHtml = data.chunks.map(c =>
-                            `<div style="margin-top:8px;padding:8px;background:var(--bg-primary);border-radius:4px;border-left:3px solid var(--accent-blue);">
-                                <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">【${c.index + 1}/${data.chunks.length}】${c.chars} 字符</div>
-                                <div style="font-size:12px;">${escapeHtml(c.content.substring(0, 300))}${c.content.length > 300 ? '...' : ''}</div>
-                            </div>`
-                        ).join('');
-                        chunkList.innerHTML = `<div style="margin-top:10px;font-size:12px;color:var(--text-dim);">分块结果: ${data.chunks.length} 个</div>${chunksHtml}`;
-                    }
-                } else {
-                    contentDiv.innerHTML = `<div style="color:var(--accent-red);">❌ ${data.error || '未知错误'}</div>`;
+                    previewSection.style.display = 'block';
+                } catch (e) {
+                    showToast('预览失败: ' + e.message, 'error');
                 }
-            } catch (e) {
-                contentDiv.innerHTML = `<div style="color:var(--accent-red);">❌ 请求失败: ${e.message}</div>`;
-            }
+            };
+            reader.readAsText(file);
         }
 
         async function previewFileChunks() {
@@ -665,24 +662,32 @@
             reader.onload = async function(e) {
                 const text = e.target.result;
                 try {
-                    const res = await fetch(`/api/rag/preview_chunk?text=${encodeURIComponent(text)}&filename=${encodeURIComponent(file.name)}`);
+                    const res = await fetch('/api/rag/preview_chunk', {
+                        method: 'POST',
+                        body: JSON.stringify({ text: text, filename: file.name }),
+                        headers: { 'Content-Type': 'application/json' }
+                    });
                     const data = await res.json();
 
                     const previewSection = document.getElementById('previewSection');
                     const chunksDiv = document.getElementById('previewChunks');
+                    const previewTitle = document.getElementById('previewTitle');
+
+                    previewTitle.textContent = '📋 分块预览';
+                    chunksDiv.innerHTML = '';
 
                     if (data.chunks && data.chunks.length > 0) {
                         chunksDiv.innerHTML = data.chunks.map(chunk => `
                             <div style="margin-bottom:12px;padding:10px;background:var(--bg-primary);border-radius:6px;border-left:3px solid var(--accent-blue);">
                                 <div style="font-size:12px;color:var(--text-dim);margin-bottom:6px;font-weight:bold;">【${chunk.chunk_index + 1}/${data.chunks.length}】${chunk.char_count} 字符</div>
-                                <div style="font-size:13px;white-space:pre-wrap;word-break:break-all;max-height:400px;overflow-y:auto;padding:8px;background:var(--bg-tertiary);border-radius:4px;">${escapeHtml(chunk.preview)}</div>
+                                <div style="font-size:13px;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;padding:8px;background:var(--bg-tertiary);border-radius:4px;">${escapeHtml(chunk.preview)}</div>
                             </div>
                         `).join('');
-                        previewSection.style.display = 'block';
                     } else {
                         chunksDiv.innerHTML = '<div style="color:var(--text-dim);padding:10px;">无分块结果</div>';
-                        previewSection.style.display = 'block';
                     }
+
+                    previewSection.style.display = 'block';
                 } catch (e) {
                     showToast('预览失败: ' + e.message, 'error');
                 }
@@ -694,8 +699,6 @@ async function uploadDocument() {
             const fileInput = document.getElementById('fileInput');
             const visitIdInput = document.getElementById('visitIdInput');
             const descInput = document.getElementById('descInput');
-            const modelSelect = document.getElementById('previewModel');
-            const previewMode = document.getElementById('previewMode');
 
             if (!fileInput.files.length) {
                 showToast('请选择文件', 'error');
@@ -711,13 +714,6 @@ async function uploadDocument() {
             formData.append('file', file);
             formData.append('visit_id', visitIdInput.value.trim());
             formData.append('description', descInput.value || '');
-            if (modelSelect && modelSelect.value) {
-                formData.append('model', modelSelect.value);
-            }
-// Pass chunking mode if LLM mode is selected
-            if (previewMode && previewMode.value) {
-                formData.append('mode', previewMode.value);
-            }
 
             // Show loading state
             const uploadBtn = document.querySelector('button[onclick="uploadDocument()"]');
@@ -960,6 +956,7 @@ async function uploadDocument() {
             const threshold = parseFloat(document.getElementById('filterThreshold').value) || 0.0;
             const enhanceMode = document.getElementById('enhanceMode').value;
             const enhanceModel = document.getElementById('enhanceModel').value;
+            const mergeMode = document.getElementById('mergeModeSelect').value;
 
             if (!condition) {
                 showToast('请输入筛选条件', 'error');
@@ -981,7 +978,8 @@ async function uploadDocument() {
                         top_k: topK,
                         score_threshold: threshold,
                         enhance_mode: enhanceMode,
-                        enhance_model: enhanceModel
+                        enhance_model: enhanceModel,
+                        merge_mode: mergeMode
                     })
                 });
                 const data = await res.json();
@@ -1046,6 +1044,7 @@ async function uploadDocument() {
                     就诊号: <strong>${data.visit_id || '全部'}</strong> |
                     top_k: <strong>${data.top_k}</strong> |
                     阈值: <strong>${data.score_threshold || 0}</strong> |
+合并:
                     <span style="color:${matched ? 'var(--accent-green)' : 'var(--accent-red)'};font-weight:bold;">
                         ${matched ? '✅ 符合' : '❌ 不符合'}
                     </span>

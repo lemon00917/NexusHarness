@@ -1080,8 +1080,6 @@ async def upload_document(file: UploadFile, visit_id: str = Form(...), descripti
               If empty, uses system's default chunking configuration.
     """
     from microharness.rag.rag import rag
-    from microharness.ollama import OllamaClient
-    from microharness.rag.chunker import chunk_by_fields, _chunk_by_chapter
 
     # Read raw file content
     raw_content = await file.read()
@@ -1104,118 +1102,16 @@ async def upload_document(file: UploadFile, visit_id: str = Form(...), descripti
     metadata = {"description": description, "original_filename": file.filename}
     metadata['visit_id'] = visit_id
 
-    # LLM preprocessing if mode is specified
-    if mode in ("llm", "field_llm") and model:
-        client = OllamaClient(model=model) if model else OllamaClient()
-
-        if mode == "field_llm":
-            # Field extraction mode
-            try:
-                chunks = chunk_by_fields(content, client)
-                structured = "\n\n".join(chunks)
-                # Add pre-chunked content directly (already split into semantic chunks)
-                doc_id = rag.add_document_with_chunks(structured, file.filename, metadata, chunks)
-            except Exception as e:
-                return {"error": f"字段提取失败: {str(e)}"}, 500
-        else:
-            # Heading mode
-            from microharness.ollama.prompts import format_llm_chunk_prompt
-            system_prompt, user_prompt = format_llm_chunk_prompt(content)
-            try:
-                structured = client.chat(
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=0.0
-                )
-                chunks = _chunk_by_chapter(structured)
-                doc_id = rag.add_document_with_chunks(structured, file.filename, metadata, chunks)
-            except Exception as e:
-                return {"error": f"LLM转换失败: {str(e)}"}, 500
-    else:
-        # Use default behavior with system's chunking configuration
-        doc_id = rag.add_document_raw(raw_content, file.filename, visit_id, metadata)
+    # Use default behavior with system's chunking configuration
+    # Detect HTML and convert to Markdown before chunking
+    is_html = bool('<html' in content.lower() or '<body' in content.lower() or '<div' in content.lower()[:500])
+    doc_id = rag.add_document(content, file.filename, metadata, is_html=is_html)
 
     rag.save_index()
 
     return {"doc_id": doc_id, "filename": file.filename, "visit_id": visit_id, "status": "success", "mode": mode or "default"}
 
 
-@app.post("/api/rag/llm_preview")
-async def llm_preview(file: UploadFile, model: str = Form(""), mode: str = Form("llm")):
-    """
-    Preview HTML conversion with LLM.
-    mode='llm': add ## headings to text
-    mode='field_llm': extract fields and group by semantic section
-    """
-    from microharness.ollama import OllamaClient
-    from microharness.rag.chunker import chunk_by_fields, _chunk_by_chapter
-
-    raw_content = await file.read()
-    filename = file.filename
-
-    # Try different encodings
-    content = None
-    for enc in ['utf-8', 'gbk', 'latin-1']:
-        try:
-            content = raw_content.decode(enc)
-            break
-        except Exception:
-            continue
-    if content is None:
-        content = raw_content.decode('utf-8', errors='replace')
-
-    # Check if content looks garbled
-    if content.count('�') > len(content) * 0.05:
-        return {
-            "status": "error",
-            "error": f"文件编码无法正确解码，请确保文件是UTF-8编码。当前内容包含 {content.count('ufffd')} 个乱码字符。"
-        }
-
-    # Get LLM client
-    client = OllamaClient(model=model) if model else OllamaClient()
-
-    if mode == "field_llm":
-        # Field extraction mode: extract fields and group by semantic section
-        try:
-            chunks = chunk_by_fields(content, client)
-            structured = "\n\n".join(chunks)
-            return {
-                "status": "success",
-                "filename": filename,
-                "model": client.model,
-                "mode": "field_llm",
-                "structured_content": structured,
-                "chunks": [{"index": i, "content": c, "chars": len(c)} for i, c in enumerate(chunks)]
-            }
-        except Exception as e:
-            return {"status": "error", "error": str(e)}
-    else:
-        # Heading mode: add ## headings to text
-        from microharness.ollama.prompts import format_llm_chunk_prompt
-        system_prompt, user_prompt = format_llm_chunk_prompt(content)
-
-        try:
-            structured = client.chat(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.0
-            )
-
-            chunks = _chunk_by_chapter(structured)
-            return {
-                "status": "success",
-                "filename": filename,
-                "model": client.model,
-                "mode": "llm",
-                "structured_content": structured,
-                "chunks": [{"index": i, "content": c, "chars": len(c)} for i, c in enumerate(chunks)]
-            }
-        except Exception as e:
-            return {"status": "error", "error": str(e)}
 
 
 @app.get("/api/rag/documents")
@@ -1360,6 +1256,7 @@ async def filter_records_batch(request: Request):
     score_threshold = float(data.get("score_threshold", 0.0))
     enhance_mode = data.get("enhance_mode", "simple")
     enhance_model = data.get("enhance_model")
+    merge_mode = data.get("merge_mode", "combined")
 
     if not condition:
         return {"error": "condition is required"}, 400
@@ -1370,7 +1267,7 @@ async def filter_records_batch(request: Request):
             enhance_query_mode=enhance_mode,
             enhance_model=enhance_model
         )
-        result = record_filter.filter_batch(condition, visit_id=visit_id, top_k=top_k, score_threshold=score_threshold)
+        result = record_filter.filter_batch(condition, visit_id=visit_id, top_k=top_k, score_threshold=score_threshold, merge_mode=merge_mode)
 
         return {
             "condition": condition,
@@ -1384,7 +1281,8 @@ async def filter_records_batch(request: Request):
             "matched": result.get("matched", False),
             "matched_docs": result.get("matched_docs", []),
             "all_chunks": result.get("all_chunks", []),
-            "summary": result.get("summary", "")
+            "summary": result.get("summary", ""),
+            "merge_mode": merge_mode
         }
     except Exception as e:
         rag_logger.error(f"Filter batch error: {e}")
@@ -1573,18 +1471,32 @@ async def rebuild_index():
     }
 
 
-@app.get("/api/rag/preview_chunk")
-async def preview_chunk(text: str = "", filename: str = ""):
-    """Preview how text would be chunked with current config."""
+@app.api_route("/api/rag/preview_chunk", methods=["GET", "POST"])
+async def preview_chunk(request: Request):
+    """Preview how text would be chunked with current config. Supports GET (URL params) and POST (JSON body)."""
     from microharness.rag.rag import rag
-    from microharness.rag.document_parser import parse_document
+    from microharness.rag.chunker import html_to_markdown
+
+    if request.method == "GET":
+        text = request.query_params.get("text", "")
+    else:
+        body = await request.json()
+        text = body.get("text", "")
+
     if not text:
-        return {"chunks": []}
-    # Parse HTML if filename indicates HTML content
-    if filename.endswith('.html') or filename.endswith('.htm'):
-        text = parse_document(text.encode('utf-8'), filename)
-    chunks = rag.preview_chunking(text)
-    return {"chunks": chunks}
+        return {"chunks": [], "is_html": False, "markdown": ""}
+
+    # For large HTML, truncate before conversion to avoid timeout
+    # We only need a representative sample for preview, not the full document
+    MAX_MARKDOWNIFY_SIZE = 50 * 1024  # 50KB
+    if len(text) > MAX_MARKDOWNIFY_SIZE:
+        text = text[:MAX_MARKDOWNIFY_SIZE]
+
+    # Detect HTML and convert to Markdown before preview
+    is_html = bool('<html' in text.lower() or '<body' in text.lower() or '<div' in text.lower()[:500])
+    markdown_content = html_to_markdown(text) if is_html else text
+    chunks = rag.preview_chunking(text, is_html=is_html)
+    return {"chunks": chunks, "is_html": is_html, "markdown": markdown_content}
 
 
 # ──────────────────────────────────────────────────

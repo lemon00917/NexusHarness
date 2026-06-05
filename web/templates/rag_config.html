@@ -190,8 +190,6 @@
                 <div class="radio-group">
                     <label><input type="radio" name="chunk_mode" value="length" onchange="toggleChunkMode('length')"> 按长度</label>
                     <label><input type="radio" name="chunk_mode" value="chapter" onchange="toggleChunkMode('chapter')"> 按章节</label>
-                    <label><input type="radio" name="chunk_mode" value="llm" onchange="toggleChunkMode('llm')"> LLM 智能分块</label>
-                    <label><input type="radio" name="chunk_mode" value="field_llm" onchange="toggleChunkMode('field_llm')"> 字段智能分块</label>
                 </div>
             </div>
             <div class="config-row" id="chunk_size_row">
@@ -296,15 +294,17 @@
         }
 
         function applyConfig(config) {
-            // Chunk mode
-            document.querySelector(`input[name="chunk_mode"][value="${config.chunk_mode}"]`).checked = true;
+            // Chunk mode - default to 'length' if not supported
+            const validModes = ['length', 'chapter'];
+            const chunkMode = validModes.includes(config.chunk_mode) ? config.chunk_mode : 'length';
+            document.querySelector(`input[name="chunk_mode"][value="${chunkMode}"]`).checked = true;
 
             // Chunk size/overlap
             document.getElementById('chunk_size').value = config.chunk_size || 1500;
             document.getElementById('chunk_overlap').value = config.chunk_overlap || 200;
 
             // Show/hide chunk size/overlap based on chunk mode
-            toggleChunkMode(config.chunk_mode || 'length');
+            toggleChunkMode(chunkMode);
 
             // Search mode
             document.querySelector(`input[name="search_mode"][value="${config.search_mode}"]`).checked = true;
@@ -340,7 +340,7 @@
         function toggleChunkMode(mode) {
             const sizeRow = document.getElementById('chunk_size_row');
             const overlapRow = document.getElementById('chunk_overlap_row');
-            if (mode === 'chapter' || mode === 'llm' || mode === 'field_llm') {
+            if (mode === 'chapter') {
                 sizeRow.style.display = 'none';
                 overlapRow.style.display = 'none';
             } else {
