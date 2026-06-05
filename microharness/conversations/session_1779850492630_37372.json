@@ -1,0 +1,13 @@
+{
+  "session_id": "session_1779850492630_37372",
+  "task": "我叫谁",
+  "status": "completed",
+  "created_at": "2026-05-27T10:54:52.630111",
+  "updated_at": "2026-05-27T10:54:55.427882",
+  "harness_state": {
+    "messages": [],
+    "step_count": 0,
+    "approved": true
+  },
+  "interrupted": false
+}

@@ -1,0 +1,128 @@
+[
+  {
+    "id": 1,
+    "category": "OR逻辑",
+    "condition": "乳腺癌或肝癌患者",
+    "examples": [
+      {
+        "chunk_content": "诊断：左乳癌肝转移化疗后，靶向维持治疗中。",
+        "reasoning": "chunk中有'左乳癌'，满足'乳腺癌'条件，无需再有肝癌即判断为符合",
+        "matched": true
+      }
+    ]
+  },
+  {
+    "id": 2,
+    "category": "AND逻辑",
+    "condition": "年龄超过50岁且患有癌症",
+    "examples": [
+      {
+        "chunk_content": "年龄：57岁，诊断：左乳恶性肿瘤（pT4N1M1,IV期）",
+        "reasoning": "chunk同时满足'年龄57岁>50'和'乳腺癌确诊'两个条件",
+        "matched": true
+      }
+    ]
+  },
+  {
+    "id": 3,
+    "category": "否定排除_无XX",
+    "condition": "无糖尿病的癌症患者",
+    "examples": [
+      {
+        "chunk_content": "诊断：乳腺癌，住院期间无特殊不适，血糖正常。",
+        "reasoning": "chunk中有'癌症确诊'且无'糖尿病'相关记录，满足'无糖尿病的癌症患者'",
+        "matched": true
+      }
+    ]
+  },
+  {
+    "id": 4,
+    "category": "否定排除_非XX",
+    "condition": "非乳腺癌患者",
+    "examples": [
+      {
+        "chunk_content": "诊断：冠心病，心绞痛，高血压3级。",
+        "reasoning": "chunk中只有心血管疾病诊断，没有乳腺癌相关记录，判断为符合'非乳腺癌'",
+        "matched": true
+      }
+    ]
+  },
+  {
+    "id": 5,
+    "category": "时间推理_之前",
+    "condition": "2024年9月之前发现乳腺肿块",
+    "examples": [
+      {
+        "chunk_content": "患者约于2023年11月发现左侧乳腺肿块，未重视，2024年9月因胸背部疼痛就诊。",
+        "reasoning": "chunk中'2023年11月'在'2024年9月'之前，满足时间条件",
+        "matched": true
+      }
+    ]
+  },
+  {
+    "id": 6,
+    "category": "时间推理_之后",
+    "condition": "先发现肿瘤后发生骨折",
+    "examples": [
+      {
+        "chunk_content": "2023年11月发现乳腺肿块，2024年9月因胸背部疼痛就诊发现T12椎体病理性骨折。",
+        "reasoning": "chunk中时间顺序：2023年（肿块）→ 2024年（骨折），符合'先肿瘤后骨折'",
+        "matched": true
+      }
+    ]
+  },
+  {
+    "id": 7,
+    "category": "疑似不算确诊",
+    "condition": "患有癌症",
+    "examples": [
+      {
+        "chunk_content": "影像诊断：转移瘤？其他待排。",
+        "reasoning": "'转移瘤？'=疑似，非确诊。只有明确的恶性肿瘤诊断才算'患有癌症'",
+        "matched": false,
+        "matched_condition": "疑似诊断不算确诊"
+      },
+      {
+        "chunk_content": "病理诊断：左乳浸润性癌。免疫组化：ER(+), HER2(3+)。",
+        "reasoning": "明确的病理确诊=恶性肿瘤，符合'患有癌症'",
+        "matched": true
+      }
+    ]
+  },
+  {
+    "id": 8,
+    "category": "模糊条件",
+    "condition": "高龄癌症患者",
+    "examples": [
+      {
+        "chunk_content": "患者年龄：67岁，诊断：肺癌。",
+        "reasoning": "67岁>60岁属于高龄，且有癌症确诊，满足'高龄癌症患者'",
+        "matched": true
+      }
+    ]
+  },
+  {
+    "id": 9,
+    "category": "多发转移",
+    "condition": "存在多发转移的高危因素",
+    "examples": [
+      {
+        "chunk_content": "胸11、腰3椎体及附件、腰2椎体、腰1附件内多发异常信号，转移瘤？肝继发恶性肿瘤。",
+        "reasoning": "chunk中多处骨骼+肝脏均发现转移灶，符合'多发转移'",
+        "matched": true
+      }
+    ]
+  },
+  {
+    "id": 10,
+    "category": "边界条件_住院天数",
+    "condition": "住院时间较短的患者",
+    "examples": [
+      {
+        "chunk_content": "住院天数：2天，住院期间恢复良好。",
+        "reasoning": "2天明显短于平均住院日（7天），属于'住院时间较短'",
+        "matched": true
+      }
+    ]
+  }
+]

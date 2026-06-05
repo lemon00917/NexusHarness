@@ -1,0 +1,549 @@
+{
+  "test_time": "2026-06-03T14:16:45.332781",
+  "test_cases_count": 29,
+  "visit_id": "123",
+  "results": {
+    "qwen2.5:7b": {
+      "stats": {
+        "passed": 14,
+        "failed": 15,
+        "uncertain": 0,
+        "error": 0
+      },
+      "results": [
+        {
+          "condition": "乳腺癌且肝转移的患者",
+          "expected": "符合",
+          "reason": "明确乳腺癌且肝转移",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 23.889853477478027,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "癌症转移且需要靶向治疗",
+          "expected": "符合",
+          "reason": "肝转移且靶向维持治疗中",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 18.77008366584778,
+          "summary": "该文档明确记录了患者患有左乳恶性肿瘤（伴有骨和肝继发）以及正在进行靶向治疗的情况，满足筛选条件。"
+        },
+        {
+          "condition": "年龄超过50岁且患有癌症",
+          "expected": "符合",
+          "reason": "57岁+乳腺癌",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 18.900423765182495,
+          "summary": "根据病历中的信息，该患者符合筛选条件：年龄超过50岁且患有癌症。"
+        },
+        {
+          "condition": "非乳腺癌且无转移",
+          "expected": "不符合",
+          "reason": "该患者是乳腺癌转移",
+          "actual": "不符合",
+          "status": "PASS",
+          "elapsed": 8.552947521209717,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "乳腺癌或肝癌患者",
+          "expected": "符合",
+          "reason": "乳腺癌确诊",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 14.321944952011108,
+          "summary": "病历中详细记录了患者的乳腺癌诊断信息，符合筛选条件中的'乳腺癌或肝癌'患者标准。"
+        },
+        {
+          "condition": "需要化疗或靶向治疗",
+          "expected": "符合",
+          "reason": "靶向治疗中",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 19.047268390655518,
+          "summary": "病历中明确记录了患者的化疗和靶向治疗历史，满足需要化疗或靶向治疗的条件。"
+        },
+        {
+          "condition": "无糖尿病的癌症患者",
+          "expected": "符合",
+          "reason": "无糖尿病诊断",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 12.94823169708252,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "非手术患者",
+          "expected": "不符合",
+          "reason": "住院期间行椎体手术",
+          "actual": "不符合",
+          "status": "PASS",
+          "elapsed": 8.389591932296753,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "2024年9月之前发现乳腺肿块",
+          "expected": "符合",
+          "reason": "2023年11月发现",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 16.53858518600464,
+          "summary": "病历中未明确记录患者在2024年9月之前发现乳腺肿块，相关记录为2023年11月首次发现，且2024年9月已出现多发转移。"
+        },
+        {
+          "condition": "先发现肿瘤后发生骨折",
+          "expected": "符合",
+          "reason": "时间线明确",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 16.000575304031372,
+          "summary": "病历中未发现先发现肿瘤后发生骨折的记录"
+        },
+        {
+          "condition": "发现乳腺肿块1年后出现骨转移",
+          "expected": "符合",
+          "reason": "2023.11→2024.9约1年",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 13.303661108016968,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "短期内(3个月内)完成手术和化疗",
+          "expected": "不符合",
+          "reason": "手术是2024年9月，后续化疗时间不明确",
+          "actual": "不符合",
+          "status": "PASS",
+          "elapsed": 16.1922824382782,
+          "summary": "病历中未提到短期内完成手术和化疗的相关信息，不符合筛选条件"
+        },
+        {
+          "condition": "处于化疗后康复阶段",
+          "expected": "符合",
+          "reason": "化疗后靶向维持",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 16.256449699401855,
+          "summary": "病历中提到患者处于左乳癌肝转移化疗后的状态，但未明确说明已进入康复阶段。因此不符合'处于化疗后康复阶段'的筛选条件。"
+        },
+        {
+          "condition": "新确诊未开始治疗",
+          "expected": "不符合",
+          "reason": "已确诊且在治疗中",
+          "actual": "不符合",
+          "status": "PASS",
+          "elapsed": 13.128628492355347,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "该患者的主要诊断、手术操作和住院天数分别是？",
+          "expected": "符合",
+          "reason": "诊断:左乳癌肝转移; 手术:椎体手术; 住院:2天",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 19.346996545791626,
+          "summary": "病历中提供了患者57岁的信息，满足年龄超过50岁的要求，并确认了该患者确实进行了住院治疗。"
+        },
+        {
+          "condition": "该患者是否患有恶性肿瘤？是否做过手术？住院多久？",
+          "expected": "符合",
+          "reason": "三个问题: 恶性肿瘤(是)、手术(是)、住院天数(2天)",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 25.571817636489868,
+          "summary": "根据提供的病历片段，患者患有恶性肿瘤并进行了手术治疗。"
+        },
+        {
+          "condition": "该患者住院天数是否超过全国平均住院日(7天)？",
+          "expected": "不符合",
+          "reason": "住院仅2天",
+          "actual": "不符合",
+          "status": "PASS",
+          "elapsed": 11.223473072052002,
+          "summary": "病历片段未提供住院天数超过7天的信息，且不符合筛选条件。"
+        },
+        {
+          "condition": "根据转移情况，该患者肿瘤分期属于晚期吗？",
+          "expected": "符合",
+          "reason": "肝转移属晚期肿瘤",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 16.4681236743927,
+          "summary": "病历片段中明确提及了患者存在肝转移，并进行了冷冻消融术及病理检查结果为乳腺癌肝转移，但未直接说明其分期情况属于晚期。因此无法仅凭现有信息判断肿瘤分期是否为晚期，不符合筛选条件。"
+        },
+        {
+          "condition": "非心脑血管疾病患者",
+          "expected": "符合",
+          "reason": "无心脑血管诊断",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 8.2677743434906,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "无肾脏疾病",
+          "expected": "符合",
+          "reason": "无肾脏相关诊断",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 15.870568037033081,
+          "summary": "病历中明确提到患有左肾囊肿，不符合无肾脏疾病的筛选条件。"
+        },
+        {
+          "condition": "住院时间短于5天的患者",
+          "expected": "符合",
+          "reason": "住院2天<5天",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 8.448700428009033,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "不需要长期住院的患者",
+          "expected": "符合",
+          "reason": "住院仅2天",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 13.099804162979126,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "如果患者有肝转移且住院超过7天，需要重点关注肝功能，该患者是否需要？",
+          "expected": "不符合",
+          "reason": "住院仅2天，不满足住院>7天的条件",
+          "actual": "不符合",
+          "status": "PASS",
+          "elapsed": 15.917984247207642,
+          "summary": "病历片段未提及肝转移及住院超过7天的信息"
+        },
+        {
+          "condition": "癌症患者出现病理性骨折提示骨转移可能，该患者是否有骨转移证据？",
+          "expected": "符合",
+          "reason": "胸椎12病理性骨折，提示骨转移",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 13.26150918006897,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "该患者是否存在多发转移的高危因素？",
+          "expected": "符合",
+          "reason": "已有多发转移",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 13.483450412750244,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "住院天数是否恰好为2天？",
+          "expected": "符合",
+          "reason": "明确2天",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 17.589711666107178,
+          "summary": "该病历片段明确记录了患者的住院天数为2天，符合筛选条件。"
+        },
+        {
+          "condition": "是否超过50岁但不超过60岁？",
+          "expected": "符合",
+          "reason": "57岁",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 13.100656270980835,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "住院时间较短的患者",
+          "expected": "符合",
+          "reason": "2天属较短",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 18.50742506980896,
+          "summary": "通过匹配患者年龄和住院天数的信息，确定满足住院时间较短的筛选条件。"
+        },
+        {
+          "condition": "高龄癌症患者",
+          "expected": "符合",
+          "reason": "57岁属高龄",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 13.104327917098999,
+          "summary": "无相关文档"
+        }
+      ]
+    },
+    "llama3:8b": {
+      "stats": {
+        "passed": 18,
+        "failed": 11,
+        "uncertain": 0,
+        "error": 0
+      },
+      "results": [
+        {
+          "condition": "乳腺癌且肝转移的患者",
+          "expected": "符合",
+          "reason": "明确乳腺癌且肝转移",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 28.737199306488037,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "癌症转移且需要靶向治疗",
+          "expected": "符合",
+          "reason": "肝转移且靶向维持治疗中",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 19.854801893234253,
+          "summary": "根据病历分析，患者符合筛选条件：癌症转移且需要靶向治疗"
+        },
+        {
+          "condition": "年龄超过50岁且患有癌症",
+          "expected": "符合",
+          "reason": "57岁+乳腺癌",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 13.594699382781982,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "非乳腺癌且无转移",
+          "expected": "不符合",
+          "reason": "该患者是乳腺癌转移",
+          "actual": "不符合",
+          "status": "PASS",
+          "elapsed": 13.000433683395386,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "乳腺癌或肝癌患者",
+          "expected": "符合",
+          "reason": "乳腺癌确诊",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 13.491703271865845,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "需要化疗或靶向治疗",
+          "expected": "符合",
+          "reason": "靶向治疗中",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 15.926604747772217,
+          "summary": "根据病历片段，患者明确患有左乳恶性肿瘤，并接受了靶向治疗，因此符合筛选条件‘需要化疗或靶向治疗’。"
+        },
+        {
+          "condition": "无糖尿病的癌症患者",
+          "expected": "符合",
+          "reason": "无糖尿病诊断",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 19.908817291259766,
+          "summary": "该文档明确诊断为癌症患者，符合筛选条件"
+        },
+        {
+          "condition": "非手术患者",
+          "expected": "不符合",
+          "reason": "住院期间行椎体手术",
+          "actual": "不符合",
+          "status": "PASS",
+          "elapsed": 17.01946449279785,
+          "summary": "Patient is not a non-surgical patient, as they had undergone surgery."
+        },
+        {
+          "condition": "2024年9月之前发现乳腺肿块",
+          "expected": "符合",
+          "reason": "2023年11月发现",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 18.80426573753357,
+          "summary": "总体判断：患者于2023年11月前发现了乳腺肿块，满足筛选条件"
+        },
+        {
+          "condition": "先发现肿瘤后发生骨折",
+          "expected": "符合",
+          "reason": "时间线明确",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 18.63589835166931,
+          "summary": "根据病历分析，患者满足筛选条件：先发现肿瘤后发生骨折"
+        },
+        {
+          "condition": "发现乳腺肿块1年后出现骨转移",
+          "expected": "符合",
+          "reason": "2023.11→2024.9约1年",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 20.875837326049805,
+          "summary": "根据病历记录，患者于2023年11月发现左侧乳腺肿块，并于2024年9月因转移就诊，该文档符合筛选条件"
+        },
+        {
+          "condition": "短期内(3个月内)完成手术和化疗",
+          "expected": "不符合",
+          "reason": "手术是2024年9月，后续化疗时间不明确",
+          "actual": "符合",
+          "status": "FAIL",
+          "elapsed": 18.16036605834961,
+          "summary": "根据病历片段，患者已完成手术且正在靶向维持治疗中，符合筛选条件"
+        },
+        {
+          "condition": "处于化疗后康复阶段",
+          "expected": "符合",
+          "reason": "化疗后靶向维持",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 21.17356038093567,
+          "summary": "该文档符合筛选条件，因为患者在出院诊断中明确诊断为左乳恶性肿瘤（pT4N1M1,IV期），同时也确定了患者正在接受靶向治疗"
+        },
+        {
+          "condition": "新确诊未开始治疗",
+          "expected": "不符合",
+          "reason": "已确诊且在治疗中",
+          "actual": "不符合",
+          "status": "PASS",
+          "elapsed": 13.035197973251343,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "该患者的主要诊断、手术操作和住院天数分别是？",
+          "expected": "符合",
+          "reason": "诊断:左乳癌肝转移; 手术:椎体手术; 住院:2天",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 18.152124404907227,
+          "summary": "The patient's age (57) and hospitalization duration (2 days) are consistent with the condition of a patient with cancer."
+        },
+        {
+          "condition": "该患者是否患有恶性肿瘤？是否做过手术？住院多久？",
+          "expected": "符合",
+          "reason": "三个问题: 恶性肿瘤(是)、手术(是)、住院天数(2天)",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 19.258176565170288,
+          "summary": "该患者明确诊断为左乳恶性肿瘤（pT4N1M1,IV期），符合筛选条件‘是否患有恶性肿瘤’"
+        },
+        {
+          "condition": "该患者住院天数是否超过全国平均住院日(7天)？",
+          "expected": "不符合",
+          "reason": "住院仅2天",
+          "actual": "不符合",
+          "status": "PASS",
+          "elapsed": 13.06737732887268,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "根据转移情况，该患者肿瘤分期属于晚期吗？",
+          "expected": "符合",
+          "reason": "肝转移属晚期肿瘤",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 21.054174423217773,
+          "summary": "该patient的转移灶较前增大，并且肝穿刺病理结果示为腺癸组织，结合免疫组化符合乳腺癌肝转移，这表明患者的肿瘤分期属于晚期"
+        },
+        {
+          "condition": "非心脑血管疾病患者",
+          "expected": "符合",
+          "reason": "无心脑血管诊断",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 16.096179246902466,
+          "summary": ""
+        },
+        {
+          "condition": "无肾脏疾病",
+          "expected": "符合",
+          "reason": "无肾脏相关诊断",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 8.312870740890503,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "住院时间短于5天的患者",
+          "expected": "符合",
+          "reason": "住院2天<5天",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 12.967310190200806,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "不需要长期住院的患者",
+          "expected": "符合",
+          "reason": "住院仅2天",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 15.914463996887207,
+          "summary": "不满足筛选条件：不需要长期住院的患者"
+        },
+        {
+          "condition": "如果患者有肝转移且住院超过7天，需要重点关注肝功能，该患者是否需要？",
+          "expected": "不符合",
+          "reason": "住院仅2天，不满足住院>7天的条件",
+          "actual": "符合",
+          "status": "FAIL",
+          "elapsed": 17.864283323287964,
+          "summary": "根据病历记录，患者确实存在肝转移，这样符合筛选条件"
+        },
+        {
+          "condition": "癌症患者出现病理性骨折提示骨转移可能，该患者是否有骨转移证据？",
+          "expected": "符合",
+          "reason": "胸椎12病理性骨折，提示骨转移",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 19.538769483566284,
+          "summary": "符合筛选条件，存在明确的癌症诊断和骨转移证据"
+        },
+        {
+          "condition": "该患者是否存在多发转移的高危因素？",
+          "expected": "符合",
+          "reason": "已有多发转移",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 18.96476650238037,
+          "summary": "根据病历片段判断，该患者存在多发转移的高危因素"
+        },
+        {
+          "condition": "住院天数是否恰好为2天？",
+          "expected": "符合",
+          "reason": "明确2天",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 13.210571527481079,
+          "summary": "根据病历片段，患者确实住院了2天，因此符合筛选条件"
+        },
+        {
+          "condition": "是否超过50岁但不超过60岁？",
+          "expected": "符合",
+          "reason": "57岁",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 13.035218477249146,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "住院时间较短的患者",
+          "expected": "符合",
+          "reason": "2天属较短",
+          "actual": "不符合",
+          "status": "FAIL",
+          "elapsed": 8.100199937820435,
+          "summary": "无相关文档"
+        },
+        {
+          "condition": "高龄癌症患者",
+          "expected": "符合",
+          "reason": "57岁属高龄",
+          "actual": "符合",
+          "status": "PASS",
+          "elapsed": 18.460141897201538,
+          "summary": "该病历片段中的患者明确诊断为高龄癌症患者，符合筛选条件"
+        }
+      ]
+    }
+  }
+}

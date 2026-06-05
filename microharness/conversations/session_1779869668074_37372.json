@@ -1,0 +1,13 @@
+{
+  "session_id": "session_1779869668074_37372",
+  "task": "帮我写一个斐波那契数列的Python脚本",
+  "status": "active",
+  "created_at": "2026-05-27T16:14:28.074334",
+  "updated_at": "2026-05-27T16:14:28.074334",
+  "harness_state": {
+    "messages": [],
+    "step_count": 0,
+    "approved": true
+  },
+  "interrupted": false
+}

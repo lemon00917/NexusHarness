@@ -1,0 +1,60 @@
+{
+  "benchmark_id": "code",
+  "provider": "minimax",
+  "model": "MiniMax-M2.7",
+  "run_id": "run_1779726709",
+  "timestamp": "2026-05-26T00:31:49.940570",
+  "tasks_total": 2,
+  "tasks_passed": 2,
+  "tasks_failed": 0,
+  "pass_rate": 1.0,
+  "avg_score": 1.0,
+  "total_tokens": 10663,
+  "total_cost_usd": 0.0,
+  "total_duration_ms": 27994,
+  "task_results": [
+    {
+      "task_id": "fibonacci_001",
+      "provider": "minimax",
+      "model": "MiniMax-M2.7",
+      "passed": true,
+      "score": 1.0,
+      "actual_output": "<think>The script ran successfully and printed the Fibonacci numbers up to 100. Let me explain the output to the user.\n</think>\n\nDone! The script prints the Fibonacci sequence up to 100:\n\n```\n0 1 1 2 3 5 8 13 21 34 55 89\n```\n\nThe script uses two variables (`a` and `b`) that are updated in each iteration — `a` takes the value of `b`, and `b` takes the sum of the previous two numbers. This generates the sequence: 0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89. The next value (144) exceeds 100, so the sequence stops there.",
+      "expected_output": "89",
+      "validation_details": "Contains '89'",
+      "tokens_used": 5524,
+      "cost_usd": 0.0,
+      "duration_ms": 15517,
+      "steps_used": 3,
+      "tool_calls": [
+        "write_file",
+        "run_python"
+      ],
+      "timestamp": "2026-05-26T00:31:21.945849",
+      "error": null
+    },
+    {
+      "task_id": "hello_world_001",
+      "provider": "minimax",
+      "model": "MiniMax-M2.7",
+      "passed": true,
+      "score": 1.0,
+      "actual_output": "<think>The script ran successfully and printed \"Hello World\" as expected.\n</think>\n\nDone! The script ran successfully and printed:\n\n```\nHello World\n```",
+      "expected_output": "Hello World",
+      "validation_details": "Contains 'Hello World'",
+      "tokens_used": 5139,
+      "cost_usd": 0.0,
+      "duration_ms": 12477,
+      "steps_used": 3,
+      "tool_calls": [
+        "write_file",
+        "run_python"
+      ],
+      "timestamp": "2026-05-26T00:31:37.463344",
+      "error": null
+    }
+  ],
+  "metadata": {
+    "max_steps": 10
+  }
+}

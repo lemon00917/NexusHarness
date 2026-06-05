@@ -1,0 +1,41 @@
+{
+  "benchmark_id": "tool_use",
+  "provider": "minimax",
+  "model": "MiniMax-M2.7",
+  "run_id": "run_1779726856",
+  "timestamp": "2026-05-26T00:34:16.295356",
+  "tasks_total": 1,
+  "tasks_passed": 1,
+  "tasks_failed": 0,
+  "pass_rate": 1.0,
+  "avg_score": 1.0,
+  "total_tokens": 6792,
+  "total_cost_usd": 0.0,
+  "total_duration_ms": 49011,
+  "task_results": [
+    {
+      "task_id": "file_ops_001",
+      "provider": "minimax",
+      "model": "MiniMax-M2.7",
+      "passed": true,
+      "score": 1.0,
+      "actual_output": "<think>All three steps completed successfully:\n1. Created hello.txt with \"Hello World\"\n2. Read it back and confirmed content matches\n3. Deleted the file\n\nThe task is complete.\n</think>\n\nDone! Here's the summary:\n\n1. ✅ **Created** `hello.txt` with content \"Hello World\"\n2. ✅ **Read** it back and verified the content matched\n3. ✅ **Deleted** the file",
+      "expected_output": "",
+      "validation_details": "Expected: ['write_file', 'read_file', 'delete_file'], Got: ['write_file', 'read_file', 'delete_file']",
+      "tokens_used": 6792,
+      "cost_usd": 0.0,
+      "duration_ms": 49011,
+      "steps_used": 4,
+      "tool_calls": [
+        "write_file",
+        "read_file",
+        "delete_file"
+      ],
+      "timestamp": "2026-05-26T00:33:27.283597",
+      "error": null
+    }
+  ],
+  "metadata": {
+    "max_steps": 10
+  }
+}

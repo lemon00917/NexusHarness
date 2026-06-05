@@ -1,0 +1,41 @@
+{
+  "session_id": "session_1779850393281_37372",
+  "task": "今天北京天气怎么样？",
+  "status": "completed",
+  "created_at": "2026-05-27T10:53:13.281208",
+  "updated_at": "2026-05-27T10:53:19.133683",
+  "harness_state": {
+    "messages": [
+      {
+        "type": "human",
+        "content": "今天北京天气怎么样？"
+      },
+      {
+        "type": "ai",
+        "content": "<think>用户问今天北京天气怎么样。我需要使用天气工具来查询北京的天气。我可以使用weather工具，参数为\"北京\"。</think>\n\n",
+        "tool_calls": [
+          {
+            "name": "weather",
+            "args": {
+              "input": "北京"
+            },
+            "id": "call_function_x3q1crgjiuyp_1",
+            "type": "tool_call"
+          }
+        ]
+      },
+      {
+        "type": "tool",
+        "content": "北京: ☀️  +25°C",
+        "tool_call_id": "call_function_x3q1crgjiuyp_1"
+      },
+      {
+        "type": "ai",
+        "content": "<think>The weather tool returned the result for Beijing: 25°C with a sun icon (☀️). I'll provide this information to the user.</think>\n\n今天北京的天气是 **☀️ +25°C**，晴天，温度适中，适合外出活动。"
+      }
+    ],
+    "step_count": 0,
+    "approved": true
+  },
+  "interrupted": false
+}

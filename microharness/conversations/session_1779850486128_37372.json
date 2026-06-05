@@ -1,0 +1,13 @@
+{
+  "session_id": "session_1779850486128_37372",
+  "task": "我叫张三",
+  "status": "completed",
+  "created_at": "2026-05-27T10:54:46.128897",
+  "updated_at": "2026-05-27T10:58:58.053941",
+  "harness_state": {
+    "messages": [],
+    "step_count": 0,
+    "approved": true
+  },
+  "interrupted": false
+}

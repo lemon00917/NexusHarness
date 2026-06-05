@@ -1,0 +1,41 @@
+{
+  "session_id": "session_1779850346461_37372",
+  "task": "今天北京天气怎么样？",
+  "status": "completed",
+  "created_at": "2026-05-27T10:52:26.461076",
+  "updated_at": "2026-05-27T10:52:37.799573",
+  "harness_state": {
+    "messages": [
+      {
+        "type": "human",
+        "content": "今天北京天气怎么样？"
+      },
+      {
+        "type": "ai",
+        "content": "<think>The user is asking about the weather in Beijing. I should use one of the weather tools to get the current weather information for Beijing.\n\nLet me use the weather function to get the weather for Beijing.</think>\n\n",
+        "tool_calls": [
+          {
+            "name": "weather",
+            "args": {
+              "input": "北京"
+            },
+            "id": "call_function_3n12gc76gmhs_1",
+            "type": "tool_call"
+          }
+        ]
+      },
+      {
+        "type": "tool",
+        "content": "北京: ☀️  +25°C",
+        "tool_call_id": "call_function_3n12gc76gmhs_1"
+      },
+      {
+        "type": "ai",
+        "content": "<think>The weather information for Beijing has been retrieved. Let me provide a response.</think>\n\n今天北京天气：**☀️ +25°C**，晴朗温暖，适合出行！"
+      }
+    ],
+    "step_count": 0,
+    "approved": true
+  },
+  "interrupted": false
+}
