@@ -1245,7 +1245,11 @@ async def filter_records(request: Request):
 
 @app.post("/api/rag/filter_batch")
 async def filter_records_batch(request: Request):
-    """Batch filter: retrieve chunks then judge all together."""
+    """Batch filter: retrieve chunks then judge all together.
+
+    combined mode: multi-route search per sub-condition → round-robin merge → LLM judge.
+    per_doc mode: single-query search → judge each doc independently.
+    """
     from microharness.rag.record_filter import RecordFilter
 
     data = await request.json()
@@ -1253,6 +1257,7 @@ async def filter_records_batch(request: Request):
     visit_id = data.get("visit_id")
     model = data.get("model", "qwen2.5:7b")
     top_k = data.get("top_k", 20)
+    sub_top_k = data.get("sub_top_k", 3)  # combined: chunks per sub-condition
     score_threshold = float(data.get("score_threshold", 0.0))
     enhance_mode = data.get("enhance_mode", "simple")
     enhance_model = data.get("enhance_model")
@@ -1267,13 +1272,18 @@ async def filter_records_batch(request: Request):
             enhance_query_mode=enhance_mode,
             enhance_model=enhance_model
         )
-        result = record_filter.filter_batch(condition, visit_id=visit_id, top_k=top_k, score_threshold=score_threshold, merge_mode=merge_mode)
+        result = record_filter.filter_batch(
+            condition, visit_id=visit_id, top_k=top_k,
+            score_threshold=score_threshold, merge_mode=merge_mode,
+            sub_top_k=sub_top_k,
+        )
 
         return {
             "condition": condition,
             "visit_id": visit_id,
             "model": model,
             "top_k": top_k,
+            "sub_top_k": sub_top_k,
             "score_threshold": score_threshold,
             "enhanced_query": result.get("enhanced_query", ""),
             "enhance_query_mode": result.get("enhance_query_mode", "simple"),

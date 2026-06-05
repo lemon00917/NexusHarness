@@ -4,6 +4,8 @@ Medical Record Filter
 RAG-based medical record filtering with LLM reasoning judgment.
 """
 
+import json
+import re
 import time
 from dataclasses import dataclass
 from typing import List, Optional
@@ -16,11 +18,121 @@ from microharness.ollama.prompts import format_judge_prompt, format_parse_prompt
 from microharness.observability.logger import filter_logger, rag_logger, ollama_logger
 
 
+# ──────────────────────────────────────────────────
+# Robust JSON extraction (small model tolerant)
+# ──────────────────────────────────────────────────
+
+def _try_parse_json(text: str) -> dict:
+    """Multi-strategy JSON parser for LLM responses.
+
+    Tries progressively more aggressive extraction methods:
+    1. Direct json.loads
+    2. Strip markdown fences + json.loads
+    3. Balanced-brace extraction + json.loads
+    4. Fix trailing commas / unquoted keys + json.loads
+    5. Regex-extract "matched" field from free text (last resort)
+
+    Returns a dict with at least {"matched": bool}.
+    """
+    raw = text
+
+    # Strategy 1: direct parse
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: strip markdown fences
+    cleaned = raw.strip()
+    for fence in ("```json", "```"):
+        if fence in cleaned:
+            parts = cleaned.split(fence)
+            if len(parts) >= 2:
+                inner = parts[1].split("```")[0] if "```" in parts[1] else parts[1]
+                cleaned = inner.strip()
+                break
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 3: balanced-brace extraction
+    start = cleaned.find("{")
+    if start >= 0:
+        depth = 0
+        end = -1
+        for i in range(start, len(cleaned)):
+            if cleaned[i] == "{":
+                depth += 1
+            elif cleaned[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end > start:
+            candidate = cleaned[start:end + 1]
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+
+    # Strategy 4: fix common JSON errors in the extracted fragment
+    candidate = cleaned[start:end + 1] if (start >= 0 and end > start) else cleaned
+    # Remove trailing commas before } or ]
+    fixed = re.sub(r",(\s*[}\]])", r"\1", candidate)
+    # Fix unquoted keys (word: → "word":)
+    fixed = re.sub(r'([{,])\s*(\w+)\s*:', r'\1"\2":', fixed)
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 5: regex fallback — extract matched field from any text
+    result = {"matched": False, "matched_docs": [], "summary": "JSON解析失败"}
+    m = re.search(r'"matched"\s*:\s*(true|false)', raw)
+    if m:
+        result["matched"] = (m.group(1) == "true")
+
+    # Try to extract matched_docs and summary fragments
+    summary_m = re.search(r'"summary"\s*:\s*"([^"]{1,200})"', raw)
+    if summary_m:
+        result["summary"] = summary_m.group(1)
+    else:
+        # Fallback: grab last sentence that mentions 符合/不符合
+        for keyword in ("不符合", "符合"):
+            idx = raw.rfind(keyword)
+            if idx > 0:
+                snippet = raw[max(0, idx - 30):idx + 30].replace("\n", " ")
+                result["summary"] = f"提取: ...{snippet}..."
+                break
+
+    # Chinese semantic fallback: if no JSON matched field found,
+    # try to infer from Chinese text patterns
+    if not m:
+        # Look for conclusion-like patterns near the end of text
+        tail = raw[-500:] if len(raw) > 500 else raw
+        # "不符合" (negation) takes priority — check first
+        if re.search(r'不符合', tail):
+            result["matched"] = False
+        elif re.search(r'(?<!不)符合', tail):
+            result["matched"] = True
+        # Strong positive indicators
+        if re.search(r'(明确|确诊|证实).*(符合|满足|匹配)', tail):
+            result["matched"] = True
+        # Strong negative indicators
+        if re.search(r'不(符合|满足|匹配)', tail):
+            result["matched"] = False
+
+    return result
+
+
 @dataclass
 class ParsedCondition:
     """Structured representation of a filter condition."""
     original: str
     keywords: List[str]
+    criteria: List[str]  # sub-conditions for multi-route search
     summary: str
 
 
@@ -52,6 +164,40 @@ from pathlib import Path as PathFn
 def _get_record_filter_index_dir():
     """Get absolute path for rag_index, resolved relative to record_filter.py location."""
     return str(PathFn(__file__).parent.parent.parent / "web" / "rag_index")
+
+
+# ──────────────────────────────────────────────────
+# Medical synonym expansion for query enhancement
+# ──────────────────────────────────────────────────
+
+# Core medical concept → retrieval synonyms
+# Expands "患有癌症" → "患有癌症 肿瘤 恶性肿瘤 癌" to improve BM25 + vector hit rate
+_MEDICAL_SYNONYMS: dict = {
+    "癌症": ["肿瘤", "恶性肿瘤", "癌", "占位", "肿物"],
+    "化疗": ["化学治疗", "抗肿瘤治疗", "药物治疗", "药物化疗"],
+    "手术": ["切除术", "根治术", "术", "手术"],
+    "转移": ["扩散", "继发", "转移性", "M1"],
+    "骨折": ["病理性骨折", "骨折", "骨破坏"],
+    "高血压": ["血压升高", "高血压病", "BP高"],
+    "糖尿病": ["血糖升高", "DM", "糖尿病"],
+}
+_SYNONYM_PATTERNS: dict = {}  # compiled regex cache
+
+
+def _expand_medical_query(query: str) -> str:
+    """Append medical synonyms to a query string for broader retrieval.
+
+    Example: "患有癌症" → "患有癌症 肿瘤 恶性肿瘤 癌 占位 肿物"
+    """
+    expanded = query
+    for term, synonyms in _MEDICAL_SYNONYMS.items():
+        if term in query:
+            for s in synonyms:
+                if s not in expanded:
+                    expanded += " " + s
+    if expanded != query:
+        filter_logger.info(f"[同义词扩展] {query[:40]} → {expanded[:80]}")
+    return expanded
 
 
 class RecordFilter:
@@ -95,6 +241,10 @@ class RecordFilter:
         self.retrieval_top_k = retrieval_top_k
         self.vector_weight = vector_weight
         self.bm25_weight = bm25_weight
+
+        # Parse cache: condition → ParsedCondition (max 128 entries)
+        self._parse_cache: dict = {}
+        self._parse_cache_max = 128
         self.model = model
         self.enhance_query_mode = enhance_query_mode
         self.enhance_model = enhance_model
@@ -102,6 +252,10 @@ class RecordFilter:
         # Initialize RAG - reuse SimpleRAG with custom collection
         self.rag = SimpleRAG(index_dir=index_dir)
         self.rag.load_index()
+
+        # Reranker client (lazy init)
+        self._reranker_client: Optional['OllamaClient'] = None
+        self._reranker_model = "dengcao/Qwen3-Reranker-0.6B:F16"
 
         # Initialize Ollama client (use specified model or default)
         if ollama_client:
@@ -226,6 +380,7 @@ class RecordFilter:
     def _parse_condition(self, condition: str) -> ParsedCondition:
         """
         Use LLM to parse natural language condition into structured format.
+        Results are cached per condition string (max 128 entries).
 
         Args:
             condition: Natural language condition
@@ -233,6 +388,11 @@ class RecordFilter:
         Returns:
             ParsedCondition with keywords and summary
         """
+        # Check cache first
+        if condition in self._parse_cache:
+            filter_logger.info(f"[Parse] 缓存命中 | 条件: {condition[:50]}...")
+            return self._parse_cache[condition]
+
         system_prompt, user_prompt = format_parse_prompt(condition)
 
         try:
@@ -264,13 +424,25 @@ class RecordFilter:
 
             keywords = parsed_data.get("keywords", [])
             criteria = parsed_data.get("criteria", [])
+            if not criteria:
+                # Fallback: LLM didn't split → split by delimiters
+                criteria = [c.strip() for c in re.split(r'且|和|与|、|,|，|或', condition) if c.strip()]
+                filter_logger.info(f"[Parse] LLM未拆分criteria，兜底拆分: {criteria}")
             logic = parsed_data.get("logic", "AND")
 
-            return ParsedCondition(
+            result = ParsedCondition(
                 original=condition,
-                keywords=keywords[:8],  # Limit to 8 keywords
+                keywords=keywords[:8],
+                criteria=criteria[:10],
                 summary=f"[{logic}] " + " | ".join(criteria[:5])
             )
+            # Cache successful parse (LRU eviction)
+            if len(self._parse_cache) >= self._parse_cache_max:
+                # Remove oldest entry (first key)
+                oldest = next(iter(self._parse_cache))
+                del self._parse_cache[oldest]
+            self._parse_cache[condition] = result
+            return result
         except Exception as e:
             # Fallback: use simple extraction
             import re
@@ -285,6 +457,7 @@ class RecordFilter:
             return ParsedCondition(
                 original=condition,
                 keywords=keywords or condition.split(),
+                criteria=[],  # fallback has no sub-conditions
                 summary=f"解析失败，使用原始条件: {str(e)[:50]}"
             )
 
@@ -476,6 +649,155 @@ class RecordFilter:
         ]
         return result_data
 
+    def _multi_route_search(
+        self,
+        criteria: List[str],
+        sub_top_k: int,
+        vector_weight: float = 0.7,
+        bm25_weight: float = 0.3,
+    ) -> list:
+        """
+        Multi-route search: each criterion searches sub_top_k chunks,
+        then round-robin merge + chunk-level dedup.
+
+        Args:
+            criteria: List of sub-condition strings
+            sub_top_k: Number of chunks per criterion
+            vector_weight: Weight for vector similarity
+            bm25_weight: Weight for BM25 keyword matching
+
+        Returns:
+            Tuple of (merged chunks list, expanded_queries dict)
+        """
+        if not criteria:
+            return [], {}
+
+        all_results: List[List] = []
+        expanded_queries: dict = {}
+
+        for criterion in criteria:
+            query = _expand_medical_query(criterion)
+            expanded_queries[criterion] = query
+            results = self.rag.search(
+                query=query,
+                top_k=sub_top_k,
+                vector_weight=vector_weight,
+                bm25_weight=bm25_weight,
+                deduplicate=False,
+            )
+            chunks = [
+                _SearchChunkWrapper(
+                    content=r.matched_chunk_content or r.document.content,
+                    filename=r.document.filename,
+                    score=r.score,
+                    chunk_id=r.chunk_id,
+                    visit_id=r.document.metadata.get("visit_id"),
+                )
+                for r in results
+            ]
+            all_results.append(chunks)
+            filter_logger.info(
+                f"[多路检索] 子条件: {criterion[:40]}... | 检索到 {len(chunks)} 个chunks"
+            )
+
+        # Round-robin merge + chunk dedup
+        seen: set = set()
+        merged: list = []
+        max_len = max(len(c) for c in all_results) if all_results else 0
+        for i in range(max_len):
+            for chunks in all_results:
+                if i < len(chunks):
+                    c = chunks[i]
+                    cid = c.chunk_id or f"{c.filename}:{hash(c.content[:80])}"
+                    if cid not in seen:
+                        seen.add(cid)
+                        merged.append(c)
+
+        filter_logger.info(
+            f"[多路检索] 合并完成 | {len(criteria)}路 × {sub_top_k} → "
+            f"{len(merged)} 个去重chunks"
+        )
+        return merged, expanded_queries
+
+    def _rerank_chunks(
+        self,
+        chunks: list,
+        condition: str,
+        top_k: int = 5,
+    ) -> list:
+        """
+        Re-rank chunks using Qwen3-Reranker via Ollama chat API.
+
+        The reranker is trained to output "yes"/"no" for document relevance.
+        Chunks judged "no" are filtered out; "yes" chunks are kept in original order.
+
+        Args:
+            chunks: List of _SearchChunkWrapper from multi-route search
+            condition: Original filter condition
+            top_k: Max chunks to return after reranking
+
+        Returns:
+            Filtered list of _SearchChunkWrapper
+        """
+        if not chunks:
+            return chunks
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # Lazy init reranker client
+        if self._reranker_client is None:
+            from microharness.ollama import OllamaClient
+            self._reranker_client = OllamaClient(model=self._reranker_model, timeout=60)
+
+        reranker_prompt = (
+            "<Instruct>: Given a medical condition, determine whether the medical record "
+            "document contains evidence relevant to the condition.\n"
+            f"<Query>: {condition}\n"
+            "<Document>: {}"
+        )
+
+        def _judge_one(chunk):
+            """Call reranker for a single chunk, returns (chunk_id, is_relevant)."""
+            doc_text = chunk.content[:3000]
+            user_msg = reranker_prompt.format(doc_text)
+            try:
+                response = self._reranker_client.chat(
+                    messages=[
+                        {"role": "system",
+                         "content": "Judge whether the Document meets the requirements based on "
+                                    "the Query and the Instruct provided. Note that the answer "
+                                    'can only be "yes" or "no".'},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    temperature=0,
+                    model=self._reranker_model,
+                )
+                is_yes = "yes" in response.strip().lower()
+                return (chunk.chunk_id or chunk.filename), is_yes
+            except Exception as e:
+                filter_logger.warning(f"[Reranker] 调用失败: {e}，保留chunk")
+                return (chunk.chunk_id or chunk.filename), True  # Keep on error
+
+        # Parallel rerank — max 2 concurrent to avoid Ollama overload
+        max_workers = min(2, len(chunks))
+        id_kept: dict = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_judge_one, c): c for c in chunks}
+            for future in as_completed(futures):
+                chunk_id, kept = future.result()
+                id_kept[chunk_id] = kept
+
+        # Keep only "yes" chunks, preserve original order
+        reranked = [c for c in chunks if id_kept.get(c.chunk_id or c.filename, True)]
+
+        yes_count = sum(1 for v in id_kept.values() if v)
+        filter_logger.info(
+            f"[Reranker] 完成 | {len(chunks)} chunks → {yes_count} yes/{len(chunks)-yes_count} no → "
+            f"保留 {len(reranked)} 个"
+        )
+
+        return reranked[:top_k]
+
     def list_records(self) -> List[dict]:
         """List all indexed records."""
         return self.rag.list_documents()
@@ -487,6 +809,7 @@ class RecordFilter:
         top_k: int = 20,
         score_threshold: float = 0.0,
         merge_mode: str = "combined",
+        sub_top_k: int = 3,
     ) -> dict:
         """
         Batch filter: retrieve chunks then judge all together.
@@ -503,8 +826,9 @@ class RecordFilter:
             visit_id: Optional visit/patient ID to filter documents
             top_k: Number of chunks to retrieve for batch judgment
             score_threshold: Minimum vector similarity score (0.0-1.0) to include chunk
-            merge_mode: "combined" = merge same visit_id chunks before LLM judgment,
-                       "per_doc" = judge each chunk independently
+            merge_mode: "combined" = multi-route search + round-robin merge + LLM judge,
+                       "per_doc" = single-query search + judge each doc independently
+            sub_top_k: (combined mode only) chunks retrieved per sub-condition, default 2
 
         Returns:
             Dict with matched status, matched docs info, and summary
@@ -512,20 +836,31 @@ class RecordFilter:
         import json
         start_time = time.time()
         filter_logger.info(f"=" * 50)
-        filter_logger.info(f"批量筛选 | 条件: {condition[:50]}... | 就诊号: {visit_id or '全部'} | top_k: {top_k}")
+        search_info = f"sub_top_k={sub_top_k}" if merge_mode == "combined" else f"top_k={top_k}"
+        filter_logger.info(f"批量筛选 | 条件: {condition[:50]}... | 就诊号: {visit_id or '全部'} | {search_info} | mode={merge_mode}")
 
-        # ========== Step 1+2: 解析并构建增强查询 ==========
-        # LLM模式: 一步到位，跳过parse直接enhance
-        # Simple模式: 先parse提取关键词，再拼接
+        # ========== Step 1: 解析条件 + 构建检索 ==========
         step1_start = time.time()
-        if self.enhance_query_mode == "llm":
-            # LLM模式：直接一步生成增强查询，跳过parse
+
+        if merge_mode == "combined":
+            # combined: 始终解析条件获取 criteria，用于多路检索
+            parsed = self._parse_condition(condition)
+            step1_duration = (time.time() - step1_start) * 1000
+            enhanced_query = ""  # combined 不需要增强查询，用 criteria 多路检索
+            step2_duration = 0
+            filter_logger.info(
+                f"[Step 1/3] 条件解析完成 | 耗时: {step1_duration:.0f}ms | "
+                f"criteria: {len(parsed.criteria)}个 | keywords: {parsed.keywords}"
+            )
+        elif self.enhance_query_mode == "llm":
+            # per_doc + llm: 直接增强查询，跳过 parse
             enhanced_query = self._build_enhanced_query_llm(condition, None)
             step1_duration = (time.time() - step1_start) * 1000
             step2_duration = 0
+            parsed = None
             filter_logger.info(f"[Step 1/2] LLM增强查询一步完成 | 增强查询: {enhanced_query[:80]}... | 耗时: {step1_duration:.0f}ms")
         else:
-            # Simple模式：先parse关键词，再拼接
+            # per_doc + simple: 先 parse 再拼接
             parsed = self._parse_condition(condition)
             step1_duration = (time.time() - step1_start) * 1000
             step2_start = time.time()
@@ -533,29 +868,43 @@ class RecordFilter:
             step2_duration = (time.time() - step2_start) * 1000
             filter_logger.info(f"[Step 1/2] 解析+构建完成 | 解析: {step1_duration:.0f}ms | 拼接: {step2_duration:.0f}ms | 关键词: {parsed.keywords}")
 
-        # ========== Step 2/3: 检索 chunks（LLM模式）或 Step 3/3（Simple模式）============
+        # ========== Step 2: 检索 chunks ==========
         step_retrieve_start = time.time()
-        results = self.rag.search(
-            query=enhanced_query,
-            top_k=top_k,
-            vector_weight=self.vector_weight,
-            bm25_weight=self.bm25_weight,
-            deduplicate=False  # 返回所有chunks不过去重，用于all_chunks显示
-        )
-        # 适配 search() 返回 SearchResult → _SearchChunkWrapper 格式
-        # 优先使用 matched_chunk_content（ChromaDB原始chunk内容），否则用 document.content
-        chunks = [
-            _SearchChunkWrapper(
-                content=r.matched_chunk_content or r.document.content,
-                filename=r.document.filename,
-                score=r.score,
-                chunk_id=r.chunk_id,  # ChromaDB chunk ID (doc_id_chunk_N)
-                visit_id=r.document.metadata.get("visit_id")
+
+        if merge_mode == "combined" and parsed and parsed.criteria:
+            # 多路检索：每个子条件检索 sub_top_k → 轮询合并去重
+            chunks, expanded_queries = self._multi_route_search(
+                criteria=parsed.criteria,
+                sub_top_k=sub_top_k,
+                vector_weight=self.vector_weight,
+                bm25_weight=self.bm25_weight,
             )
-            for r in results
-        ]
+            enhanced_query = (
+                json.dumps(expanded_queries, ensure_ascii=False)
+                if expanded_queries else ""
+            )
+        else:
+            # per_doc 或 combined 无 criteria 兜底：单路检索
+            results = self.rag.search(
+                query=enhanced_query or condition,
+                top_k=top_k,
+                vector_weight=self.vector_weight,
+                bm25_weight=self.bm25_weight,
+                deduplicate=False,
+            )
+            chunks = [
+                _SearchChunkWrapper(
+                    content=r.matched_chunk_content or r.document.content,
+                    filename=r.document.filename,
+                    score=r.score,
+                    chunk_id=r.chunk_id,
+                    visit_id=r.document.metadata.get("visit_id"),
+                )
+                for r in results
+            ]
+
         step_retrieve_duration = (time.time() - step_retrieve_start) * 1000
-        filter_logger.info(f"[Step {3 if self.enhance_query_mode != 'llm' else 2}/3] 检索chunks完成 | chunks: {len(chunks)} | 耗时: {step_retrieve_duration:.0f}ms")
+        filter_logger.info(f"[Step 2/3] 检索完成 | chunks: {len(chunks)} | 耗时: {step_retrieve_duration:.0f}ms")
 
         # 内容质量过滤（保留，只过滤明显无意义chunk）
         original_count = len(chunks)
@@ -636,10 +985,7 @@ class RecordFilter:
                         ],
                         temperature=0.1
                     )
-                    try:
-                        rd = json.loads(response.strip())
-                    except Exception:
-                        rd = {"matched": False, "summary": f"解析失败: {response[:100]}"}
+                    rd = _try_parse_json(response.strip())
                     doc_results.append({"visit_id": vid, "filename": fname, "result": rd})
                     filter_logger.info(f"  文档 {fname}: matched={rd.get('matched')}")
 
@@ -663,54 +1009,9 @@ class RecordFilter:
                 temperature=0.1
             )
             response = response.strip()
-
-            # 解析JSON响应
-            json_text = response
-            if "```json" in json_text:
-                parts = json_text.split("```json")
-                if len(parts) >= 2:
-                    json_text = parts[1].split("```")[0]
-            elif "```" in json_text:
-                parts = json_text.split("```")
-                if len(parts) >= 2:
-                    json_text = parts[1]
-
-            json_text = json_text.strip()
-            try:
-                result_data = json.loads(json_text)
-            except json.JSONDecodeError as je:
-                # 记录原始响应供调试
-                filter_logger.error(f"JSON解析失败，原始响应: {json_text[:500]}")
-                # 尝试修复常见问题后重试
-                import re
-                # 尝试修复缺少逗号的问题（常见于chunk_content中有多行文本）
-                fixed = json_text
-                # 修复：行尾的"}{"改为"},\n{"
-                fixed = re.sub(r'(?<=[^,\n{])\n(?=\{\s*"[^"]+":)', ',', fixed)
-                try:
-                    result_data = json.loads(fixed)
-                    filter_logger.info("JSON修复成功")
-                except Exception:
-                    # 最后尝试：截取第一个完整的JSON对象（从第一个{到最后一个}）
-                    first_brace = json_text.find('{')
-                    last_brace = json_text.rfind('}')
-                    if first_brace >= 0 and last_brace > first_brace:
-                        candidate = json_text[first_brace:last_brace + 1]
-                        try:
-                            result_data = json.loads(candidate)
-                            filter_logger.info("JSON截断修复成功")
-                        except Exception:
-                            result_data = {
-                                "matched": False,
-                                "matched_docs": [],
-                                "summary": f"JSON解析失败: {str(je)[:100]}"
-                            }
-                    else:
-                        result_data = {
-                            "matched": False,
-                            "matched_docs": [],
-                            "summary": f"JSON解析失败: {str(je)[:100]}"
-                        }
+            result_data = _try_parse_json(response)
+            if result_data.get("summary") == "JSON解析失败":
+                filter_logger.error(f"JSON解析失败，原始响应: {response[:500]}")
         except Exception as e:
             filter_logger.error(f"LLM批量判断失败: {e}")
             result_data = {

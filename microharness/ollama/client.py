@@ -170,16 +170,16 @@ class OllamaClient:
         """
         import requests
 
-        url = f"{self.base_url}/api/embeddings"
+        url = f"{self.base_url}/api/embed"
         payload = {
             "model": self.model,
-            "prompt": text
+            "input": text
         }
 
         try:
             response = requests.post(url, json=payload, timeout=self.timeout)
             response.raise_for_status()
-            result = response.json()["embedding"]
+            result = response.json()["embeddings"][0]
             return result
         except Exception as e:
             ollama_logger.error(f"Embedding失败 | 模型: {self.model} | 错误: {str(e)}")
@@ -187,7 +187,7 @@ class OllamaClient:
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """
-        Generate embeddings for multiple texts.
+        Generate embeddings for multiple texts in a single API call.
 
         Args:
             texts: List of input texts to embed
@@ -195,7 +195,18 @@ class OllamaClient:
         Returns:
             List of embedding vectors
         """
-        return [self.embed(text) for text in texts]
+        if not texts:
+            return []
+        import requests
+        url = f"{self.base_url}/api/embed"
+        payload = {"model": self.model, "input": texts}
+        try:
+            response = requests.post(url, json=payload, timeout=self.timeout)
+            response.raise_for_status()
+            return response.json()["embeddings"]
+        except Exception as e:
+            ollama_logger.error(f"Embedding批量失败 | 模型: {self.model} | 错误: {str(e)}")
+            raise
 
 
 # Default embedding model for Ollama

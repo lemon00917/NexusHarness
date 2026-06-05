@@ -433,9 +433,9 @@
             <!-- Step 3: RAG检索 -->
             <div style="margin-bottom:8px;">
                 <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">🔍 RAG 检索</div>
-                <div style="display:flex;gap:8px;align-items:center;">
-                    <span style="font-size:12px;color:var(--text-dim);">top_k</span>
-                    <input type="number" id="filterTopK" value="20" min="1" max="100" style="width:60px;padding:8px 12px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:13px;">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <span style="font-size:12px;color:var(--text-dim);">子条件top_k</span>
+                    <input type="number" id="filterSubTopK" value="3" min="1" max="10" title="combined模式：每个子条件检索的文档数" style="width:50px;padding:8px 12px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:13px;">
                     <span style="font-size:12px;color:var(--text-dim);">阈值</span>
                     <input type="number" id="filterThreshold" value="0.0" min="0" max="1" step="0.05" style="width:60px;padding:8px 12px;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:13px;">
                 </div>
@@ -908,7 +908,7 @@ async function uploadDocument() {
             const condition = document.getElementById('filterCondition').value.trim();
             const visitId = document.getElementById('filterVisitId').value.trim();
             const model = document.getElementById('modelSelect').value;
-            const topK = parseInt(document.getElementById('filterTopK').value) || 20;
+            const topK = 20;  // 旧filter固定值
             const enhanceMode = document.getElementById('enhanceMode').value;
             const enhanceModel = document.getElementById('enhanceModel').value;
 
@@ -952,7 +952,7 @@ async function uploadDocument() {
             const condition = document.getElementById('filterCondition').value.trim();
             const visitId = document.getElementById('filterVisitId').value.trim();
             const model = document.getElementById('modelSelect').value;
-            const topK = parseInt(document.getElementById('filterTopK').value) || 20;
+            const subTopK = parseInt(document.getElementById('filterSubTopK').value) || 2;
             const threshold = parseFloat(document.getElementById('filterThreshold').value) || 0.0;
             const enhanceMode = document.getElementById('enhanceMode').value;
             const enhanceModel = document.getElementById('enhanceModel').value;
@@ -975,7 +975,7 @@ async function uploadDocument() {
                         condition: condition,
                         visit_id: visitId || null,
                         model: model,
-                        top_k: topK,
+                        sub_top_k: subTopK,
                         score_threshold: threshold,
                         enhance_mode: enhanceMode,
                         enhance_model: enhanceModel,
@@ -1042,7 +1042,7 @@ async function uploadDocument() {
                 <div style="padding:12px 15px;background:var(--bg-tertiary);border-bottom:1px solid var(--border-color);font-size:12px;">
                     批量判断: <strong>${escapeHtml(data.condition)}</strong> |
                     就诊号: <strong>${data.visit_id || '全部'}</strong> |
-                    top_k: <strong>${data.top_k}</strong> |
+                    sub_top_k: <strong>${data.sub_top_k || '-'}</strong> |
                     阈值: <strong>${data.score_threshold || 0}</strong> |
 合并:
                     <span style="color:${matched ? 'var(--accent-green)' : 'var(--accent-red)'};font-weight:bold;">
