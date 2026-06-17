@@ -1,25 +1,22 @@
 """
-Medical Knowledge Base Module
-============================
-
-Provides medical document parsing, chunking, and RAG capabilities.
+Medical Module
+==============
+Provides medical document parsing, field catalog, and filtering capabilities.
 
 Usage:
-    from microharness.medical import medical_kb
-
-    # Add medical document
-    medical_kb.add_document(content, "drug_guide.md", metadata={"medical_type": "药品"})
-
-    # Search
-    results = medical_kb.search("阿司匹林", top_k=3, filter_type="药品")
-
-    # Use as agent tool
-    from microharness.medical.tools import medical_lookup
+    from microharness.medical.field_catalog import get_catalog
+    catalog = get_catalog()
 """
 
-from microharness.medical.knowledge_base import MedicalRAG
+# Lazy imports to avoid pulling in heavy RAG dependencies at module load
+_medical_kb = None
 
-# Global instance
-medical_kb = MedicalRAG()
+def get_medical_kb():
+    """Lazy-load MedicalRAG instance."""
+    global _medical_kb
+    if _medical_kb is None:
+        from microharness.medical.knowledge_base import MedicalRAG
+        _medical_kb = MedicalRAG()
+    return _medical_kb
 
-__all__ = ["medical_kb", "MedicalRAG"]
+__all__ = ["get_medical_kb"]

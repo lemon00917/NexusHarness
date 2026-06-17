@@ -3,9 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NexusHarness — AI Agent</title>
+    <title>CDR Agent — AI Agent</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        // Fallback: if marked CDN fails (offline), provide minimal markdown rendering
+        if (typeof marked === 'undefined') {
+            window.marked = { parse: function(t) { return t.replace(/</g, '&lt;').replace(/\n/g, '<br>'); } };
+        }
+    </script>
 </head>
 <body>
     <div class="app-container">
@@ -13,8 +19,8 @@
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <div class="logo">
-                    <span class="logo-icon">🤖</span>
-                    <span class="logo-text">NexusHarness</span>
+                    <span class="logo-icon">⟡</span>
+                    <span class="logo-text">CDR Agent</span>
                 </div>
                 <button class="new-chat-btn" onclick="startNewChat()">
                     <span>+</span> 新对话
@@ -48,6 +54,9 @@
                         <span id="toolMenuArrow">▼</span>
                     </div>
                     <div class="tool-menu-items" id="toolMenuItems" style="display:none;">
+                        <a href="/templates/medical_filter.html" target="_blank" class="tool-item">🔬 病历筛选</a>
+                        <a href="/templates/medical_config.html" target="_blank" class="tool-item">⚙️ 元数据配置</a>
+                        <a href="/templates/database_config.html" target="_blank" class="tool-item">🗄️ 数据库配置</a>
                         <a href="/templates/rag.html" target="_blank" class="tool-item">📚 知识库</a>
                         <a href="/templates/rag_config.html" target="_blank" class="tool-item">⚙️ RAG配置</a>
                         <a href="/templates/prompt_config.html" target="_blank" class="tool-item">💬 提示词配置</a>
@@ -75,10 +84,11 @@
             <header class="chat-header">
                 <div class="chat-header-left mobile-only">
                     <button class="mobile-menu-btn" onclick="toggleMobileSidebar()">☰</button>
-                    <h2>AI Assistant</h2>
+                    <h2>CDR Agent</h2>
                 </div>
                 <div class="chat-header-left desktop-only">
-                    <h2>AI Assistant</h2>
+                    <h2>CDR Agent</h2>
+                    <div class="ekg-waveform" id="ekgWaveform"></div>
                 </div>
                 <div class="chat-header-right">
                     <button class="settings-btn" onclick="showSettings()">
@@ -92,7 +102,7 @@
             <div class="messages-container" id="messagesContainer">
                 <div class="welcome-message">
                     <div class="welcome-icon">🤖</div>
-                    <h3>你好，我是 NexusHarness</h3>
+                    <h3>你好，我是 CDR Agent</h3>
                     <p>我可以帮你完成各种任务，比如查询天气、写代码、分析数据等。</p>
                     <div class="welcome-suggestions">
                         <button class="suggestion-btn" onclick="fillTask('今天北京天气怎么样？')">🌤️ 查询天气</button>
@@ -291,6 +301,27 @@
     </div>
 
     <script>
+        // ── EKG Waveform Generator ──────────────────
+        (function() {
+            const container = document.getElementById('ekgWaveform');
+            if (!container) return;
+            for (let i = 0; i < 12; i++) {
+                const bar = document.createElement('span');
+                bar.className = 'ekg-bar';
+                const h = 6 + Math.sin(i * 0.7) * 4 + Math.random() * 8;
+                bar.style.height = h + 'px';
+                container.appendChild(bar);
+            }
+            // Pulse a random bar every few seconds (idle rhythm)
+            setInterval(() => {
+                if (container.classList.contains('thinking')) return;
+                const bars = container.querySelectorAll('.ekg-bar');
+                const idx = Math.floor(Math.random() * bars.length);
+                bars[idx].classList.add('pulse');
+                setTimeout(() => bars[idx].classList.remove('pulse'), 300);
+            }, 2000);
+        })();
+
         function toggleToolMenu() {
             const items = document.getElementById('toolMenuItems');
             const arrow = document.getElementById('toolMenuArrow');
@@ -317,10 +348,11 @@
                 }
 
                 // Get current model status
-                const statusRes = await fetch('/api/model');
-                let currentModel = {provider: 'minimax', name: 'MiniMax-M2'};
+                const statusRes = await fetch('/api/status');
+                let currentModel = {provider: 'minimax', name: 'MiniMax-M2', main_model: 'MiniMax-M2'};
                 if (statusRes.ok) {
-                    currentModel = await statusRes.json();
+                    const data = await statusRes.json();
+                    currentModel = {provider: data.provider, name: data.main_model, main_model: data.main_model};
                 }
 
                 // Build model list

@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>病历智能筛选 — CDR Agent</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body { overflow: hidden; }
+        .mf-app { display: flex; flex-direction: column; height: 100vh; background: var(--bg-primary); }
+
+        /* ── Top Bar ─────────────────── */
+        .mf-topbar {
+            height: 52px; padding: 0 20px; background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex; align-items: center; gap: 16px; flex-shrink: 0;
+        }
+        .mf-topbar .mf-back { color: var(--text-dim); text-decoration: none; font-size: 12px; padding: 5px 10px; border-radius: var(--radius-sm); transition: all .15s; }
+        .mf-topbar .mf-back:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+        .mf-topbar .mf-logo { font-size: 14px; font-weight: 600; color: var(--text-primary); letter-spacing: -.2px; display: flex; align-items: center; gap: 8px; }
+        .mf-topbar .mf-logo-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+        .mf-topbar .mf-spacer { flex: 1; }
+        .mf-topbar .mf-patient-badge {
+            font-size: 11px; padding: 5px 12px; background: var(--bg-tertiary);
+            border-radius: 14px; color: var(--text-secondary);
+            border: 1px solid var(--border-color); cursor: pointer; transition: all .15s;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .mf-topbar .mf-patient-badge:hover, .mf-topbar .mf-patient-badge.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+        .mf-topbar .dot { width: 6px; height: 6px; border-radius: 50%; }
+        .mf-topbar .dot.ready { background: var(--accent-green); }
+        .mf-topbar .dot.empty { background: var(--text-dim); }
+
+        /* ── Main Content ────────────── */
+        .mf-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 32px 40px 0; }
+
+        /* ── Query ───────────────────── */
+        .mf-query { max-width: 720px; margin: 0 auto 24px; width: 100%; }
+        .mf-query-label { font-size: 22px; font-weight: 600; color: var(--text-primary); margin-bottom: 16px; letter-spacing: -.4px; }
+        .mf-query-input-row {
+            display: flex; gap: 10px; background: var(--bg-secondary);
+            border: 1px solid var(--border-color); border-radius: 14px;
+            padding: 6px 6px 6px 18px; transition: border-color .2s, box-shadow .2s;
+        }
+        .mf-query-input-row:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+        .mf-query-input {
+            flex: 1; background: none; border: none; color: var(--text-primary);
+            font-size: 15px; outline: none; padding: 10px 0; font-family: var(--font-body);
+        }
+        .mf-query-input::placeholder { color: var(--text-dim); }
+        .mf-query-submit {
+            padding: 10px 22px; background: var(--accent); border: none; border-radius: 10px;
+            color: #fff; font-size: 13px; font-weight: 500; cursor: pointer;
+            transition: all .2s; font-family: var(--font-body); white-space: nowrap;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .mf-query-submit:hover { background: var(--accent-hover); box-shadow: 0 4px 14px var(--accent-glow); }
+        .mf-query-submit:disabled { opacity: .4; cursor: not-allowed; }
+
+        .mf-chips {
+            display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px;
+            max-width: 720px; margin-left: auto; margin-right: auto; width: 100%;
+        }
+        .mf-chip {
+            padding: 5px 14px; border-radius: 16px; font-size: 11px;
+            border: 1px solid var(--border-color); background: transparent;
+            color: var(--text-secondary); cursor: pointer; transition: all .15s;
+            font-family: var(--font-body); white-space: nowrap;
+        }
+        .mf-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+
+        .mf-status {
+            max-width: 720px; margin: 0 auto; width: 100%;
+            display: flex; align-items: center; gap: 16px; padding: 0 0 16px; font-size: 12px;
+        }
+        .mf-status-count { color: var(--text-secondary); }
+        .mf-status-count strong { color: var(--accent); font-weight: 600; }
+        .mf-status-meta { color: var(--text-dim); margin-left: auto; font-size: 11px; }
+
+        .mf-results {
+            flex: 1; overflow-y: auto; padding-bottom: 40px;
+            max-width: 720px; margin: 0 auto; width: 100%;
+        }
+        .mf-results::-webkit-scrollbar { width: 4px; }
+        .mf-results::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 2px; }
+
+        .mf-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+        .mf-table thead th {
+            text-align: left; padding: 10px 14px; font-size: 10px; font-weight: 600;
+            color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px;
+            border-bottom: 1px solid var(--border-color); background: var(--bg-secondary);
+            position: sticky; top: 0; z-index: 1;
+        }
+        .mf-table tbody td { padding: 12px 14px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); }
+        .mf-table tbody tr { transition: background .12s; }
+        .mf-table tbody tr:hover { background: var(--bg-tertiary); }
+        .mf-table .mono { font-family: var(--font-mono); font-size: 11px; }
+
+        .mf-empty { text-align: center; padding: 60px 20px; }
+        .mf-empty-icon {
+            width: 64px; height: 64px; margin: 0 auto 20px;
+            background: linear-gradient(135deg, var(--accent), #06b6d4);
+            border-radius: 16px; display: flex; align-items: center;
+            justify-content: center; font-size: 30px;
+            box-shadow: 0 8px 32px var(--accent-glow);
+        }
+        .mf-empty h3 { font-size: 17px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; letter-spacing: -.3px; }
+        .mf-empty p { font-size: 13px; color: var(--text-dim); line-height: 1.6; }
+
+        /* ═══ Patient Drawer ═══ */
+        .drawer-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,.5);
+            z-index: 900; opacity: 0; pointer-events: none; transition: opacity .25s;
+        }
+        .drawer-overlay.open { opacity: 1; pointer-events: auto; }
+        .drawer {
+            position: fixed; top: 0; right: -460px; width: 440px; max-width: 90vw;
+            height: 100vh; background: var(--bg-elevated);
+            border-left: 1px solid var(--border-color); z-index: 950;
+            display: flex; flex-direction: column;
+            box-shadow: -12px 0 40px rgba(0,0,0,.3);
+            transition: right .3s cubic-bezier(.16,1,.3,1);
+        }
+        .drawer.open { right: 0; }
+        .drawer-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 18px 20px; border-bottom: 1px solid var(--border-color);
+        }
+        .drawer-header h3 { font-size: 14px; font-weight: 600; }
+        .drawer-close {
+            width: 30px; height: 30px; border-radius: var(--radius-sm);
+            background: var(--bg-tertiary); border: none; color: var(--text-dim);
+            cursor: pointer; font-size: 16px; display: flex; align-items: center;
+            justify-content: center; transition: all .15s; font-family: var(--font-body);
+        }
+        .drawer-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .drawer-body { flex: 1; overflow-y: auto; padding: 12px; }
+        .drawer-body::-webkit-scrollbar { width: 3px; }
+        .drawer-body::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 2px; }
+        .drawer-footer { padding: 14px 20px; border-top: 1px solid var(--border-color); }
+        .drawer-btn {
+            width: 100%; padding: 10px; background: var(--accent); border: none;
+            border-radius: var(--radius-sm); color: #fff; font-size: 13px; font-weight: 500;
+            cursor: pointer; transition: all .2s; font-family: var(--font-body);
+            display: flex; align-items: center; justify-content: center; gap: 6px;
+        }
+        .drawer-btn:hover { background: var(--accent-hover); }
+        .drawer-btn.ghost { background: transparent; color: var(--text-dim); border: 1px dashed var(--border-color); margin-top: 6px; }
+        .drawer-btn.ghost:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+
+        .mf-pcard {
+            padding: 14px; border-radius: 10px; cursor: pointer;
+            border: 1px solid transparent; transition: all .15s; margin-bottom: 6px;
+        }
+        .mf-pcard:hover { background: var(--bg-tertiary); }
+        .mf-pcard.active { background: var(--accent-dim); border-color: var(--accent); }
+        .mf-pcard-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+        .mf-pcard-name { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+        .mf-pcard-badge { font-size: 9px; padding: 3px 8px; border-radius: 8px; font-weight: 500; }
+        .mf-pcard-badge.done { background: rgba(34,197,94,.12); color: var(--accent-green); }
+        .mf-pcard-badge.partial { background: rgba(245,158,11,.12); color: var(--accent-amber); }
+        .mf-pcard-files { display: flex; flex-wrap: wrap; gap: 4px; }
+        .mf-pcard-file { font-size: 9px; padding: 2px 8px; border-radius: 6px; background: var(--bg-secondary); color: var(--text-dim); }
+        .mf-pcard-file.ok { color: var(--accent-green); }
+        .mf-pcard-file.missing { opacity: .4; }
+        .mf-pcard-actions { display: flex; gap: 6px; margin-top: 10px; }
+        .mf-pcard-btn {
+            flex: 1; padding: 6px; border-radius: 6px; font-size: 10px; cursor: pointer;
+            text-align: center; border: 1px solid var(--border-color);
+            background: transparent; color: var(--text-secondary);
+            transition: all .15s; font-family: var(--font-body);
+        }
+        .mf-pcard-btn:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--accent); }
+        .mf-pcard-btn.danger:hover { border-color: var(--accent-red); color: var(--accent-red); }
+
+        /* ═══ Binding Panel (full screen modal) ═══ */
+        .bind-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,.7);
+            z-index: 1000; display: none; align-items: center; justify-content: center;
+            backdrop-filter: blur(4px);
+        }
+        .bind-overlay.show { display: flex; }
+        .bind-panel {
+            background: var(--bg-elevated); border: 1px solid var(--border-color);
+            border-radius: 16px; width: 800px; max-width: 95vw; max-height: 90vh;
+            display: flex; flex-direction: column; box-shadow: 0 24px 64px rgba(0,0,0,.5);
+        }
+        .bind-panel-header {
+            display: flex; align-items: center; padding: 18px 22px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .bind-panel-header h2 { flex: 1; font-size: 15px; font-weight: 600; }
+        .bind-panel-close {
+            background: none; border: none; color: var(--text-dim); font-size: 20px;
+            cursor: pointer; font-family: var(--font-body);
+        }
+        .bind-panel-close:hover { color: var(--text-primary); }
+        .bind-panel-body { flex: 1; overflow-y: auto; padding: 20px 22px; }
+        .bind-panel-body::-webkit-scrollbar { width: 4px; }
+        .bind-panel-body::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 2px; }
+
+        /* ── Stage config ────────────── */
+        .bind-stages { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+        .bind-stage {
+            background: var(--bg-tertiary); border-radius: 10px; padding: 14px;
+            border: 1px solid transparent; transition: all .15s;
+        }
+        .bind-stage:hover { border-color: var(--border-light); }
+        .bind-stage-header {
+            display: flex; align-items: center; gap: 6px; margin-bottom: 10px;
+            font-size: 11px; font-weight: 600;
+        }
+        .bind-stage-badge {
+            display: inline-block; padding: 2px 7px; border-radius: 5px;
+            font-size: 9px; font-weight: 500; letter-spacing: .3px;
+        }
+        .s1 { background: rgba(79,142,247,.15); color: #4f8ef7; }
+        .s2 { background: rgba(160,123,239,.15); color: #a07bef; }
+        .s3 { background: rgba(245,158,11,.15); color: #f59e0b; }
+        .s4 { background: rgba(34,197,94,.15); color: #22c55e; }
+        .bind-stage-label { font-size: 10px; color: var(--text-dim); margin-bottom: 4px; }
+        .bind-stage select {
+            width: 100%; padding: 7px 8px; background: var(--bg-secondary);
+            border: 1px solid var(--border-color); border-radius: 6px;
+            color: var(--text-primary); font-size: 11px; font-family: var(--font-body);
+            outline: none; cursor: pointer;
+        }
+        .bind-stage select:focus { border-color: var(--accent); }
+
+        /* ── File list ───────────────── */
+        .bind-files-section { margin-bottom: 16px; }
+        .bind-files-section h4 { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; }
+        .bind-file-row {
+            display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+            background: var(--bg-tertiary); border-radius: 8px; margin-bottom: 4px;
+            font-size: 12px;
+        }
+        .bind-file-row .fname { flex: 1; color: var(--text-primary); }
+        .bind-file-row .fstatus { font-size: 10px; padding: 2px 8px; border-radius: 6px; }
+        .bind-file-row .fstatus.pending { background: var(--bg-secondary); color: var(--text-dim); }
+        .bind-file-row .fstatus.running { background: rgba(245,158,11,.12); color: #f59e0b; }
+        .bind-file-row .fstatus.done { background: rgba(34,197,94,.12); color: var(--accent-green); }
+        .bind-file-row .fstatus.error { background: rgba(239,68,68,.12); color: var(--accent-red); }
+
+        /* ── Progress ────────────────── */
+        .bind-progress { margin-bottom: 16px; }
+        .bind-progress-bar {
+            width: 100%; height: 6px; background: var(--bg-tertiary);
+            border-radius: 3px; overflow: hidden;
+        }
+        .bind-progress-fill {
+            height: 100%; background: var(--accent); transition: width .3s;
+            border-radius: 3px;
+        }
+        .bind-progress-text { font-size: 11px; color: var(--text-dim); margin-top: 6px; text-align: center; }
+
+        /* ── Results table ───────────── */
+        .bind-result-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 12px; }
+        .bind-result-table th {
+            text-align: left; padding: 6px 10px; font-size: 9px; font-weight: 600;
+            color: var(--text-muted); text-transform: uppercase; letter-spacing: .4px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .bind-result-table td {
+            padding: 6px 10px; border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary); max-width: 180px; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap;
+        }
+        .bind-result-table .xml-path { font-family: var(--font-mono); font-size: 10px; color: var(--accent); }
+        .bind-result-table .field-value { color: var(--text-secondary); }
+
+        /* ── Upload modal ────────────── */
+        .upload-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,.65);
+            z-index: 1100; display: none; align-items: center; justify-content: center;
+            backdrop-filter: blur(4px);
+        }
+        .upload-overlay.show { display: flex; }
+        .upload-box {
+            background: var(--bg-elevated); border: 1px solid var(--border-color);
+            border-radius: 16px; width: 500px; max-width: 90vw;
+            box-shadow: 0 24px 64px rgba(0,0,0,.5);
+        }
+        .upload-box-header {
+            display: flex; align-items: center; padding: 18px 22px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .upload-box-header h2 { flex: 1; font-size: 15px; font-weight: 600; }
+        .upload-box-close {
+            background: none; border: none; color: var(--text-dim); font-size: 20px;
+            cursor: pointer; font-family: var(--font-body);
+        }
+        .upload-box-close:hover { color: var(--text-primary); }
+        .upload-box-body { padding: 22px; }
+        .upload-box-footer {
+            display: flex; gap: 10px; padding: 14px 22px;
+            border-top: 1px solid var(--border-color); justify-content: flex-end;
+        }
+        .field-label { display: block; font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-bottom: 6px; }
+        .field-input {
+            width: 100%; padding: 10px 14px; background: var(--bg-tertiary);
+            border: 1px solid var(--border-color); border-radius: var(--radius-sm);
+            color: var(--text-primary); font-size: 13px; outline: none;
+            font-family: var(--font-body); transition: border-color .2s; margin-bottom: 14px;
+        }
+        .field-input:focus { border-color: var(--accent); }
+        .drop-zone {
+            border: 2px dashed var(--border-color); border-radius: 12px;
+            padding: 28px; text-align: center; cursor: pointer; transition: all .2s;
+            color: var(--text-muted); font-size: 12px;
+        }
+        .drop-zone:hover, .drop-zone.dragover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+        .drop-zone-files { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+        .drop-zone-file {
+            font-size: 10px; padding: 3px 10px; border-radius: 12px;
+            background: var(--bg-tertiary); color: var(--text-secondary);
+            display: flex; align-items: center; gap: 4px;
+        }
+        .drop-zone-file .ok { color: var(--accent-green); }
+        .drop-zone-file .bad { color: var(--accent-amber); }
+
+        .btn {
+            padding: 8px 20px; border-radius: var(--radius-sm); font-size: 12px;
+            font-weight: 500; cursor: pointer; font-family: var(--font-body);
+            transition: all .15s; border: none;
+        }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); }
+        .btn-ghost:hover { background: var(--bg-hover); }
+
+        .spinner {
+            display: inline-block; width: 14px; height: 14px;
+            border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
+            border-radius: 50%; animation: spin .6s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinner-dark { border-color: rgba(255,255,255,.1); border-top-color: var(--accent); }
+
+        .mf-toast {
+            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+            background: var(--bg-elevated); color: var(--text-primary);
+            padding: 10px 22px; border-radius: var(--radius-sm);
+            border: 1px solid var(--border-color); font-size: 13px; z-index: 9999;
+            animation: toastIn .3s ease;
+        }
+        @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+    </style>
+</head>
+<body>
+<div class="mf-app">
+    <!-- ═══ Top Bar ═══ -->
+    <header class="mf-topbar">
+        <a href="/" class="mf-back">← CDR Agent</a>
+        <div class="mf-logo"><span class="mf-logo-dot"></span>病历筛选</div>
+        <span class="mf-spacer"></span>
+        <span class="mf-patient-badge" id="patientBadge" onclick="toggleDrawer('patientDrawer','patientOverlay')">
+            <span class="dot empty" id="patientDot"></span>
+            <span id="patientBadgeText">选择患者</span>
+        </span>
+        <select id="visitSelector" style="display:none;padding:4px 10px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:14px;color:var(--text-primary);font-size:11px;font-family:var(--font-body);outline:none;cursor:pointer;max-width:160px;" onchange="onVisitChange(this.value)"></select>
+    </header>
+
+    <!-- ═══ Main ═══ -->
+    <div class="mf-main">
+        <div class="mf-query">
+            <div class="mf-query-label">查找符合条件的患者</div>
+            <div class="mf-query-input-row">
+                <input class="mf-query-input" id="queryInput" placeholder="输入自然语言条件，如：住院小于5天、诊断为糖尿病、做过手术...">
+                <select id="routerModel" style="width:130px;padding:8px 6px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;color:var(--accent-amber);font-size:11px;font-family:var(--font-body);outline:none;cursor:pointer;margin-right:2px;" title="路由模型"></select>
+                <select id="judgeModel" style="width:130px;padding:8px 6px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;color:var(--accent-green);font-size:11px;font-family:var(--font-body);outline:none;cursor:pointer;margin-right:4px;" title="判断模型"></select>
+                <button class="mf-query-submit" id="querySubmit" onclick="runQuery()" disabled>筛选</button>
+            </div>
+        </div>
+        <div class="mf-chips">
+            <button class="mf-chip" onclick="fillQuery('住院小于5天')">住院 &lt; 5天</button>
+            <button class="mf-chip" onclick="fillQuery('有手术记录')">有手术记录</button>
+            <button class="mf-chip" onclick="fillQuery('诊断为糖尿病')">诊断为糖尿病</button>
+            <button class="mf-chip" onclick="fillQuery('血糖大于7')">血糖 &gt; 7</button>
+            <button class="mf-chip" onclick="fillQuery('主诉中包含头痛')">主诉含头痛</button>
+            <button class="mf-chip" onclick="fillQuery('有过敏史')">有过敏史</button>
+        </div>
+        <div class="mf-status" id="statusBar" style="display:none">
+            <span class="mf-status-count" id="statusCount"></span>
+            <span class="mf-status-meta" id="statusMeta"></span>
+        </div>
+        <div class="mf-results" id="resultsArea">
+            <div class="mf-empty">
+                <div class="mf-empty-icon">🔬</div>
+                <h3>病历智能筛选</h3>
+                <p>上传患者病历并绑定后<br>输入自然语言条件即可筛选</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Patient Drawer ═══ -->
+    <div class="drawer-overlay" id="patientOverlay" onclick="closeDrawer('patientDrawer','patientOverlay')"></div>
+    <div class="drawer" id="patientDrawer">
+        <div class="drawer-header">
+            <h3>📁 患者管理</h3>
+            <button class="drawer-close" onclick="closeDrawer('patientDrawer','patientOverlay')">✕</button>
+        </div>
+        <div class="drawer-body" id="drawerPatients">
+            <div class="mf-empty" style="padding:40px 20px;"><p>暂无患者<br>点击下方按钮上传并绑定病历</p></div>
+        </div>
+        <div class="drawer-footer">
+            <button class="drawer-btn" onclick="event.stopPropagation();showUploadModal()">+ 添加患者</button>
+            <button class="drawer-btn ghost" id="batchBindBtn" onclick="event.stopPropagation();openBindPanel()" disabled>
+                ⚡ 四阶段绑定
+            </button>
+        </div>
+    </div>
+
+    <!-- ═══ Binding Panel ═══ -->
+    <div class="bind-overlay" id="bindOverlay">
+        <div class="bind-panel">
+            <div class="bind-panel-header">
+                <h2>⚡ 四阶段 HTML→XML 绑定</h2>
+                <button class="bind-panel-close" onclick="closeBindPanel()">✕</button>
+            </div>
+            <div class="bind-panel-body">
+                <!-- Stage config -->
+                <div class="bind-stages">
+                    <div class="bind-stage">
+                        <div class="bind-stage-header"><span class="bind-stage-badge s1">Stage1</span></div>
+                        <div class="bind-stage-label">模板匹配</div>
+                        <select id="bindModel1"></select>
+                    </div>
+                    <div class="bind-stage">
+                        <div class="bind-stage-header"><span class="bind-stage-badge s2">Stage2</span></div>
+                        <div class="bind-stage-label">XML字段解析</div>
+                        <div style="font-size:10px;color:var(--text-dim);padding:7px;">直接解析 XML 模板</div>
+                    </div>
+                    <div class="bind-stage">
+                        <div class="bind-stage-header"><span class="bind-stage-badge s3">Stage3</span></div>
+                        <div class="bind-stage-label">HTML字段提取</div>
+                        <select id="bindModel3"></select>
+                    </div>
+                    <div class="bind-stage">
+                        <div class="bind-stage-header"><span class="bind-stage-badge s4">Stage4</span></div>
+                        <div class="bind-stage-label">XML字段绑定</div>
+                        <select id="bindModel4"></select>
+                    </div>
+                </div>
+
+                <!-- File list -->
+                <div class="bind-files-section">
+                    <h4>当前患者文件</h4>
+                    <div id="bindFileList" style="color:var(--text-dim);font-size:12px;">请先从患者列表中选择患者</div>
+                </div>
+
+                <!-- Progress -->
+                <div class="bind-progress" id="bindProgress" style="display:none">
+                    <div class="bind-progress-bar"><div class="bind-progress-fill" id="bindProgressFill" style="width:0%"></div></div>
+                    <div class="bind-progress-text" id="bindProgressText"></div>
+                </div>
+
+                <!-- Results summary -->
+                <div id="bindResults" style="display:none">
+                    <h4 style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;">绑定汇总</h4>
+                    <table class="bind-result-table">
+                        <thead><tr><th>文件</th><th>状态</th><th>操作</th></tr></thead>
+                        <tbody id="bindResultsBody"></tbody>
+                    </table>
+                </div>
+
+                <!-- Binding detail (per-file field mapping) -->
+                <div id="bindDetail" style="display:none;margin-top:16px;">
+                    <h4 style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;">📋 字段绑定明细</h4>
+                    <div id="bindDetailBody"></div>
+                </div>
+            </div>
+            <div class="drawer-footer" style="border-top:1px solid var(--border-color);display:flex;gap:10px;">
+                <button class="btn btn-ghost" onclick="closeBindPanel()">关闭</button>
+                <button class="btn btn-primary" id="bindStartBtn" onclick="startBinding()" disabled>
+                    开始绑定
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Upload Modal ═══ -->
+    <div class="upload-overlay" id="uploadOverlay">
+        <div class="upload-box">
+            <div class="upload-box-header">
+                <h2>添加患者病历</h2>
+                <button class="upload-box-close" onclick="hideUploadModal()">✕</button>
+            </div>
+            <div class="upload-box-body">
+                <label class="field-label">登记号 <span style="color:var(--accent-red);">*必填</span></label>
+                <input class="field-input" id="registerNoInput" placeholder="如 DJ4547657">
+                <label class="field-label">全局患者ID <span style="color:var(--text-dim);">(可选)</span></label>
+                <input class="field-input" id="globalPatientIdInput" placeholder="跨系统唯一患者标识">
+                <label class="field-label">就诊号 <span style="color:var(--text-dim);">(可选)</span></label>
+                <input class="field-input" id="visitNoInput" placeholder="如 EN4547657，留空=检索全部就诊">
+                <label class="field-label">全局就诊号 <span style="color:var(--text-dim);">(可选)</span></label>
+                <input class="field-input" id="globalVisitIdInput" placeholder="跨系统唯一次就诊标识">
+                <label class="field-label">患者姓名 <span style="color:var(--text-dim);">(可选)</span></label>
+                <input class="field-input" id="patientNameInput" placeholder="选填">
+                <label class="field-label">绑定模型</label>
+                <div style="display:flex;gap:6px;margin-bottom:14px;">
+                    <select id="uploadBindModel1" style="flex:1;padding:6px 8px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:6px;color:var(--text-primary);font-size:11px;font-family:var(--font-body);outline:none;">
+                    </select>
+                    <select id="uploadBindModel3" style="flex:1;padding:6px 8px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:6px;color:var(--text-primary);font-size:11px;font-family:var(--font-body);outline:none;">
+                    </select>
+                    <select id="uploadBindModel4" style="flex:1;padding:6px 8px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:6px;color:var(--text-primary);font-size:11px;font-family:var(--font-body);outline:none;">
+                    </select>
+                </div>
+                <label class="field-label">上传病历文件</label>
+                <div class="drop-zone" id="dropZone"
+                    onclick="document.getElementById('fileInput').click()"
+                    ondragover="event.preventDefault();this.classList.add('dragover')"
+                    ondragleave="this.classList.remove('dragover')"
+                    ondrop="handleDrop(event)">
+                    🏥 点击或拖拽 HTML 文件<br>
+                    <small>入院记录 / 出院记录 / 门急诊 / 首次病程 / 日常病程 / 手术记录</small>
+                </div>
+                <input type="file" id="fileInput" multiple accept=".html,.htm" style="display:none" onchange="handleFileSelect(event)">
+                <div class="drop-zone-files" id="uploadFilesPreview"></div>
+            </div>
+            <div class="upload-box-footer">
+                <button class="btn btn-ghost" onclick="hideUploadModal()">取消</button>
+                <button class="btn btn-primary" id="uploadConfirmBtn" onclick="uploadPatient()" disabled>上传并绑定</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────
+let currentPatientId = null, currentPatientName = '', currentRegisterNo = '', currentVisitNo = '';
+// currentPatientId is always the register_no now
+let selectedFiles = [], patients = [];
+let ollamaModels = [];
+
+// Accept all HTML files — template matching is done by Stage1 LLM during binding
+const validFiles = []; // empty = accept all .html/.htm files
+function isHtmlFile(name) { return /\.html?$/i.test(name); }
+
+// ── Init ───────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadOllamaModels();
+    renderRouterModelSelect();
+    renderJudgeModelSelect();
+    refreshPatients();
+});
+
+async function loadOllamaModels() {
+    try {
+        const r = await fetch('/api/ollama/models');
+        const d = await r.json();
+        ollamaModels = d.models || [];
+    } catch(e) { ollamaModels = []; }
+}
+
+function renderRouterModelSelect() {
+    const sel = document.getElementById('routerModel');
+    if (!sel) return;
+    const models = ollamaModels.length ? ollamaModels : ['qwen2.5:3b','qwen2.5:7b'];
+    sel.innerHTML = models.map(m => `<option value="${m}" style="color:var(--text-primary);">${m}</option>`).join('');
+    const pref = models.find(m=>m.includes('qwen2.5:3b')) || models[0];
+    if (pref) sel.value = pref;
+}
+
+function renderJudgeModelSelect() {
+    const sel = document.getElementById('judgeModel');
+    if (!sel) return;
+    const models = ollamaModels.length ? ollamaModels : ['qwen2.5:3b','qwen2.5:7b','qwen2:7b-instruct'];
+    sel.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
+    // Default to qwen2.5:3b if available
+    const pref = models.find(m=>m.includes('qwen2.5:3b')) || models[0];
+    if (pref) sel.value = pref;
+}
+
+function renderModelSelect(selectId, defaultModel) {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    const models = ollamaModels.length ? ollamaModels : ['qwen2.5:7b','qwen2.5:3b','qwen2:7b-instruct','qwen2:1.5b','llama3:8b','llama3.2:3b'];
+    sel.innerHTML = models.map(m => `<option value="${m}" ${m===defaultModel?'selected':''}>${m}</option>`).join('');
+}
+
+// ── API ────────────────────────────────────
+async function api(url, opts={}) {
+    const r = await fetch(url, {headers:{'Content-Type':'application/json'},...opts});
+    return r.json();
+}
+
+// ── Patients ───────────────────────────────
+async function refreshPatients() {
+    const data = await api('/api/medical/patients');
+    patients = data.patients || [];
+    renderDrawerPatients();
+    updateBadge();
+}
+
+function renderDrawerPatients() {
+    const c = document.getElementById('drawerPatients');
+    if (patients.length===0) {
+        c.innerHTML = '<div class="mf-empty" style="padding:40px 20px;"><p>暂无患者<br>点击下方按钮上传并绑定病历</p></div>';
+        return;
+    }
+    c.innerHTML = patients.map(p => {
+        // Flatten files across all visits
+        const allFiles = {};
+        let allBound = 0, allTotal = 0;
+        (p.visits||[]).forEach(v => {
+            Object.entries(v.files||{}).forEach(([fn, s]) => {
+                allFiles[fn] = allFiles[fn] || s;
+                if (s.bound && (!allFiles[fn].bound)) allFiles[fn] = s;
+            });
+            allBound += v.bound_count||0;
+            allTotal += v.total_files||0;
+        });
+        const done = allTotal > 0 && allBound >= allTotal;
+        const fileNames = Object.keys(allFiles);
+        const files = fileNames.length > 0
+            ? fileNames.slice(0,10).map(fn => {
+                const s = allFiles[fn];
+                const short = fn.replace('.html','').replace('.htm','').substring(0,8);
+                return `<span class="mf-pcard-file ${s&&s.bound?'ok':s&&s.uploaded?'':'missing'}" title="${esc(fn)}">${esc(short)}</span>`;
+            }).join('')
+            : '<span style="font-size:9px;color:var(--text-dim)">无文件</span>';
+        return `<div class="mf-pcard ${p.register_no===currentPatientId?'active':''}" onclick="selectPatient('${p.register_no}')">
+            <div class="mf-pcard-header">
+                <span class="mf-pcard-name">${esc(p.name)}</span>
+                <span class="mf-pcard-badge ${done?'done':'partial'}">${done?'✓':' '}${allBound}/${allTotal}</span>
+            </div>
+            <div style="font-size:9px;color:var(--text-dim);margin-bottom:4px;">${p.visit_count||0}次就诊</div>
+            <div class="mf-pcard-files">${files}</div>
+            <div class="mf-pcard-actions">
+                <button class="mf-pcard-btn" onclick="event.stopPropagation();openBindPanel()">⚡ 绑定</button>
+                <button class="mf-pcard-btn danger" onclick="event.stopPropagation();deletePatient('${p.register_no}')">删除</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function selectPatient(id) {
+    currentPatientId = id; currentRegisterNo = id;
+    const p = patients.find(x=>x.register_no===id);
+    currentPatientName = p?p.name:'';
+    document.getElementById('querySubmit').disabled = false;
+    document.getElementById('batchBindBtn').disabled = false;
+    const vs = document.getElementById('visitSelector');
+    if (p && p.visits && p.visits.length > 0) {
+        vs.style.display = 'inline-block';
+        vs.innerHTML = '<option value="">全部就诊</option>' +
+            p.visits.map(v => `<option value="${v.visit_no}">${v.visit_no} (${v.total_files}文件)</option>`).join('');
+        currentVisitNo = '';
+    } else { vs.style.display = 'none'; currentVisitNo = ''; }
+    renderDrawerPatients(); updateBadge();
+    closeDrawer('patientDrawer','patientOverlay');
+}
+function onVisitChange(v) { currentVisitNo = v; }
+
+function updateBadge() {
+    const badge = document.getElementById('patientBadge');
+    const text = document.getElementById('patientBadgeText');
+    const dot = document.getElementById('patientDot');
+    if (currentPatientId) {
+        text.textContent = currentPatientName;
+        dot.className = 'dot ready';
+        badge.classList.add('active');
+    } else {
+        text.textContent = patients.length ? `共 ${patients.length} 位患者` : '选择患者';
+        dot.className = 'dot empty';
+        badge.classList.remove('active');
+    }
+}
+
+async function deletePatient(id) {
+    if (!confirm('确定删除该患者及所有文件？')) return;
+    await api('/api/medical/patients/'+id, {method:'DELETE'});
+    if (currentPatientId===id) { currentPatientId=null; currentPatientName=''; updateBadge(); document.getElementById('querySubmit').disabled=true; document.getElementById('batchBindBtn').disabled=true; }
+    await refreshPatients();
+    showToast('已删除');
+}
+
+// ── Upload ─────────────────────────────────
+function showUploadModal() {
+    closeDrawer('patientDrawer','patientOverlay');
+    document.getElementById('uploadOverlay').classList.add('show');
+    selectedFiles = [];
+    renderUploadPreview();
+    document.getElementById('uploadConfirmBtn').disabled = true;
+    // Populate binding model selectors
+    renderModelSelect('uploadBindModel1', ollamaModels.find(m=>m.includes('qwen2.5:7b'))||'qwen2.5:7b');
+    renderModelSelect('uploadBindModel3', ollamaModels.find(m=>m.includes('qwen2.5:7b'))||'qwen2.5:7b');
+    renderModelSelect('uploadBindModel4', ollamaModels.find(m=>m.includes('qwen2.5:7b'))||'qwen2.5:7b');
+    document.getElementById('registerNoInput').value = '';
+    document.getElementById('globalPatientIdInput').value = '';
+    document.getElementById('visitNoInput').value = '';
+    document.getElementById('globalVisitIdInput').value = '';
+    document.getElementById('patientNameInput').value = '';
+}
+function hideUploadModal() { document.getElementById('uploadOverlay').classList.remove('show'); }
+
+function handleFileSelect(e) { addFiles(Array.from(e.target.files)); e.target.value=''; }
+function handleDrop(e) { e.preventDefault(); e.target.classList.remove('dragover'); addFiles(Array.from(e.dataTransfer.files)); }
+
+function addFiles(newFiles) {
+    for (const f of newFiles) {
+        const ok = isHtmlFile(f.name);
+        const exists = selectedFiles.find(sf=>sf.name===f.name);
+        if (exists) exists.file = f; else selectedFiles.push({name:f.name,file:f,ok});
+    }
+    renderUploadPreview(); checkUploadReady();
+}
+function renderUploadPreview() {
+    document.getElementById('uploadFilesPreview').innerHTML = selectedFiles.map(f =>
+        `<span class="drop-zone-file"><span class="${f.ok?'ok':'bad'}">${f.ok?'✓':'⚠'}</span>${esc(f.name)}</span>`
+    ).join('');
+}
+document.getElementById('registerNoInput').addEventListener('input', checkUploadReady);
+document.getElementById('patientNameInput').addEventListener('input', checkUploadReady);
+function checkUploadReady() {
+    document.getElementById('uploadConfirmBtn').disabled =
+        !document.getElementById('registerNoInput').value.trim() ||
+        selectedFiles.filter(f=>f.ok).length===0;
+}
+
+async function uploadPatient() {
+    const regNo = document.getElementById('registerNoInput').value.trim();
+    const visNo = document.getElementById('visitNoInput').value.trim();
+    const gpid = document.getElementById('globalPatientIdInput').value.trim();
+    const gvid = document.getElementById('globalVisitIdInput').value.trim();
+    const name = document.getElementById('patientNameInput').value.trim();
+    const vf = selectedFiles.filter(f=>f.ok);
+    if (!regNo) { showToast('登记号不能为空'); return; }
+    if (!vf.length) return;
+    const btn = document.getElementById('uploadConfirmBtn');
+    btn.disabled=true; btn.textContent='上传中...';
+    const form = new FormData(); form.append('register_no', regNo);
+    if (visNo) form.append('visit_no', visNo);
+    if (gpid) form.append('global_patient_id', gpid);
+    if (gvid) form.append('global_visit_id', gvid);
+    form.append('patient_name', name||gpid||regNo);
+    vf.forEach(f=>form.append('files',f.file));
+    const r = await fetch('/api/medical/upload',{method:'POST',body:form});
+    const d = await r.json();
+    if (d.error) { showToast('上传失败: '+d.error); btn.disabled=false; btn.textContent='上传并绑定'; return; }
+    hideUploadModal(); await refreshPatients();
+    currentRegisterNo = d.register_no; currentVisitNo = d.visit_no;
+    currentPatientName = d.patient_name; currentPatientId = d.register_no;
+    updateBadge();
+    document.getElementById('querySubmit').disabled = false;
+    document.getElementById('batchBindBtn').disabled = false;
+    showToast('上传完成，正在绑定...');
+    // Auto-bind with selected models
+    const s1 = document.getElementById('uploadBindModel1').value;
+    const s3 = document.getElementById('uploadBindModel3').value;
+    const s4 = document.getElementById('uploadBindModel4').value;
+    await fetch(`/api/medical/bind/${d.register_no}?visit_no=${d.visit_no||''}`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({stage1_model:s1, stage3_model:s3, stage4_model:s4})
+    });
+    await refreshPatients();
+    showToast('上传并绑定完成');
+    btn.disabled=false; btn.textContent='上传并绑定';
+}
+
+// ── Binding Panel ──────────────────────────
+async function openBindPanel() {
+    if (!currentPatientId) { showToast('请先选择患者'); return; }
+    document.getElementById('bindOverlay').classList.add('show');
+    document.getElementById('bindResults').style.display = 'none';
+    document.getElementById('bindDetail').style.display = 'none';
+    document.getElementById('bindProgress').style.display = 'none';
+
+    // Load models
+    if (!ollamaModels.length) await loadOllamaModels();
+    renderModelSelect('bindModel1', ollamaModels.find(m=>m.includes('qwen2.5:7b'))||'qwen2.5:7b');
+    renderModelSelect('bindModel3', ollamaModels.find(m=>m.includes('qwen2.5:7b'))||'qwen2.5:7b');
+    renderModelSelect('bindModel4', ollamaModels.find(m=>m.includes('qwen2.5:7b'))||'qwen2.5:7b');
+
+    document.getElementById('bindStartBtn').disabled = false;
+
+    // Show file list (fetch fresh data, only show uploaded files)
+    const fl = document.getElementById('bindFileList');
+    const fres = await fetch(`/api/medical/binding-status/${currentPatientId}`);
+    const fdata = await fres.json();
+    const allFiles = fdata.files||{};
+    const fns = Object.keys(allFiles).filter(fn => allFiles[fn].uploaded);
+    fl.innerHTML = fns.length === 0
+        ? '<span style="color:var(--text-dim);font-size:12px;">该患者没有文件</span>'
+        : fns.map(fn=>{
+            const s = allFiles[fn];
+            const status = s&&s.bound?'done':'pending';
+            const statusText = s&&s.bound?'已绑定':'待绑定';
+            const clickable = s&&s.bound ? `onclick="loadBindDetail('${esc(fn).replace(/'/g, "\\'")}')" style="cursor:pointer;" title="点击查看绑定明细"` : '';
+            return `<div class="bind-file-row" ${clickable}>
+                <span class="fname">${esc(fn)}</span>
+                <span class="fstatus ${status}">${statusText}</span>
+                ${s&&s.bound ? '<span style="font-size:10px;color:var(--accent);">查看 →</span>' : ''}
+            </div>`;
+        }).join('');
+}
+
+function closeBindPanel() { document.getElementById('bindOverlay').classList.remove('show'); }
+
+async function refreshBindFileList() {
+    const fl = document.getElementById('bindFileList');
+    if (!fl || !currentPatientId) return;
+    const fres = await fetch(`/api/medical/binding-status/${currentPatientId}`);
+    const fdata = await fres.json();
+    const allFiles = fdata.files||{};
+    const fns = Object.keys(allFiles).filter(fn => allFiles[fn].uploaded);
+    fl.innerHTML = fns.length === 0
+        ? '<span style="color:var(--text-dim);font-size:12px;">该患者没有文件</span>'
+        : fns.map(fn=>{
+            const s = allFiles[fn];
+            const status = s&&s.bound?'done':'pending';
+            const statusText = s&&s.bound?'已绑定':'待绑定';
+            const clickable = s&&s.bound ? `onclick="loadBindDetail('${esc(fn).replace(/'/g, "\\'")}')" style="cursor:pointer;" title="点击查看绑定明细"` : '';
+            return `<div class="bind-file-row" ${clickable}>
+                <span class="fname">${esc(fn)}</span>
+                <span class="fstatus ${status}">${statusText}</span>
+                ${s&&s.bound ? '<span style="font-size:10px;color:var(--accent);">查看 →</span>' : ''}
+            </div>`;
+        }).join('');
+}
+
+async function startBinding() {
+    if (!currentPatientId) return;
+    const btn = document.getElementById('bindStartBtn');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 绑定中...';
+
+    const progress = document.getElementById('bindProgress');
+    const fill = document.getElementById('bindProgressFill');
+    const text = document.getElementById('bindProgressText');
+    progress.style.display = 'block';
+    fill.style.width = '0%';
+    text.textContent = '正在调用绑定管线...';
+    fill.style.width = '30%';
+
+    const stage1Model = document.getElementById('bindModel1').value;
+    const stage3Model = document.getElementById('bindModel3').value;
+    const stage4Model = document.getElementById('bindModel4').value;
+
+    // Call the batch bind endpoint — it handles all files automatically
+    const res = await fetch(`/api/medical/bind/${currentPatientId}`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({stage1_model: stage1Model, stage3_model: stage3Model, stage4_model: stage4Model})
+    });
+    const data = await res.json();
+
+    fill.style.width = '100%';
+    const bound = data.results?.filter(r=>r.status==='bound').length||0;
+    const failed = data.results?.filter(r=>r.status==='error').length||0;
+    text.textContent = `完成: ${bound} 成功, ${failed} 失败`;
+
+    // Show results and refresh file list
+    showBindResults(data.results);
+    await refreshPatients();
+    await refreshBindFileList();
+    btn.disabled = false; btn.textContent = '开始绑定';
+}
+
+function showBindResults(results) {
+    const section = document.getElementById('bindResults');
+    section.style.display = 'block';
+    const tbody = document.getElementById('bindResultsBody');
+    const bound = (results||[]).filter(r=>r.status==='bound');
+    const failed = (results||[]).filter(r=>r.status==='error');
+
+    let html = '';
+    // Summary row
+    if (bound.length > 0 || failed.length > 0) {
+        const summary = [];
+        if (bound.length) summary.push(`${bound.length} 成功`);
+        if (failed.length) summary.push(`${failed.length} 失败`);
+        html += `<tr><td colspan="3" style="color:var(--accent);padding:8px;font-weight:500;">⚡ 绑定完成 — ${summary.join(', ')}</td></tr>`;
+    }
+    // Per-file rows — clickable to see details
+    for (const r of (results||[])) {
+        if (r.status==='bound') {
+            html += `<tr style="cursor:pointer;" onclick="loadBindDetail('${esc(r.filename)}')" title="点击查看绑定详情">
+                <td>📄 ${esc(r.filename)}</td>
+                <td><span style="color:var(--accent-green);font-weight:500;">✓ 已绑定</span></td>
+                <td style="font-size:10px;color:var(--accent);">点击查看 →</td></tr>`;
+        } else if (r.status==='error') {
+            html += `<tr><td>📄 ${esc(r.filename)}</td>
+                <td><span style="color:var(--accent-red);">✗ 失败: ${esc(r.reason||'')}</span></td>
+                <td></td></tr>`;
+        }
+    }
+    if (!html) html = '<tr><td colspan="3" style="color:var(--text-dim);text-align:center;padding:20px;">无绑定结果</td></tr>';
+    tbody.innerHTML = html;
+}
+
+async function loadBindDetail(filename) {
+    if (!currentPatientId) return;
+    const detailSection = document.getElementById('bindDetail');
+    const detailBody = document.getElementById('bindDetailBody');
+    detailSection.style.display = 'block';
+    detailBody.innerHTML = '<div style="text-align:center;padding:20px;"><span class="spinner spinner-dark"></span> 加载中...</div>';
+
+    try {
+        const res = await fetch(`/api/medical/binding-result/${currentPatientId}/${encodeURIComponent(filename)}`);
+        const data = await res.json();
+        if (data.error) { detailBody.innerHTML = `<div style="color:var(--accent-red);padding:10px;">${esc(data.error)}</div>`; return; }
+
+        const r = data.result||data;
+        const bindings = r.bindings||r.field_bindings||[];
+        const template = r.template||data.template||'-';
+
+        let html = `<div style="margin-bottom:12px;font-size:12px;">
+            <span style="color:var(--text-dim);">模板: </span>
+            <span style="color:var(--accent);">${esc(template)}</span>
+            <span style="color:var(--text-dim);margin-left:12px;">字段数: </span>
+            <span style="color:var(--accent-green);">${bindings.length}</span>
+        </div>`;
+
+        if (bindings.length===0) {
+            html += '<div style="color:var(--text-dim);text-align:center;padding:20px;">无绑定字段数据</div>';
+        } else {
+            html += `<table class="bind-result-table"><thead><tr>
+                <th>HTML 字段</th><th>提取值</th><th>XML 路径</th></tr></thead><tbody>`;
+            html += bindings.map((b,i) => {
+                const field = b.html_field||'';
+                const value = String(b.html_value||b.value||'');
+                const path = b.xml_path||'';
+                return `<tr>
+                    <td style="color:var(--accent-amber);">${esc(field)}</td>
+                    <td class="field-value">${esc(value.substring(0,120))}${value.length>120?'...':''}</td>
+                    <td class="xml-path">${esc(path)}</td></tr>`;
+            }).join('');
+            html += '</tbody></table>';
+        }
+
+        detailBody.innerHTML = html;
+    } catch(e) {
+        detailBody.innerHTML = `<div style="color:var(--accent-red);">加载失败: ${esc(e.message)}</div>`;
+    }
+}
+
+// ── Drawers ────────────────────────────────
+function toggleDrawer(drawerId, overlayId) {
+    document.getElementById(drawerId).classList.toggle('open');
+    document.getElementById(overlayId).classList.toggle('open');
+}
+function closeDrawer(drawerId, overlayId) {
+    document.getElementById(drawerId).classList.remove('open');
+    document.getElementById(overlayId).classList.remove('open');
+}
+
+// ── Query ──────────────────────────────────
+function fillQuery(text) { document.getElementById('queryInput').value = text; document.getElementById('queryInput').focus(); }
+async function runQuery() {
+    const condition = document.getElementById('queryInput').value.trim();
+    if (!condition || !currentPatientId) return;
+    const btn = document.getElementById('querySubmit');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 筛选中...';
+    const routerModel = document.getElementById('routerModel')?.value || 'qwen2.5:3b';
+    const judgeModel = document.getElementById('judgeModel')?.value || 'qwen2.5:7b';
+    const data = await api('/api/medical/query', {method:'POST', body:JSON.stringify({
+        condition, register_no: currentRegisterNo, visit_no: currentVisitNo,
+        router_model: routerModel, judge_model: judgeModel
+    })});
+    showQueryResults(data);
+    btn.disabled = false; btn.innerHTML = '筛选';
+}
+
+function showQueryResults(data) {
+    const results = document.getElementById('resultsArea');
+    const status = document.getElementById('statusBar');
+    status.style.display = 'flex';
+    document.getElementById('statusCount').innerHTML = `<strong>${data.matched_count||0}/${(data.results||[]).length}</strong> 条匹配`;
+    document.getElementById('statusMeta').textContent = `条件: ${data.condition}`;
+
+    if (!data.results || data.results.length===0) {
+        results.innerHTML = `<div class="mf-empty"><p style="color:var(--text-dim);">没有绑定数据可查询</p></div>`;
+        return;
+    }
+
+    const route = data.route||{};
+    // Per-condition routing display
+    const perCond = (data.results||[])[0]?.per_condition || {};
+    let routeHtml = '';
+    for (const [sq, info] of Object.entries(perCond)) {
+        const files = info.files || [];
+        const matchedFiles = files.filter(f=>f.matched).map(f=>f.file);
+        const docs = info.docs||[];
+        const secs = info.sections||[];
+        const evidence = info.evidence||{};
+        const evHtml = Object.entries(evidence).map(([file, fields]) =>
+            `<div style="margin-top:4px;padding:4px 8px;background:var(--bg-primary);border-radius:4px;font-size:10px;color:var(--text-dim);font-family:var(--font-mono);word-break:break-all;">📎 ${esc(file)}: ${esc(String(fields).replace(/\n/g,' | '))}</div>`
+        ).join('');
+        routeHtml += `
+        <div style="margin-bottom:6px;padding:8px 10px;background:var(--bg-tertiary);border-radius:6px;font-size:11px;">
+            <div style="color:var(--accent-amber);font-weight:500;margin-bottom:3px;">🔹 ${esc(sq.substring(0,50))} <span style="font-weight:400;color:var(--text-dim);font-size:10px;">${info.elapsed_ms||0}ms</span></div>
+            <div><span style="color:var(--text-dim);">📂 </span><span style="color:var(--accent);">${esc(docs.join('、'))}</span></div>
+            <div><span style="color:var(--text-dim);">📋 </span><span style="color:var(--accent-amber);">${esc(secs.join('、'))}</span></div>
+            <div><span style="color:var(--text-dim);">📄 命中: </span><span style="color:${matchedFiles.length?'var(--accent-green)':'var(--text-dim)'};">${matchedFiles.length ? matchedFiles.join('、') : '无'}</span></div>
+            ${evHtml}
+        </div>`;
+    }
+
+    let html = `
+        <div style="margin-bottom:12px;font-size:11px;color:var(--text-dim);padding:8px 12px;background:var(--bg-tertiary);border-radius:8px;">
+            📂 文档: <span style="color:var(--accent);">${esc((route.target_medical_doc||[]).join('、'))}</span>
+            | 📋 章节: <span style="color:var(--accent-amber);">${esc((route.target_sections||[]).join('、'))}</span>
+        </div>
+        ${routeHtml}`;
+
+    for (const r of (data.results||[])) {
+        const perCond = r.per_condition||{};
+        const matched = r.matched;
+        html += `
+        <div style="margin-bottom:16px;padding:14px;background:var(--bg-secondary);border:1px solid ${matched?'var(--accent-green)':'var(--border-color)'};border-radius:10px;">
+            <div style="font-size:14px;font-weight:600;margin-bottom:8px;color:${matched?'var(--accent-green)':'var(--text-primary)'};">
+                ${matched?'✓':'✗'} ${esc(data.condition)}
+            </div>
+            <div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px;">${esc(r.reason||'')}</div>
+            ${Object.entries(perCond).map(([sq, info]) => `
+                <div style="margin:6px 0;padding:8px 10px;background:var(--bg-tertiary);border-radius:6px;font-size:11px;">
+                    <span style="color:${info.matched?'var(--accent-green)':'var(--accent-red)'};">${info.matched?'✓':'✗'}</span>
+                    <span style="color:var(--text-primary);"> ${esc(sq.substring(0,40))}</span>
+                    <span style="color:var(--text-dim);margin-left:8px;">${esc(info.reason||'')}</span>
+                </div>
+            `).join('')}
+        </div>`;
+    }
+
+    if (data.matched_count > 0) {
+        html += `<div style="margin-top:12px;text-align:center;color:var(--accent-green);font-size:13px;">✓ 患者符合条件</div>`;
+    } else if ((data.results||[]).length > 0) {
+        html += `<div style="margin-top:12px;text-align:center;color:var(--text-dim);font-size:13px;">✗ 患者不符合条件</div>`;
+    }
+    results.innerHTML = html;
+}
+
+// ── Utils ──────────────────────────────────
+function esc(s) { const d=document.createElement('div'); d.textContent=String(s||''); return d.innerHTML; }
+function showToast(msg) {
+    const t=document.createElement('div'); t.className='mf-toast'; t.textContent=msg;
+    document.body.appendChild(t); setTimeout(()=>t.remove(),3000);
+}
+</script>
+</body>
+</html>

@@ -82,6 +82,7 @@ MAX_STEPS: int = int(os.environ.get("MAX_STEPS", "10"))
 # ── Runtime Model Switching ─────────────────────────────────────────
 # Store runtime overrides for model switching
 _runtime_model_override: str = None
+_runtime_memory_model_override: str = None
 _runtime_provider_override: str = None
 
 
@@ -105,6 +106,12 @@ def set_runtime_provider(provider: str) -> None:
     """Set runtime provider override."""
     global _runtime_provider_override
     _runtime_provider_override = provider
+
+
+def set_runtime_memory_model(model: str) -> None:
+    """Set runtime memory model override."""
+    global _runtime_memory_model_override
+    _runtime_memory_model_override = model
 
 
 def switch_model(provider: str, model: str) -> dict:

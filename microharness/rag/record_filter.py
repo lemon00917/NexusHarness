@@ -1111,5 +1111,11 @@ class RecordFilter:
         return self.rag.is_ready and self.ollama.is_available()
 
 
-# Default instance
-filter = RecordFilter()
+# Lazy default instance (avoid eager init during imports)
+_filter = None
+
+def get_filter() -> "RecordFilter":
+    global _filter
+    if _filter is None:
+        _filter = RecordFilter()
+    return _filter

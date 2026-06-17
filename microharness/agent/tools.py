@@ -150,8 +150,69 @@ def run_python(filename: str) -> str:
     return output
 
 
+# ── Medical Routing Tool ─────────────────────────────────
+
+@tool
+def medical_record_filter(condition: str, patient_id: str = "") -> str:
+    """
+    根据疾病/症状/条件筛选病历。输入自然语言条件，返回匹配的患者病历。
+
+    支持的条件类型:
+    - 疾病名称: "糖尿病患者", "高血压", "肺炎"
+    - 数值条件: "住院小于5天", "年龄大于60"
+    - 复合条件: "住院小于5天的糖尿病患者"
+    - 存在性: "有手术记录", "有过敏史"
+
+    Args:
+        condition: 筛选条件（自然语言），如"住院小于5天的糖尿病患者"
+        patient_id: 可选，指定患者ID，为空则查询所有患者
+
+    Returns:
+        筛选结果摘要，含匹配患者数和每条记录的判断理由
+    """
+    try:
+        from microharness.medical.query_router import get_router
+        router = get_router()
+        route = router.route(condition)
+
+        docs = route.get("target_medical_doc", [])
+        sections = route.get("target_sections", [])
+        paths = route.get("target_xml_paths", [])
+        confidence = route.get("confidence", 0)
+
+        summary = (
+            f"路由结果 (置信度 {confidence:.0%}):\n"
+            f"  目标文档: {', '.join(docs) if docs else '(未匹配)'}\n"
+            f"  目标章节: {', '.join(sections[:8])}\n"
+            f"  XML字段: {', '.join(paths[:8])}\n"
+            f"  判断依据: {route.get('judge_reason', '')}\n"
+        )
+
+        if patient_id:
+            import requests, json
+            try:
+                resp = requests.post(
+                    "http://127.0.0.1:8000/api/medical/query",
+                    json={"condition": condition, "patient_id": patient_id},
+                    timeout=60
+                )
+                data = resp.json()
+                results = data.get("results", [])
+                matched = sum(1 for r in results if r.get("matched"))
+                summary += f"\n查询结果: {matched}/{len(results)} 条匹配\n"
+                for r in results:
+                    status = "✓" if r.get("matched") else "✗"
+                    summary += f"  {status} {r.get('html_file','')}: {r.get('reason','')}\n"
+            except Exception as e:
+                summary += f"\n查询失败: {e}"
+
+        return summary
+    except Exception as e:
+        return f"病历筛选失败: {e}"
+
+
 # ── 注册表 ──────────────────────────────────────────────
-TOOLS = [list_files, read_file, get_file_info, write_file, delete_file, run_python]
+TOOLS = [list_files, read_file, get_file_info, write_file, delete_file, run_python, medical_record_filter]
 
 # Safety levels for built-in tools
 BUILTIN_SAFETY = {
@@ -161,6 +222,7 @@ BUILTIN_SAFETY = {
     "write_file": "ALWAYS_CONFIRM",
     "delete_file": "ALWAYS_CONFIRM",
     "run_python": "KEYWORD_CHECK",
+    "medical_record_filter": "AUTO_APPROVE",
 }
 
 # ── 加载 Skills ──────────────────────────────────────────

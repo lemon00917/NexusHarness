@@ -1,0 +1,17 @@
+{
+  "type": "iris",
+  "iris": {
+    "base_url": "http://124.222.57.198:52773",
+    "namespace": "HDCV2DEV",
+    "username": "_system",
+    "password": "cdrsys",
+    "schema": "hdc_userv2"
+  },
+  "mysql": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "database": "hdc_userv2",
+    "user": "root",
+    "password": ""
+  }
+}

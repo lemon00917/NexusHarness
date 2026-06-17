@@ -1,5 +1,5 @@
 /**
- * NexusHarness Web UI - Production JavaScript
+ * CDR Agent Web UI - Production JavaScript
  */
 
 // State
@@ -378,7 +378,7 @@ function exportAuditDetail() {
     if (!currentAuditRecord) return;
     const { sessionId, step, tool, args, approved, operator, timestamp } = currentAuditRecord;
     const argsStr = typeof args === 'string' ? args : JSON.stringify(args, null, 2);
-    const content = `NexusHarness 审计记录
+    const content = `CDR Agent 审计记录
 ====================
 时间: ${timestamp ? timestamp.replace('T', ' ').substring(0, 19) : '-'}
 操作: ${approved ? '批准' : '拒绝'}
@@ -538,14 +538,15 @@ function handleSSEEvent(data) {
     const eventType = data._event || data.event;
     switch (eventType) {
         case 'start':
+            startThinking();
             break;
 
         case 'step':
             currentStep = data.step;
             updateStepText(currentStep);
             appendStepIndicator(data.step);
-            // Start new AI message for this step
             currentMessages.push({type: 'ai', content: '', timestamp: new Date().toISOString()});
+            startThinking();
             break;
 
         case 'token':
@@ -582,6 +583,7 @@ function handleSSEEvent(data) {
 
         case 'complete':
             isRunning = false;
+            stopThinking();
             renderMarkdown();
             loadAudit();
             loadMemory();
@@ -601,10 +603,12 @@ function handleSSEEvent(data) {
         case 'error':
             appendError(data.message);
             isRunning = false;
+            stopThinking();
             break;
 
         case 'interrupted':
             isRunning = false;
+            stopThinking();
             appendSystemMessage('⏸ 会话已中断，可从当前状态恢复');
             loadSessions();
             break;
@@ -1023,6 +1027,18 @@ function closeSettings() {
 // Utility
 // ──────────────────────────────────────────────────
 
+// ── EKG Waveform Control ──────────────────
+
+function startThinking() {
+    const wf = document.getElementById('ekgWaveform');
+    if (wf) wf.classList.add('thinking');
+}
+
+function stopThinking() {
+    const wf = document.getElementById('ekgWaveform');
+    if (wf) wf.classList.remove('thinking');
+}
+
 function escapeHtml(text) {
     if (typeof text !== 'string') return '';
     const div = document.createElement('div');
@@ -1060,7 +1076,7 @@ function startNewChat() {
     document.getElementById('messagesContainer').innerHTML = `
         <div class="welcome-message">
             <div class="welcome-icon">🤖</div>
-            <h3>你好，我是 NexusHarness</h3>
+            <h3>你好，我是 CDR Agent</h3>
             <p>我可以帮你完成各种任务，比如查询天气、写代码、分析数据等。</p>
             <div class="welcome-suggestions">
                 <button class="suggestion-btn" onclick="fillTask('今天北京天气怎么样？')">🌤️ 查询天气</button>

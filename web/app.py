@@ -13,10 +13,12 @@ Provides:
 
 import asyncio
 import json
+import re
 import sys
 import os
 import time
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -67,8 +69,12 @@ app = FastAPI(title="NexusHarness", version="0.1.0")
 # Project root for resolving relative paths
 PROJECT_ROOT = Path(__file__).parent.parent
 
-# Load RAG index at startup
-rag.load_index()
+# Load RAG index at startup (graceful fallback if chromadb unavailable)
+try:
+    rag.load_index()
+except Exception as e:
+    print(f"[Startup] RAG index load skipped: {e}")
+    print("[Startup] RAG features (knowledge base, record filter) will be unavailable")
 
 # Mount static files
 static_dir = Path(__file__).parent / "static"
@@ -501,6 +507,31 @@ async def serve_prompt_config_page():
     return {"error": "prompt_config.html not found"}
 
 
+@app.get("/templates/medical_filter.html")
+async def serve_medical_filter_page():
+    """Serve the medical record filter page."""
+    html_path = templates_dir / "medical_filter.html"
+    if html_path.exists():
+        return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+    return {"error": "medical_filter.html not found"}
+
+
+@app.get("/templates/medical_config.html")
+async def serve_medical_config_page():
+    """Serve the medical catalog config page."""
+    html_path = templates_dir / "medical_config.html"
+    if html_path.exists():
+        return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+    return {"error": "medical_config.html not found"}
+
+
+@app.get("/medical-filter")
+async def redirect_to_medical_filter():
+    """Convenience redirect to the medical filter page."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/templates/medical_filter.html")
+
+
 @app.get("/templates/binding.html")
 async def serve_binding_page():
     """Serve the binding page."""
@@ -708,6 +739,19 @@ async def update_system_config(request: Request):
     })
 
     return {"status": "saved", "config": get_config()}
+
+
+@app.post("/api/model/switch")
+async def switch_model_endpoint(request: Request):
+    """Switch model at runtime, auto-match memory model."""
+    data = await request.json()
+    provider = data.get("provider", PROVIDER)
+    model = data.get("model", MAIN_MODEL)
+    from microharness.config.config import switch_model, set_runtime_memory_model
+    result = switch_model(provider, model)
+    if provider == "ollama":
+        set_runtime_memory_model(model)
+    return result
 
 
 # ──────────────────────────────────────────────────
@@ -1923,6 +1967,848 @@ async def disable_tool(name: str):
         disabled_skills.add(name)
         return {"status": "disabled", "name": name}
     return {"error": f"Tool '{name}' not found"}, 404
+
+
+# ═══════════════════════════════════════════════════════════
+# Medical Record Filter API
+# ═══════════════════════════════════════════════════════════
+
+_PATIENTS_DIR = PROJECT_ROOT / "data" / "patients"
+_VALID_HTML_FILES = ["入院记录.html", "出院记录.html", "门急诊病历.html",
+                     "首次病程记录.html", "日常病程记录.html", "手术记录.html"]
+
+# Accept any HTML/HTM file for upload (template matching happens during binding)
+def _is_html_file(filename: str) -> bool:
+    return filename.lower().endswith(('.html', '.htm'))
+
+
+def _log_error_to_db(register_no: str, visit_no: str, doc_id: str, error_type: str, msg: str):
+    """Log upload/bind/insert errors to database."""
+    try:
+        from microharness.database.db_client import get_db as _gdb
+        _db = _gdb()
+        if _db.test():
+            safe_msg = msg[:200].replace("'", "''")
+            _db.client.execute(
+                f"INSERT INTO hdc_userv2.emr_error_log (doc_id, register_no, visit_no, error_type, error_msg) "
+                f"VALUES ('{doc_id}', '{register_no}', '{visit_no}', '{error_type}', '{safe_msg}')")
+    except Exception:
+        pass
+
+
+@app.get("/api/medical/patients")
+async def list_patients():
+    """List all patients from database records."""
+    from microharness.database.field_mapper import TABLE_MAP
+    from microharness.database.db_client import get_db as get_database
+
+    patients_map = {}  # register_no → {name, visits: {visit_no → {files}}}
+
+    try:
+        db = get_database()
+        if db.test():
+            for doc_title, info in TABLE_MAP.items():
+                table = info["table"]
+                try:
+                    rows = db.client.execute(
+                        f"SELECT DISTINCT registerno, visitnumber, papat_relpatientid, paadm_relvisitnumber, doc_id "
+                        f"FROM {table} WHERE registerno IS NOT NULL"
+                    )
+                    for r in rows:
+                        rn = r.get("registerno","").strip()
+                        vn = r.get("visitnumber","").strip()
+                        if not rn: continue
+                        if rn not in patients_map:
+                            patients_map[rn] = {"name": rn, "visits": {}}
+                        if vn not in patients_map[rn]["visits"]:
+                            patients_map[rn]["visits"][vn] = {"files": {}}
+                        doc_id = r.get("doc_id","")
+                        if doc_id:
+                            patients_map[rn]["visits"][vn]["files"][f"{doc_title}({doc_id})"] = {"uploaded": True, "bound": True}
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    # Fallback to file-based if DB empty
+    if not patients_map and _PATIENTS_DIR.exists():
+        for reg_dir in sorted(_PATIENTS_DIR.iterdir()):
+            if not reg_dir.is_dir(): continue
+            rn = reg_dir.name
+            if rn not in patients_map: patients_map[rn] = {"name": rn, "visits": {}}
+            for visit_dir in sorted(reg_dir.iterdir()):
+                if not visit_dir.is_dir() or visit_dir.name.startswith("_"): continue
+                vn = visit_dir.name
+                if vn not in patients_map[rn]["visits"]: patients_map[rn]["visits"][vn] = {"files": {}}
+                for fpath in sorted(list(visit_dir.glob("*.html")) + list(visit_dir.glob("*.htm"))):
+                    fn = fpath.name
+                    bp = visit_dir / "_bindings" / fn.replace(".html","_binding.json").replace(".htm","_binding.json")
+                    patients_map[rn]["visits"][vn]["files"][fn] = {"uploaded": True, "bound": bp.exists()}
+
+    patients = []
+    for rn, pdata in sorted(patients_map.items()):
+        visits = []
+        for vn, vdata in sorted(pdata["visits"].items()):
+            files = vdata["files"]
+            visits.append({
+                "visit_no": vn,
+                "files": files,
+                "total_files": len(files),
+                "uploaded_count": len(files),
+                "bound_count": sum(1 for s in files.values() if s["bound"]),
+            })
+        all_total = sum(v["total_files"] for v in visits)
+        all_bound = sum(v["bound_count"] for v in visits)
+        patients.append({
+            "register_no": rn,
+            "name": pdata["name"],
+            "visits": visits,
+            "visit_count": len(visits),
+            "total_files": all_total,
+            "bound_count": all_bound,
+        })
+    import sys as _sys
+    _pcount = len(patients)
+    _vcount = sum(p["visit_count"] for p in patients)
+    _fcount = sum(p["total_files"] for p in patients)
+    print(f"[PATIENTS] {_pcount}患者, {_vcount}就诊, {_fcount}文件", flush=True)
+    return {"patients": patients}
+
+
+@app.post("/api/medical/upload")
+async def medical_upload(
+    register_no: str = Form(...),
+    visit_no: str = Form(""),
+    global_patient_id: str = Form(""),
+    global_visit_id: str = Form(""),
+    patient_name: str = Form(""),
+    files: list[UploadFile] = None
+):
+    """
+    Upload HTML medical records.
+    - register_no: 登记号 (required)
+    - global_patient_id: 全局患者ID (optional)
+    - visit_no: 就诊号 (optional)
+    - global_visit_id: 全局就诊号 (optional)
+    - patient_name: optional display name
+    """
+    if not files:
+        return {"error": "No files provided"}, 400
+    if not register_no or not register_no.strip():
+        return {"error": "登记号(register_no)不能为空"}, 400
+
+    register_no = register_no.strip()
+    visit_no = visit_no.strip() or "default"
+    gpid = global_patient_id.strip()
+    gvid = global_visit_id.strip()
+    name = patient_name.strip() or gpid or register_no
+
+    # Path: data/patients/{register_no}/{visit_no}/
+    patient_dir = _PATIENTS_DIR / register_no
+    visit_dir = patient_dir / visit_no
+    visit_dir.mkdir(parents=True, exist_ok=True)
+    bindings_dir = visit_dir / "_bindings"
+    bindings_dir.mkdir(exist_ok=True)
+
+    saved = []
+    for file in files:
+        filename = file.filename or ""
+        doc_id = filename.split("(")[0] if "(" in filename else filename.rsplit(".",1)[0]
+        if not _is_html_file(filename):
+            saved.append({"filename": filename, "status": "skipped", "reason": "非HTML文件"})
+            continue
+
+        content = await file.read()
+        if len(content) > 50 * 1024 * 1024:
+            saved.append({"filename": filename, "status": "error", "reason": "文件超过50MB"})
+            continue
+
+        text = None
+        for enc in ['utf-8', 'gbk', 'gb2312', 'gb18030', 'latin-1']:
+            try: text = content.decode(enc); break
+            except Exception: continue
+        if text is None:
+            text = content.decode('utf-8', errors='replace')
+            _log_error_to_db(register_no, visit_no, doc_id, "ENCODING", "文件编码异常")
+
+        filepath = visit_dir / filename
+        filepath.write_text(text, encoding="utf-8")
+        saved.append({"filename": filename, "status": "saved"})
+
+    # Meta at patient level
+    meta = {
+        "name": name,
+        "register_no": register_no,
+        "global_patient_id": gpid,
+        "created_at": datetime.now().isoformat(),
+    }
+    (patient_dir / "_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Meta at visit level
+    visit_meta = {
+        "visit_no": visit_no,
+        "global_visit_id": gvid,
+        "file_count": sum(1 for s in saved if s["status"] == "saved"),
+        "created_at": datetime.now().isoformat(),
+    }
+    (visit_dir / "_visit.json").write_text(json.dumps(visit_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return {
+        "register_no": register_no,
+        "visit_no": visit_no,
+        "global_patient_id": gpid,
+        "global_visit_id": gvid,
+        "patient_name": name,
+        "files": saved,
+    }
+
+
+@app.delete("/api/medical/patients/{register_no}")
+async def delete_patient(register_no: str, visit_no: str = ""):
+    """Delete a patient (or specific visit)."""
+    import shutil
+    if visit_no:
+        visit_dir = _PATIENTS_DIR / register_no / visit_no
+        if not visit_dir.exists(): return {"error": "Visit not found"}, 404
+        shutil.rmtree(str(visit_dir))
+    else:
+        patient_dir = _PATIENTS_DIR / register_no
+        if not patient_dir.exists(): return {"error": "Patient not found"}, 404
+        shutil.rmtree(str(patient_dir))
+    return {"status": "deleted"}
+
+
+@app.post("/api/medical/bind/{register_no}")
+async def bind_patient(register_no: str, request: Request = None, visit_no: str = ""):
+    """Run 4-stage binding on a patient's HTML files.
+
+    Optional JSON body: {"stage1_model": "qwen2.5:7b", ...}
+    Query param: visit_no (optional, if empty binds all visits)
+    """
+    patient_dir = _PATIENTS_DIR / register_no
+    if not patient_dir.exists():
+        return {"error": "Patient not found"}, 404
+
+    # Determine which visit directories to bind
+    if visit_no:
+        visit_dirs = [patient_dir / visit_no]
+    else:
+        visit_dirs = [d for d in patient_dir.iterdir() if d.is_dir() and not d.name.startswith("_")]
+
+    if not visit_dirs or not any(d.exists() for d in visit_dirs):
+        return {"error": "No visits found"}, 404
+
+    # Parse model params from request body
+    stage1_model = "qwen2.5:7b"
+    stage3_model = "qwen2.5:7b"
+    stage4_model = "qwen2.5:7b"
+    if request:
+        try:
+            body = await request.json()
+            stage1_model = body.get("stage1_model", stage1_model)
+            stage3_model = body.get("stage3_model", stage3_model)
+            stage4_model = body.get("stage4_model", stage4_model)
+        except Exception:
+            pass
+
+    from microharness.medical.field_catalog import get_template_filename
+    from microharness.rag.template_binding_v2 import ThreeStageBinder, clean_html
+
+    xml_dir = str(PROJECT_ROOT / "data" / "临床文档模板")
+    all_results = []
+
+    for visit_dir in visit_dirs:
+        if not visit_dir.exists(): continue
+        bindings_dir = visit_dir / "_bindings"
+        bindings_dir.mkdir(exist_ok=True)
+
+        html_files = list(visit_dir.glob("*.html")) + list(visit_dir.glob("*.htm"))
+        for fpath in html_files:
+            fname = fpath.name
+
+            template_filename = get_template_filename(fname)
+            # If no exact filename match, Stage1 LLM will handle template matching
+            if not template_filename:
+                rag_logger.info(f"[Bind] No exact template match for {fname}, will use LLM Stage1 matching")
+
+            binding_file = bindings_dir / fname.replace(".html", "_binding.json")
+
+            try:
+                binder = ThreeStageBinder(
+                    stage1_model=stage1_model,
+                    stage3_model=stage3_model,
+                    xml_dir=xml_dir
+                )
+                result = binder.bind_file(str(fpath))
+                if result:
+                    binding_data = {
+                        "html_file": fname,
+                        "template": template_filename,
+                        "bound_at": datetime.now().isoformat(),
+                        "result": result,
+                    }
+                    binding_file.write_text(json.dumps(binding_data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    all_results.append({"filename": fname, "visit_no": visit_dir.name, "status": "bound"})
+
+                    # ── Auto-insert to database ─────────────────
+                    try:
+                        from microharness.database.field_mapper import map_bindings_to_row, get_table_for_doc
+                        from microharness.database.db_client import get_db
+
+                        # doc_id from filename prefix: "3x3052531x1(外科...).html" → "3x3052531x1"
+                        import re as _re
+                        doc_id = fname.split("(")[0] if "(" in fname else fname.rsplit(".",1)[0]
+
+                        # Determine document title from template (may be None for unknown filenames)
+                        doc_title = ""
+                        if template_filename:
+                            xml_name = template_filename.replace(".xml","").replace("基本数据集","")
+                            doc_title = xml_name.split(".",1)[-1].strip() if "." in xml_name else xml_name
+                        else:
+                            # Fallback: use the matched template from the binding result
+                            matched = result.get("template", "")
+                            if matched:
+                                xml_name = matched.replace(".xml","").replace("基本数据集","")
+                                doc_title = xml_name.split(".",1)[-1].strip() if "." in xml_name else xml_name
+
+                        if not doc_title:
+                            rag_logger.warning(f"[DB] 无法确定文档类型: {fname}")
+                            # skip DB insert for this file
+                        else:
+                            # Build meta from visit/patient info
+                            patient_meta = {}
+                            meta_file = patient_dir / "_meta.json"
+                            if meta_file.exists():
+                                patient_meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                            visit_meta = {}
+                            vm_file = visit_dir / "_visit.json"
+                            if vm_file.exists():
+                                visit_meta = json.loads(vm_file.read_text(encoding="utf-8"))
+
+                            meta = {
+                                "register_no": patient_meta.get("register_no", register_no),
+                                "visit_no": visit_meta.get("visit_no", visit_dir.name),
+                                "global_patient_id": patient_meta.get("global_patient_id", ""),
+                                "global_visit_id": visit_meta.get("global_visit_id", ""),
+                            }
+
+                            # Map binding fields to DB row
+                            bindings = result.get("bindings", result.get("field_bindings", []))
+                            # Fallback: use html_fields if bindings is empty
+                            if not bindings:
+                                hf = result.get("html_fields", [])
+                                bindings = [{"html_field": h.get("field",""), "value": h.get("value","")} for h in hf]
+                            row = map_bindings_to_row(doc_title, bindings, meta)
+                            row["doc_id"] = doc_id
+                            table = get_table_for_doc(doc_title)
+
+                            # Insert
+                            db = get_db()
+                            if db.test():
+                                ok, err = db.client.upsert(table, row)
+                                if ok:
+                                    rag_logger.info(f"[DB] UPSERT {table}: {fname} → {len(row)} columns")
+                                    try: fpath.unlink(missing_ok=True); binding_file.unlink(missing_ok=True)
+                                    except Exception: pass
+                                else:
+                                    _log_error_to_db(register_no, visit_dir.name, doc_id, "DB_INSERT", err or "UPSERT failed")
+                            else:
+                                rag_logger.warning(f"[DB] 数据库不可用，跳过入库")
+                    except Exception as e:
+                        import traceback
+                        rag_logger.warning(f"[DB] 入库失败 {fname}: {e}")
+                        rag_logger.warning(f"[DB] Traceback: {traceback.format_exc()[-200:]}")
+                else:
+                    all_results.append({"filename": fname, "visit_no": visit_dir.name, "status": "failed", "reason": "绑定返回空"})
+                    _log_error_to_db(register_no, visit_dir.name, doc_id, "BIND", "绑定返回空")
+            except Exception as e:
+                all_results.append({"filename": fname, "visit_no": visit_dir.name, "status": "error", "reason": str(e)})
+                _log_error(doc_id, "BIND", str(e)[:200])
+
+    return {
+        "register_no": register_no,
+        "results": all_results,
+    }
+
+
+@app.get("/api/medical/binding-status/{register_no}")
+async def binding_status(register_no: str, visit_no: str = ""):
+    """Get binding status for a patient's files across visits."""
+    patient_dir = _PATIENTS_DIR / register_no
+    if not patient_dir.exists():
+        return {"error": "Patient not found"}, 404
+
+    # Collect visit dirs
+    if visit_no:
+        visit_dirs = [patient_dir / visit_no]
+    else:
+        visit_dirs = [d for d in patient_dir.iterdir() if d.is_dir() and not d.name.startswith("_")]
+    # Backward compat: flat old structure
+    if not visit_dirs and list(patient_dir.glob("*.html")):
+        visit_dirs = [patient_dir]
+
+    files_status = {}
+    for vd in visit_dirs:
+        if not vd.exists(): continue
+        for fpath in sorted(list(vd.glob("*.html")) + list(vd.glob("*.htm"))):
+            fname = fpath.name
+            bp = vd / "_bindings" / fname.replace(".html","_binding.json").replace(".htm","_binding.json")
+            bd = None
+            if bp.exists():
+                try: bd = json.loads(bp.read_text(encoding="utf-8"))
+                except Exception: pass
+            files_status[fname] = {
+                "uploaded": True, "bound": bp.exists(), "binding": bd,
+                "visit_no": vd.name if vd != patient_dir else "default",
+            }
+
+    return {"register_no": register_no, "files": files_status}
+
+
+@app.get("/api/medical/field-catalog")
+async def get_field_catalog():
+    """Get the field catalog built from XML templates."""
+    from microharness.medical.field_catalog import get_catalog, list_document_types
+    catalog = get_catalog()
+    return {
+        "document_types": list_document_types(),
+        "derived_fields": catalog.get("derived_fields", {}),
+    }
+
+
+@app.get("/api/medical/catalog-config")
+async def get_catalog_config():
+    """Get the editable DOCUMENT_CATALOG config."""
+    config_path = PROJECT_ROOT / "configs" / "medical_catalog.json"
+    if config_path.exists():
+        try:
+            return json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    # Return current in-code catalog
+    from microharness.medical.query_router import DOCUMENT_CATALOG
+    return DOCUMENT_CATALOG
+
+
+@app.post("/api/medical/catalog-config")
+async def save_catalog_config(request: Request):
+    """Save the edited DOCUMENT_CATALOG config."""
+    data = await request.json()
+    config_path = PROJECT_ROOT / "configs" / "medical_catalog.json"
+    config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Reload into the router module
+    import microharness.medical.query_router as qr
+    qr.DOCUMENT_CATALOG = data
+    return {"status": "saved"}
+
+
+@app.get("/api/medical/binding-result/{register_no}/{filename}")
+async def get_binding_result(register_no: str, filename: str, visit_no: str = ""):
+    """Get the binding result for a specific file (searches all visits if needed)."""
+    patient_dir = _PATIENTS_DIR / register_no
+    if not patient_dir.exists():
+        return {"error": "Patient not found"}, 404
+    # Search in visit dirs
+    if visit_no:
+        search_dirs = [patient_dir / visit_no]
+    else:
+        search_dirs = [d for d in patient_dir.iterdir() if d.is_dir() and not d.name.startswith("_")]
+    if not search_dirs:
+        search_dirs = [patient_dir]
+    for vd in search_dirs:
+        bp = vd / "_bindings" / filename.replace(".html","_binding.json").replace(".htm","_binding.json")
+        if bp.exists():
+            try:
+                return json.loads(bp.read_text(encoding="utf-8"))
+            except Exception as e:
+                return {"error": str(e)}, 500
+    return {"error": "Binding not found"}, 404
+
+
+@app.post("/api/medical/query")
+async def medical_query(request: Request):
+    """Execute a filter query against patient binding data."""
+    # Robust body parsing with encoding fallback
+    try:
+        data = await request.json()
+    except Exception:
+        body = await request.body()
+        # Try GBK fallback for Chinese characters
+        try:
+            text = body.decode("gbk")
+            data = json.loads(text)
+        except Exception:
+            text = body.decode("utf-8", errors="replace")
+            try:
+                data = json.loads(text)
+            except Exception:
+                return {"error": "无法解析请求体"}
+    condition = data.get("condition", "")
+    register_no = data.get("register_no", data.get("patient_id", "")).strip()
+    visit_no = data.get("visit_no", "").strip()
+    judge_model = data.get("judge_model", "qwen2.5:7b")
+    router_model = data.get("router_model", "qwen2.5:3b")
+    if not condition or not register_no:
+        return {"error": "condition and register_no are required"}, 400
+
+    from microharness.medical.query_router import QueryRouter
+    from microharness.medical.field_catalog import get_catalog
+
+    catalog = get_catalog()
+
+    # Step 1: Route the query (with configurable model)
+    router = QueryRouter(model=router_model)
+    route = router.route(condition)
+    import sys
+    log = lambda msg: (print(msg, flush=True), sys.stdout.flush())
+    log(f"\n{'='*60}")
+    log(f"[Step1-拆解] 原始问题: {condition}")
+    log(f"[Step1-拆解] 拆分方式: {route.get('source','?')} (模型:{router_model})")
+    sub_queries = route.get("sub_queries", [condition])
+    if not isinstance(sub_queries, list) or len(sub_queries) <= 1: sub_queries = [condition]
+    if len(sub_queries) > 1:
+        for i, sq in enumerate(sub_queries, 1):
+            log(f"[Step1-拆解]   子问题{i}: {sq}")
+    log(f"{'='*60}")
+
+    # Step 1.5: LLM query enhancement (medical synonym expansion)
+    enhanced_terms = condition
+    try:
+        enhance_prompt = f"""你是医学同义词扩展器。将查询中的核心术语扩展为同义词列表（用 | 分隔），用于在病历字段中匹配。只输出同义词组，不要其他文字。
+
+查询：背痛 → 背痛|腰背痛|背部疼痛不适|胸背痛|脊柱疼痛
+查询：发热 → 发热|发烧|体温升高|高热
+查询：住院小于5天 → 住院小于5天|住院天数<5|住院时间短
+
+查询：{condition}
+输出："""
+        from microharness.ollama import OllamaClient as OC2
+        enhancer = OC2(model=router_model, timeout=30)
+        enhanced = enhancer.chat([{"role":"user","content":enhance_prompt}], temperature=0.1).strip()
+        if enhanced and 2 < len(enhanced) < 200:
+            enhanced_terms = enhanced
+            log(f"[ENHANCE] 扩展: {enhanced_terms}")
+    except Exception as e:
+        log(f"[ENHANCE] 跳过: {e}")
+
+    if register_no:
+        _query_start = time.time()
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from microharness.database.field_mapper import TABLE_MAP, DOC_FIELDS, COMMON_FIELDS
+        from microharness.database.db_client import get_db as get_database
+
+        # Step 2: Route first, then only SELECT needed columns from DB
+        sub_queries = route.get("sub_queries", [condition])
+        if not isinstance(sub_queries, list) or len(sub_queries) <= 1:
+            sub_queries = [condition]
+
+        from microharness.database.field_mapper import TABLE_MAP, DOC_FIELDS, COMMON_FIELDS
+        from microharness.database.db_client import get_db as get_database
+        from microharness.database.field_mapper import TABLE_MAP as _TM, DOC_FIELDS as _DF, COMMON_FIELDS as _CF, find_db_column
+        _TEXT_COLS = {"chief_complaint","present_illness_history","past_medical_history",
+            "social_history","maritalandobstetric_history","menstrual_history","family_history",
+            "physical_examination","specific_findings","investigations","tcm_four_findings",
+            "preliminary_diagnosis","admission_status","admission_diagnosis","discharge_diagnosis",
+            "clinical_course","discharge_status","discharge_orders","surgical_procedure",
+            "intra_op_events","progress_note","case_characteristics","diagnostic_basis",
+            "differential_diagnosis","treatment_plan","diagnosis","allergies","note",
+            "pre_op_diagnosis","intra_op_diagnosis"}
+
+        _db_ok = None
+        def _db_available():
+            nonlocal _db_ok
+            if _db_ok is None:
+                try:
+                    db = get_database()
+                    _db_ok = db.test()
+                except Exception:
+                    _db_ok = False
+            return _db_ok
+
+        def query_db_for_route(sq_route):
+            """Query DB for tables+columns specified by this route."""
+            if not _db_available(): return []
+            sq_docs = sq_route.get("target_medical_doc", [])
+            sq_sections = sq_route.get("target_sections", [])
+            results = []
+            try:
+                db = get_database()
+                for doc_title in sq_docs:
+                    info = _TM.get(doc_title, {})
+                    table = info.get("table", "")
+                    if not table: continue
+                    columns = set()
+                    for sec in sq_sections:
+                        col = find_db_column(doc_title, sec)
+                        if col: columns.add(col)
+                    for c in ["registerno","visitnumber","doc_id","patient_name","papat_relpatientid","paadm_relvisitnumber"]:
+                        columns.add(c)
+                    if not columns: continue
+                    select_parts = [f"SUBSTRING({c},1,4000) as {c}" if c in _TEXT_COLS else c for c in columns]
+                    where = f"registerno = '{register_no}'"
+                    if visit_no: where += f" AND visitnumber = '{visit_no}'"
+                    sql = f"SELECT {', '.join(select_parts)} FROM {table} WHERE {where}"
+                    log(f"  [Step2-DB] {sql[:250]}")
+                    try:
+                        rows = db.client.execute(sql)
+                        field_map = _DF.get(doc_title, {})
+                        rev_map = {v: k for k, v in field_map.items()}
+                        rev_common = {v: k for k, v in _CF.items()}
+                        for row in rows:
+                            bindings = []
+                            for col, val in row.items():
+                                if val and str(val).strip() and col not in ("registerno","visitnumber","doc_id","papat_relpatientid","paadm_relvisitnumber"):
+                                    field_name = rev_map.get(col) or rev_common.get(col) or col
+                                    bindings.append({"html_field": field_name, "value": str(val), "xml_path": col})
+                            if bindings:
+                                results.append({"file": f"{doc_title} ({row.get('doc_id','')})",
+                                    "template": info.get("doc_type", doc_title),
+                                    "bindings": bindings, "visit_no": row.get("visitnumber", "")})
+                    except Exception as e:
+                        if "not found" in str(e) or "SQLCODE: -30" in str(e):
+                            pass  # table doesn't exist, skip silently
+                        else:
+                            log(f"  [Step2-DB] 失败: {e}")
+            except Exception as e:
+                log(f"  [Step2-DB] DB不可用: {e}")
+            return results
+
+        # DB queries now happen inside check_one_condition → query_db_for_route
+
+        sub_queries = route.get("sub_queries", [condition])
+        if not isinstance(sub_queries, list) or len(sub_queries) <= 1:
+            sub_queries = [condition]
+
+        # ── For EACH sub-condition, check ALL files in parallel ──
+        sub_queries = route.get("sub_queries", [condition])
+        if not isinstance(sub_queries, list) or len(sub_queries) <= 1:
+            sub_queries = [condition]
+
+        def check_one_condition(sq):
+            """Route + check all files for one sub-condition."""
+            t0 = time.time()
+            sq_route = router.route(sq)
+            sq_docs = sq_route.get("target_medical_doc", [])
+            sq_sections = sq_route.get("target_sections", [])
+            sq_xml = sq_route.get("target_xml_paths", [])
+            log(f"  [Step2-路由] 子问题: {sq}")
+            log(f"  [Step2-路由]   → 文档: {sq_route.get('target_medical_doc',[])}")
+            log(f"  [Step2-路由]   → 章节: {sq_sections[:6]}")
+            log(f"  [Step2-路由]   → 来源: {sq_route.get('source','?')} 置信度:{sq_route.get('confidence',0):.0%}")
+            # Show keyword match details
+            kw = sq_route.get("matched_keywords") or sq_route.get("matched_keyword")
+            if kw:
+                log(f"  [Step2-路由]   → 命中关键词: {kw}")
+            note = sq_route.get("judge_reason", "")
+            if note:
+                log(f"  [Step2-路由]   → 依据: {note[:80]}")
+            # Show per-section metadata reasoning
+            match_reason = sq_route.get("match_reason", {})
+            if match_reason and isinstance(match_reason, dict):
+                for sec, reason in list(match_reason.items())[:5]:
+                    log(f"  [Step2-路由]     └ {sec}: {reason[:60]}")
+            sq_matched = False
+            sq_reason = ""
+            sq_files = []
+
+            # Query DB for THIS sub-condition's route (not pre-loaded)
+            relevant_files = query_db_for_route(sq_route)
+            log(f"  [Step2-路由]   → 匹配文件: {[ab['file'] for ab in relevant_files]}")
+
+            # Check each relevant file in parallel
+            def check_one_file(ab):
+                sub_fields = []
+                for b in ab["bindings"]:
+                    path = b.get("xml_path", ""); xml_tag = path.split("/")[-1] if path else ""
+                    label = b.get("html_field") or xml_tag; val = b.get("html_value") or b.get("value", "")
+                    include = any(ts in label or ts in path or label in ts or xml_tag in ts for ts in sq_sections)
+                    if not include:
+                        include = any(tp in path or xml_tag in tp or tp in xml_tag for tp in sq_xml)
+                    if not sq_sections and not sq_xml: include = True
+                    if include: sub_fields.append(f"  {label}: {str(val)[:80]}")  # brief for LLM
+                sub_summary = "\n".join(sub_fields[:15]) if sub_fields else "(无匹配字段)"
+
+                if sub_summary == "(无匹配字段)":
+                    log(f"    [Step3-取值] {ab['file']}: 无匹配字段 → 跳过")
+                    return {"file": ab["file"], "matched": False, "reason": "无相关字段", "fields": ""}
+
+                log(f"    [Step3-取值] {ab['file']}: 命中{len(sub_fields)}个字段")
+
+                try:
+                    from microharness.ollama import OllamaClient as JOC2
+                    j = JOC2(model=judge_model, timeout=60)
+                    resp = j.chat([{"role":"user","content": f"""判断这个条件是否满足。只输出JSON。
+
+条件：{sq}
+
+字段值：
+{sub_summary[:2000]}
+
+规则：
+- "X年Y月之前/之后" → 提取字段中的日期，与X年Y月比较，之前=早于，之后=晚于
+- "小于/短于X天" → 算住院天数=出院-入院，<X → true
+- "大于/高于/超过X" → >X → true
+- "包含/有XX" → 任一字段含XX → true
+
+输出：{{"matched": true或false, "reason": "理由"}}"""}], temperature=0.1)
+                    cleaned = resp.strip()
+                    for fence in ("```json","```"):
+                        if fence in cleaned:
+                            p=cleaned.split(fence)
+                            if len(p)>=2: cleaned=p[1].split("```")[0] if "```" in p[1] else p[1]; cleaned=cleaned.strip(); break
+                    jd = json.loads(cleaned)
+                    result = {"file": ab["file"], "matched": jd.get("matched",False),
+                              "reason": jd.get("reason",resp[:80]), "fields": sub_summary[:2000]}
+                    log(f"    [Step4-判断] {ab['file']}: {'✓ 符合' if result['matched'] else '✗ 不符合'} — {result['reason'][:60]}")
+                    return result
+                except Exception as e:
+                    return {"file": ab["file"], "matched": False, "reason": f"失败:{str(e)[:60]}", "fields": ""}
+
+            with ThreadPoolExecutor(max_workers=min(3, max(1,len(relevant_files)))) as ex:
+                futures = {ex.submit(check_one_file, ab): ab for ab in relevant_files}
+                for f in as_completed(futures):
+                    r = f.result()
+                    sq_files.append(r)
+                    if r["matched"]:
+                        sq_matched = True
+                        sq_reason = (sq_reason + " | " if sq_reason else "") + f"{r['file']}:{r['reason']}"
+
+            elapsed = round((time.time() - t0) * 1000)
+            # Collect full evidence from matched files (read complete binding)
+            evidence = {}
+            for f in sq_files:
+                if f.get("matched"):
+                    fn = f["file"]
+                    ab = next((x for x in relevant_files if x["file"] == fn), None)
+                    if ab:
+                        full_fields = []
+                        for b in ab["bindings"]:
+                            path = b.get("xml_path", ""); xml_tag = path.split("/")[-1] if path else ""
+                            label = b.get("html_field") or xml_tag; val = b.get("html_value") or b.get("value", "")
+                            if any(ts in label or ts in path or label in ts or xml_tag in ts for ts in sq_sections):
+                                full_fields.append(f"{label}: {str(val)}")
+                        evidence[fn] = "\\n".join(full_fields) if full_fields else "(无匹配字段)"
+                    else:
+                        evidence[fn] = "(未找到绑定数据)"
+            return {"condition": sq, "matched": sq_matched, "reason": sq_reason or "无匹配",
+                    "files": sq_files, "docs": sq_docs, "sections": sq_sections,
+                    "elapsed_ms": elapsed, "evidence": evidence}
+
+        # Run sub-conditions in PARALLEL
+        per_condition_results = {}
+        with ThreadPoolExecutor(max_workers=min(3, len(sub_queries))) as cex:
+            futures = {cex.submit(check_one_condition, sq): sq for sq in sub_queries}
+            for f in as_completed(futures):
+                r = f.result()
+                sq = futures[f]
+                per_condition_results[sq] = r
+                log(f"  [Step4-小结] {'✓' if r['matched'] else '✗'} 子条件「{sq[:30]}」 {r['reason'][:100]}")
+
+        # ── Meta-judge: patient-level combination ──
+        if len(per_condition_results) > 1:
+            cond_summary = "\n".join(
+                f"  {info['condition']}: {'✓符合' if info['matched'] else '✗不符合'} — {info['reason'][:100]}"
+                for info in per_condition_results.values()
+            )
+            try:
+                meta_prompt = f"""根据各子条件的判断结果，判断原始问题对这位患者是否成立。
+
+原始问题：{condition}
+
+子条件判断（每个条件独立检查了所有病历文件）：
+{cond_summary}
+
+规则：
+- "并且/且/和" → 全部子条件满足才算符合 (AND)
+- "或者/或" → 任一满足就算符合 (OR)
+- 条件在不同文件中满足也是可以的（跨文件匹配）
+
+输出JSON：{{"matched": true或false, "reason": "最终判断理由"}}"""
+                from microharness.ollama import OllamaClient as MOC
+                mj = MOC(model=judge_model, timeout=60)
+                mresp = mj.chat([{"role":"user","content":meta_prompt}], temperature=0.1)
+                mcleaned = mresp.strip()
+                for fence in ("```json","```"):
+                    if fence in mcleaned:
+                        p=mcleaned.split(fence)
+                        if len(p)>=2: mcleaned=p[1].split("```")[0] if "```" in p[1] else p[1]; mcleaned=mcleaned.strip(); break
+                md = json.loads(mcleaned)
+                matched = md.get("matched", False)
+                reason = md.get("reason", mresp[:120])
+            except Exception as e:
+                matched = all(v["matched"] for v in per_condition_results.values())
+                reason = " | ".join(f"{'✓' if v['matched'] else '✗'} {v['condition']}" for v in per_condition_results.values())
+        else:
+            only = list(per_condition_results.values())[0]
+            matched = only["matched"]
+            reason = only["reason"]
+
+        total_ms = int((time.time() - _query_start) * 1000)
+        log(f"  [Step5-整合] {'✓ 患者符合' if matched else '✗ 患者不符合'} | {reason[:120]}")
+        log(f"  [总耗时] {total_ms}ms ({total_ms/1000:.1f}s)")
+        log(f"{'='*60}\n")
+
+        results = [{
+            "register_no": register_no,
+            "matched": matched,
+            "reason": reason,
+            "per_condition": per_condition_results,
+            "all_files": list(set(f for r in per_condition_results.values() for f in [x["file"] for x in r.get("files",[])])),
+        }]
+        return {
+            "condition": condition,
+            "register_no": register_no,
+            "route": route,
+            "results": results,
+            "matched_count": 1 if matched else 0,
+            "total_ms": int((time.time() - _query_start) * 1000),
+        }
+
+    # No patient specified — just return the route
+    return {
+        "condition": condition,
+        "route": route,
+    }
+
+
+@app.get("/templates/database_config.html")
+async def serve_db_config_page():
+    html_path = templates_dir / "database_config.html"
+    if html_path.exists():
+        return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+    return {"error": "database_config.html not found"}
+
+
+@app.get("/api/database/config")
+async def get_db_config():
+    from microharness.database.db_client import load_config
+    return load_config()
+
+
+@app.post("/api/database/config")
+async def save_db_config(request: Request):
+    data = await request.json()
+    import microharness.database.db_client as dbc
+    dbc._CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Reset global instance so next get_db() reloads
+    dbc._db = None
+    return {"status": "saved"}
+
+
+@app.get("/api/database/test")
+async def test_db_config(type: str = "iris"):
+    from microharness.database.db_client import IrisClient, MySQLClient, load_config
+    cfg = load_config()
+    try:
+        if type == "iris":
+            c = cfg.get("iris", {})
+            client = IrisClient(c.get("base_url",""), c.get("namespace","HDCV2DEV"), c.get("username",""), c.get("password",""))
+        else:
+            c = cfg.get("mysql", {})
+            client = MySQLClient(c.get("host","127.0.0.1"), c.get("port",3306), c.get("database",""), c.get("user",""), c.get("password",""))
+        ok = client.test()
+        return {"ok": ok}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:100]}
 
 
 if __name__ == "__main__":

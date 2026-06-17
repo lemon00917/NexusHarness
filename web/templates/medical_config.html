@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>病历元数据配置 — CDR Agent</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body { overflow: auto; }
+        .mc-container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+        .mc-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid var(--border-color); }
+        .mc-header h1 { font-size: 18px; }
+        .mc-header a { color: var(--text-dim); text-decoration: none; font-size: 12px; }
+        .mc-header a:hover { color: var(--accent); }
+        .mc-doc { margin-bottom: 16px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
+        .mc-doc-header { display: flex; align-items: center; padding: 14px 18px; cursor: pointer; background: var(--bg-tertiary); }
+        .mc-doc-header:hover { background: var(--bg-hover); }
+        .mc-doc-header h3 { flex: 1; font-size: 14px; font-weight: 600; }
+        .mc-doc-toggle { font-size: 12px; color: var(--text-dim); }
+        .mc-doc.collapsed .mc-doc-body { display: none; }
+        .mc-doc.collapsed .mc-doc-toggle { transform: rotate(-90deg); }
+        .mc-doc-body { padding: 16px 18px; }
+        .mc-field { margin-bottom: 12px; }
+        .mc-field label { display: block; font-size: 11px; font-weight: 500; color: var(--text-secondary); margin-bottom: 4px; }
+        .mc-field input, .mc-field textarea { width: 100%; padding: 8px 12px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); font-size: 12px; font-family: var(--font-body); resize: vertical; }
+        .mc-field input:focus, .mc-field textarea:focus { border-color: var(--accent); outline: none; }
+        .mc-section { margin: 8px 0; padding: 10px 12px; background: var(--bg-primary); border-radius: 8px; border: 1px solid var(--border-color); }
+        .mc-section-header { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+        .mc-section input { flex: 1; padding: 4px 8px; font-size: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-primary); font-family: var(--font-body); }
+        .mc-section textarea { flex: 2; padding: 4px 8px; font-size: 11px; min-height: 28px; }
+        .mc-section .info-type { width: 120px; font-size: 10px; }
+        .mc-section-del { padding: 2px 8px; background: none; border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-dim); cursor: pointer; font-size: 11px; }
+        .mc-section-del:hover { border-color: var(--accent-red); color: var(--accent-red); }
+        .mc-add-section { margin-top: 8px; padding: 6px 12px; background: var(--accent-dim); border: 1px dashed var(--accent); border-radius: 6px; color: var(--accent); cursor: pointer; font-size: 11px; font-family: var(--font-body); width: 100%; }
+        .mc-add-section:hover { background: var(--accent); color: #fff; }
+        .mc-save-bar { position: sticky; bottom: 0; padding: 14px 20px; background: var(--bg-elevated); border-top: 1px solid var(--border-color); display: flex; gap: 10px; justify-content: flex-end; z-index: 10; }
+        .btn { padding: 8px 20px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 500; cursor: pointer; font-family: var(--font-body); transition: all 0.15s; border: none; }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); }
+        .btn-ghost:hover { background: var(--bg-hover); }
+        .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--bg-elevated); color: var(--text-primary); padding: 10px 22px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-size: 13px; z-index: 9999; }
+    </style>
+</head>
+<body>
+<div class="mc-container">
+    <div class="mc-header">
+        <h1>⚙️ 病历元数据配置</h1>
+        <div>
+            <a href="/">← CDR Agent</a>
+            <span style="color:var(--text-dim);margin:0 8px;">|</span>
+            <a href="/templates/medical_filter.html">← 病历筛选</a>
+        </div>
+    </div>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:20px;">
+        配置每类病历文档的用途和每个章节的临床用途描述。这些元数据用于 LLM 路由推理——修改后立即生效。
+    </p>
+    <div id="catalog"></div>
+</div>
+<div class="mc-save-bar">
+    <button class="btn btn-ghost" onclick="loadConfig()">🔄 重新加载</button>
+    <button class="btn btn-primary" onclick="saveConfig()">💾 保存配置</button>
+</div>
+
+<script>
+let catalog = {};
+
+async function loadConfig() {
+    try {
+        const res = await fetch('/api/medical/catalog-config');
+        catalog = await res.json();
+        renderCatalog();
+        showToast('已加载');
+    } catch(e) {
+        showToast('加载失败: ' + e.message);
+    }
+}
+
+function renderCatalog() {
+    const el = document.getElementById('catalog');
+    const entries = Object.entries(catalog);
+    if (entries.length === 0) { el.innerHTML = '<div style="color:var(--text-dim);text-align:center;padding:40px;">暂无数据</div>'; return; }
+
+    el.innerHTML = entries.map(([docName, doc], di) => `
+        <div class="mc-doc">
+            <div class="mc-doc-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                <h3>📋 ${esc(docName)}</h3>
+                <span class="mc-doc-toggle">▾</span>
+            </div>
+            <div class="mc-doc-body">
+                <div class="mc-field">
+                    <label>文档整体用途</label>
+                    <textarea rows="2" onchange="catalog['${esc(docName)}'].purpose=this.value">${esc(doc.purpose||'')}</textarea>
+                </div>
+                <div class="mc-field">
+                    <label>适用场景（逗号分隔）</label>
+                    <input value="${esc((doc.used_for||[]).join(','))}" onchange="catalog['${esc(docName)}'].used_for=this.value.split(',').map(s=>s.trim())">
+                </div>
+                <label style="font-size:11px;font-weight:500;color:var(--text-secondary);margin:12px 0 6px;display:block;">章节列表</label>
+                <div id="sections-${di}">
+                    ${(doc.sections||[]).map((sec, si) => `
+                        <div class="mc-section" id="sec-${di}-${si}">
+                            <div class="mc-section-header">
+                                <input value="${esc(sec.name||'')}" placeholder="章节名" style="width:120px;" onchange="catalog['${esc(docName)}'].sections[${si}].name=this.value">
+                                <textarea placeholder="临床用途描述" onchange="catalog['${esc(docName)}'].sections[${si}].purpose=this.value">${esc(sec.purpose||'')}</textarea>
+                                <input value="${esc(sec.info_type||'')}" class="info-type" placeholder="信息类型" onchange="catalog['${esc(docName)}'].sections[${si}].info_type=this.value">
+                                <button class="mc-section-del" onclick="deleteSection('${esc(docName)}',${si})">✕</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+                <button class="mc-add-section" onclick="addSection('${esc(docName)}', ${di})">+ 添加章节</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function addSection(docName, di) {
+    catalog[docName].sections.push({name:'新章节', purpose:'请描述用途', info_type:'其他'});
+    renderCatalog();
+    // Re-collapse to keep clean
+    setTimeout(() => {
+        document.querySelectorAll('.mc-doc')[di]?.classList.remove('collapsed');
+    }, 100);
+}
+
+function deleteSection(docName, si) {
+    catalog[docName].sections.splice(si, 1);
+    renderCatalog();
+}
+
+async function saveConfig() {
+    try {
+        const res = await fetch('/api/medical/catalog-config', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(catalog)
+        });
+        const data = await res.json();
+        if (data.status === 'saved') {
+            showToast('✅ 配置已保存，立即生效');
+        }
+    } catch(e) {
+        showToast('保存失败: ' + e.message);
+    }
+}
+
+function esc(s) { const d=document.createElement('div'); d.textContent=String(s||''); return d.innerHTML; }
+function showToast(msg) {
+    const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
+    document.body.appendChild(t); setTimeout(()=>t.remove(), 3000);
+}
+
+loadConfig();
+</script>
+</body>
+</html>

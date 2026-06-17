@@ -55,4 +55,8 @@ Thumbs.db
 docs/
 
 # Claude
-.claude/
+.claude/.playwright-mcp/
+*.png
+test_patient.html
+data/medicine/features.pkl
+data/medicine/weights.npz
