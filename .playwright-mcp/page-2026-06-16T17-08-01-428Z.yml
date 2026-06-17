@@ -1,0 +1,145 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - link "← CDR Agent" [ref=e4] [cursor=pointer]:
+      - /url: /
+    - generic [ref=e5]: 病历筛选
+    - generic [ref=e9] [cursor=pointer]: "0001920924"
+  - generic [ref=e10]:
+    - generic [ref=e11]:
+      - generic [ref=e12]: 查找符合条件的患者
+      - generic [ref=e13]:
+        - textbox "输入自然语言条件，如：住院小于5天、诊断为糖尿病、做过手术..." [ref=e14]
+        - button "筛选" [ref=e15] [cursor=pointer]
+    - generic [ref=e16]:
+      - button "住院 < 5天" [ref=e17] [cursor=pointer]
+      - button "有手术记录" [ref=e18] [cursor=pointer]
+      - button "诊断为糖尿病" [ref=e19] [cursor=pointer]
+      - button "血糖 > 7" [ref=e20] [cursor=pointer]
+      - button "主诉含头痛" [ref=e21] [cursor=pointer]
+      - button "有过敏史" [ref=e22] [cursor=pointer]
+    - generic [ref=e24]:
+      - generic [ref=e25]: 🔬
+      - heading "病历智能筛选" [level=3] [ref=e26]
+      - paragraph [ref=e27]:
+        - text: 上传患者病历并绑定后
+        - text: 输入自然语言条件即可筛选
+  - generic [ref=e28]:
+    - generic [ref=e29]:
+      - heading "📁 患者管理" [level=3] [ref=e30]
+      - button "✕" [ref=e31] [cursor=pointer]
+    - generic [ref=e48] [cursor=pointer]:
+      - generic [ref=e49]:
+        - generic [ref=e50]: "0001920924"
+        - generic [ref=e51]: ✓2/2
+      - generic [ref=e52]:
+        - generic "3x3052531x1(外科入院记录_3_880_19).html" [ref=e53]: 3x305253
+        - generic "3x3060612x1(手术记录_3_777_31).html" [ref=e54]: 3x306061
+      - generic [ref=e55]:
+        - button "⚡ 绑定" [ref=e56]
+        - button "删除" [ref=e57]
+    - generic [ref=e35]:
+      - button "+ 添加患者" [ref=e36] [cursor=pointer]
+      - button "⚡ 四阶段绑定" [ref=e37] [cursor=pointer]
+  - generic [ref=e59]:
+    - generic [ref=e60]:
+      - heading "⚡ 四阶段 HTML→XML 绑定" [level=2] [ref=e61]
+      - button "✕" [ref=e62] [cursor=pointer]
+    - generic [ref=e63]:
+      - generic [ref=e64]:
+        - generic [ref=e65]:
+          - generic [ref=e67]: Stage1
+          - generic [ref=e68]: 模板匹配
+          - combobox [ref=e69] [cursor=pointer]:
+            - option "quentinz/bge-large-zh-v1.5:latest"
+            - option "qwen2.5:3b"
+            - option "nomic-embed-text:latest"
+            - option "qwen2.5:7b-instruct-q4_K_M" [selected]
+            - option "qwen2.5:7b-instruct"
+            - option "qwen3-embedding:4b"
+            - option "dengcao/Qwen3-Reranker-0.6B:F16"
+            - option "qwen3-embedding:0.6b"
+            - option "deepseek-r1:1.5b"
+            - option "deepseek-r1:7b"
+            - option "bge-m3:latest"
+            - option "cliu/HuatuoGPT-o1-7B:latest"
+            - option "thewindmom/llama3-med42-8b:latest"
+            - option "qwen2.5-coder:latest"
+            - option "reader-lm:1.5b"
+            - option "reader-lm:1.5b-q4_0"
+            - option "gemma2:2b"
+            - option "llama3.2:3b"
+            - option "medaibase/medgemma1.5:4b"
+            - option "qwen2.5:7b"
+            - option "llama3:8b"
+            - option "qwen2:7b-instruct"
+            - option "qwen2:1.5b"
+        - generic [ref=e70]:
+          - generic [ref=e72]: Stage2
+          - generic [ref=e73]: XML字段解析
+          - generic [ref=e74]: 直接解析 XML 模板
+        - generic [ref=e75]:
+          - generic [ref=e77]: Stage3
+          - generic [ref=e78]: HTML字段提取
+          - combobox [ref=e79] [cursor=pointer]:
+            - option "quentinz/bge-large-zh-v1.5:latest"
+            - option "qwen2.5:3b"
+            - option "nomic-embed-text:latest"
+            - option "qwen2.5:7b-instruct-q4_K_M" [selected]
+            - option "qwen2.5:7b-instruct"
+            - option "qwen3-embedding:4b"
+            - option "dengcao/Qwen3-Reranker-0.6B:F16"
+            - option "qwen3-embedding:0.6b"
+            - option "deepseek-r1:1.5b"
+            - option "deepseek-r1:7b"
+            - option "bge-m3:latest"
+            - option "cliu/HuatuoGPT-o1-7B:latest"
+            - option "thewindmom/llama3-med42-8b:latest"
+            - option "qwen2.5-coder:latest"
+            - option "reader-lm:1.5b"
+            - option "reader-lm:1.5b-q4_0"
+            - option "gemma2:2b"
+            - option "llama3.2:3b"
+            - option "medaibase/medgemma1.5:4b"
+            - option "qwen2.5:7b"
+            - option "llama3:8b"
+            - option "qwen2:7b-instruct"
+            - option "qwen2:1.5b"
+        - generic [ref=e80]:
+          - generic [ref=e82]: Stage4
+          - generic [ref=e83]: XML字段绑定
+          - combobox [ref=e84] [cursor=pointer]:
+            - option "quentinz/bge-large-zh-v1.5:latest"
+            - option "qwen2.5:3b"
+            - option "nomic-embed-text:latest"
+            - option "qwen2.5:7b-instruct-q4_K_M" [selected]
+            - option "qwen2.5:7b-instruct"
+            - option "qwen3-embedding:4b"
+            - option "dengcao/Qwen3-Reranker-0.6B:F16"
+            - option "qwen3-embedding:0.6b"
+            - option "deepseek-r1:1.5b"
+            - option "deepseek-r1:7b"
+            - option "bge-m3:latest"
+            - option "cliu/HuatuoGPT-o1-7B:latest"
+            - option "thewindmom/llama3-med42-8b:latest"
+            - option "qwen2.5-coder:latest"
+            - option "reader-lm:1.5b"
+            - option "reader-lm:1.5b-q4_0"
+            - option "gemma2:2b"
+            - option "llama3.2:3b"
+            - option "medaibase/medgemma1.5:4b"
+            - option "qwen2.5:7b"
+            - option "llama3:8b"
+            - option "qwen2:7b-instruct"
+            - option "qwen2:1.5b"
+      - generic [ref=e85]:
+        - heading "当前患者文件" [level=4] [ref=e86]
+        - generic [ref=e87]:
+          - generic [ref=e88]:
+            - generic [ref=e89]: 3x3052531x1(外科入院记录_3_880_19).html
+            - generic [ref=e90]: 已绑定
+          - generic [ref=e91]:
+            - generic [ref=e92]: 3x3060612x1(手术记录_3_777_31).html
+            - generic [ref=e93]: 已绑定
+    - generic [ref=e94]:
+      - button "关闭" [ref=e95] [cursor=pointer]
+      - button "开始绑定" [ref=e96] [cursor=pointer]

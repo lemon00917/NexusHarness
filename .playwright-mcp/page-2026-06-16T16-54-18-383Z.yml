@@ -1,0 +1,35 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - link "← CDR Agent" [ref=e4] [cursor=pointer]:
+      - /url: /
+    - generic [ref=e5]: 病历筛选
+    - generic [ref=e9] [cursor=pointer]: 选择患者
+  - generic [ref=e10]:
+    - generic [ref=e11]:
+      - generic [ref=e12]: 查找符合条件的患者
+      - generic [ref=e13]:
+        - textbox "输入自然语言条件，如：住院小于5天、诊断为糖尿病、做过手术..." [ref=e14]
+        - button "筛选" [disabled] [ref=e15]
+    - generic [ref=e16]:
+      - button "住院 < 5天" [ref=e17] [cursor=pointer]
+      - button "有手术记录" [ref=e18] [cursor=pointer]
+      - button "诊断为糖尿病" [ref=e19] [cursor=pointer]
+      - button "血糖 > 7" [ref=e20] [cursor=pointer]
+      - button "主诉含头痛" [ref=e21] [cursor=pointer]
+      - button "有过敏史" [ref=e22] [cursor=pointer]
+    - generic [ref=e24]:
+      - generic [ref=e25]: 🔬
+      - heading "病历智能筛选" [level=3] [ref=e26]
+      - paragraph [ref=e27]:
+        - text: 上传患者病历并绑定后
+        - text: 输入自然语言条件即可筛选
+  - generic [ref=e28]:
+    - generic [ref=e29]:
+      - heading "📁 患者管理" [level=3] [ref=e30]
+      - button "✕" [ref=e31] [cursor=pointer]
+    - paragraph [ref=e34]:
+      - text: 暂无患者
+      - text: 点击下方按钮上传病历
+    - generic [ref=e35]:
+      - button "+ 添加患者" [ref=e36] [cursor=pointer]
+      - button "⚡ 四阶段绑定" [disabled] [ref=e37] [cursor=pointer]

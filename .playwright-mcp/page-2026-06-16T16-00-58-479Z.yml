@@ -1,0 +1,26 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - generic [ref=e4]:
+      - heading "📁 患者列表" [level=2] [ref=e5]
+      - generic [ref=e6]:
+        - link "← 回主页" [ref=e7] [cursor=pointer]:
+          - /url: /
+        - button "+" [ref=e8] [cursor=pointer]
+    - generic [ref=e10]:
+      - text: 暂无患者
+      - text: 点击 + 上传病历
+  - main [ref=e11]:
+    - generic [ref=e12]:
+      - heading "📄 选择患者查看文件" [level=2] [ref=e13]
+      - button "⚡ 一键绑定" [disabled] [ref=e14]
+    - generic [ref=e16]: ← 从左侧选择一个患者
+  - complementary [ref=e17]:
+    - heading "🔍 智能筛选" [level=3] [ref=e19]
+    - generic [ref=e20]:
+      - generic [ref=e21]: 筛选条件（自然语言）
+      - textbox "例如：住院小于5天的患者" [ref=e22]
+      - generic [ref=e23]: 支持：数值比较 / 文本匹配 / 复杂语义
+      - button "查询" [disabled] [ref=e24]
+    - generic [ref=e25]:
+      - generic [ref=e26]: 📊 查询结果
+      - generic [ref=e27]: 选择患者并输入条件后查询

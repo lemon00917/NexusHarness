@@ -2213,7 +2213,10 @@ async def bind_patient(register_no: str, request: Request = None, visit_no: str 
     from microharness.medical.field_catalog import get_template_filename
     from microharness.rag.template_binding_v2 import ThreeStageBinder, clean_html
 
-    xml_dir = str(PROJECT_ROOT / "data" / "临床文档模板")
+    # XML templates: prefer Docker-safe path, fallback to data dir
+    xml_dir = str(PROJECT_ROOT / "templates_xml")
+    if not Path(xml_dir).exists() or not list(Path(xml_dir).glob("*.xml")):
+        xml_dir = str(PROJECT_ROOT / "data" / "临床文档模板")
     all_results = []
 
     for visit_dir in visit_dirs:
@@ -2322,7 +2325,7 @@ async def bind_patient(register_no: str, request: Request = None, visit_no: str 
                     _log_error_to_db(register_no, visit_dir.name, doc_id, "BIND", "绑定返回空")
             except Exception as e:
                 all_results.append({"filename": fname, "visit_no": visit_dir.name, "status": "error", "reason": str(e)})
-                _log_error(doc_id, "BIND", str(e)[:200])
+                _log_error_to_db(register_no, visit_dir.name, doc_id, "BIND", str(e)[:200])
 
     return {
         "register_no": register_no,

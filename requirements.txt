@@ -26,5 +26,5 @@ psutil>=5.9.0
 antlr4-python3-runtime>=4.9.0
 trafilatura>=1.0.0
 
-# 数据库连接（可选）
-psycopg2-binary>=2.9.0
+# 数据库连接
+pymysql>=1.0.0

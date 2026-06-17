@@ -32,31 +32,31 @@ LABEL description="NexusHarness - Minimal Agent Harness with RAG"
 WORKDIR /app
 
 # ── 第一层：安装 Python 依赖（利用 Docker 层缓存） ──────────────
-# 全局设置阿里源（build isolation 也会用这个源，不走 pypi.org）
+# 全局设置阿里源
 ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
 # pkuseg 在 Docker 内下载极慢，提前下载到项目根目录，从本地安装
 # 问题1: setup.py import numpy但pyproject.toml未声明 → 手动装numpy + --no-build-isolation
 # 问题2: 老Cython生成的.cpp引用longintrepr.h → Python 3.12已删除 → 用新版Cython重新生成
 COPY pkuseg-0.0.25.tar.gz .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir numpy setuptools wheel cython && \
+RUN pip install --no-cache-dir --timeout=600 --upgrade pip && \
+    pip install --no-cache-dir --timeout=600 numpy setuptools wheel cython && \
     tar -xzf pkuseg-0.0.25.tar.gz && \
     cd pkuseg-0.0.25 && \
     python -m cython --cplus -3 pkuseg/inference.pyx && \
     python -m cython --cplus -3 pkuseg/feature_extractor.pyx && \
     python -m cython --cplus -3 pkuseg/postag/feature_extractor.pyx && \
     cd .. && \
-    pip install --no-cache-dir --no-build-isolation ./pkuseg-0.0.25/ && \
+    pip install --no-cache-dir --timeout=600 --no-build-isolation ./pkuseg-0.0.25/ && \
     rm -rf pkuseg-0.0.25 pkuseg-0.0.25.tar.gz
 COPY requirements.txt .
 
 # 核心依赖（排除 sentence-transformers——默认用 Ollama embedding，不需要它）
 RUN grep -vE '^(#|$)' requirements.txt | grep -v 'sentence-transformers' | \
-    xargs pip install --no-cache-dir --timeout=600
+    xargs pip install --no-cache-dir --timeout=600 --timeout=600
 
 # 补充依赖（不在 requirements.txt 中，但代码引用）
-RUN pip install --no-cache-dir --timeout=600 html-to-markdown
+RUN pip install --no-cache-dir --timeout=600 --timeout=600 html-to-markdown
 
 # ── 第二层：复制应用代码 ──────────────────────────────────────────
 COPY microharness/ ./microharness/
@@ -65,6 +65,9 @@ COPY data/ ./data/
 COPY skills/ ./skills/
 COPY configs/ ./configs/
 COPY harness.py ./
+
+# XML templates must survive volume mounts — copy to a non-mounted location
+RUN mkdir -p /app/templates_xml && cp -r /app/data/临床文档模板/* /app/templates_xml/ 2>/dev/null || true
 
 # ── 运行时目录 ────────────────────────────────────────────────────
 RUN mkdir -p \

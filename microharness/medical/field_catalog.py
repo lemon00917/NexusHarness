@@ -23,7 +23,10 @@ from typing import Dict, List, Optional
 # ── Paths ──────────────────────────────────────────────────────────
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
-_XML_DIR = _PROJECT_ROOT / "data" / "临床文档模板"
+# Docker-safe path: templates_xml survives volume mounts
+_xml1 = _PROJECT_ROOT / "templates_xml"
+_xml2 = _PROJECT_ROOT / "data" / "临床文档模板"
+_XML_DIR = _xml1 if (_xml1.exists() and list(_xml1.glob("*.xml"))) else _xml2
 
 # ── Filename → template mapping ────────────────────────────────────
 # Fixed HTML filenames the user uploads, mapped to XML template filenames

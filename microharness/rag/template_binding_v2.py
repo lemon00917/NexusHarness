@@ -243,8 +243,12 @@ def stage1_match_template(
             break
 
     if not matched_template:
-        matched_template = templates[0]
-        rag_logger.warning(f"[Stage1] Using fallback: {matched_template['filename']}")
+        if templates:
+            matched_template = templates[0]
+            rag_logger.warning(f"[Stage1] Using fallback: {matched_template['filename']}")
+        else:
+            rag_logger.error("[Stage1] No XML templates found! Check xml_dir path.")
+            return {"template": None, "matched_name": ""}
 
     return {"template": matched_template, "matched_name": matched_name}
 
