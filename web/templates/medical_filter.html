@@ -35,7 +35,7 @@
         .mf-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 32px 40px 0; }
 
         /* ── Query ───────────────────── */
-        .mf-query { max-width: 720px; margin: 0 auto 24px; width: 100%; }
+        .mf-query { max-width: 1040px; margin: 0 auto 24px; width: 100%; }
         .mf-query-label { font-size: 22px; font-weight: 600; color: var(--text-primary); margin-bottom: 16px; letter-spacing: -.4px; }
         .mf-query-input-row {
             display: flex; gap: 10px; background: var(--bg-secondary);
@@ -59,7 +59,7 @@
 
         .mf-chips {
             display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px;
-            max-width: 720px; margin-left: auto; margin-right: auto; width: 100%;
+            max-width: 1040px; margin-left: auto; margin-right: auto; width: 100%;
         }
         .mf-chip {
             padding: 5px 14px; border-radius: 16px; font-size: 11px;
@@ -70,7 +70,7 @@
         .mf-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
 
         .mf-status {
-            max-width: 720px; margin: 0 auto; width: 100%;
+            max-width: 1040px; margin: 0 auto; width: 100%;
             display: flex; align-items: center; gap: 16px; padding: 0 0 16px; font-size: 12px;
         }
         .mf-status-count { color: var(--text-secondary); }
@@ -79,7 +79,7 @@
 
         .mf-results {
             flex: 1; overflow-y: auto; padding-bottom: 40px;
-            max-width: 720px; margin: 0 auto; width: 100%;
+            max-width: 1040px; margin: 0 auto; width: 100%;
         }
         .mf-results::-webkit-scrollbar { width: 4px; }
         .mf-results::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 2px; }
@@ -106,6 +106,81 @@
         }
         .mf-empty h3 { font-size: 17px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; letter-spacing: -.3px; }
         .mf-empty p { font-size: 13px; color: var(--text-dim); line-height: 1.6; }
+
+        .mf-result-summary {
+            background: var(--bg-secondary); border: 1px solid var(--border-color);
+            border-radius: 10px; padding: 14px 16px; margin-bottom: 12px;
+        }
+        .mf-summary-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        .mf-summary-title { font-size: 15px; font-weight: 600; color: var(--text-primary); line-height: 1.45; }
+        .mf-summary-reason { margin-top: 10px; font-size: 12px; color: var(--text-secondary); line-height: 1.7; }
+        .mf-user-explain {
+            margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+            background: rgba(79,142,247,.08); border: 1px solid rgba(79,142,247,.22);
+            color: var(--text-primary); font-size: 12px; line-height: 1.7;
+        }
+        .mf-user-explain-label {
+            display: block; margin-bottom: 4px; color: var(--accent);
+            font-size: 10px; font-weight: 600;
+        }
+        .mf-summary-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        .mf-badge {
+            display: inline-flex; align-items: center; gap: 5px; min-height: 22px;
+            padding: 3px 8px; border-radius: 6px; font-size: 11px;
+            border: 1px solid var(--border-color); color: var(--text-secondary);
+            background: var(--bg-tertiary); white-space: nowrap;
+        }
+        .mf-badge.ok { color: var(--accent-green); background: rgba(34,197,94,.1); border-color: rgba(34,197,94,.25); }
+        .mf-badge.no { color: var(--accent-red); background: rgba(239,68,68,.1); border-color: rgba(239,68,68,.25); }
+        .mf-badge.unknown { color: var(--accent-amber); background: rgba(245,158,11,.1); border-color: rgba(245,158,11,.25); }
+        .mf-condition-grid { display: grid; gap: 12px; }
+        .mf-condition-card {
+            background: var(--bg-secondary); border: 1px solid var(--border-color);
+            border-radius: 10px; padding: 12px; margin-bottom: 12px;
+        }
+        .mf-condition-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+        .mf-condition-title { font-size: 13px; font-weight: 600; color: var(--text-primary); line-height: 1.4; }
+        .mf-condition-reason { font-size: 11px; color: var(--text-secondary); line-height: 1.7; margin-bottom: 8px; }
+        .mf-evidence-section { margin-top: 10px; }
+        .mf-evidence-section-title {
+            font-size: 10px; color: var(--text-dim); font-weight: 600;
+            margin: 10px 0 6px; letter-spacing: .2px;
+        }
+        .mf-evidence-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 8px; }
+        .mf-evidence-card {
+            background: var(--bg-tertiary); border: 1px solid var(--border-color);
+            border-radius: 8px; padding: 10px; font-size: 11px;
+        }
+        .mf-evidence-card.main { border-left: 3px solid var(--accent); }
+        .mf-evidence-card.aux { border-left: 3px solid var(--accent-amber); }
+        .mf-evidence-card.support { border-left: 3px solid var(--accent-green); }
+        .mf-evidence-card.reject { border-left: 3px solid var(--accent-red); }
+        .mf-evidence-card.error { border-left: 3px solid var(--accent-red); background: rgba(239,68,68,.06); }
+        .mf-evidence-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; margin-bottom: 6px; }
+        .mf-evidence-name { font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: normal; line-height: 1.4; }
+        .mf-evidence-reason { color: var(--text-secondary); line-height: 1.6; word-break: break-word; }
+        .mf-raw {
+            margin-top: 8px; border-top: 1px solid var(--border-color); padding-top: 8px;
+            color: var(--text-dim); font-family: var(--font-mono); font-size: 10px;
+            white-space: pre-wrap; word-break: break-word; max-height: 150px; overflow: auto;
+        }
+        .mf-candidates { margin-top: 8px; border-top: 1px solid var(--border-color); padding-top: 8px; overflow-x: auto; }
+        .mf-candidates table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+        .mf-candidates th {
+            text-align: left; color: var(--text-dim); font-weight: 600;
+            padding: 5px 6px; border-bottom: 1px solid var(--border-color);
+            white-space: nowrap;
+        }
+        .mf-candidates td {
+            padding: 6px; border-bottom: 1px solid rgba(255,255,255,.04);
+            color: var(--text-secondary); vertical-align: top;
+        }
+        .mf-mini-ok { color: var(--accent-green); font-weight: 600; }
+        .mf-mini-no { color: var(--accent-red); font-weight: 600; }
+        .mf-mini-unknown { color: var(--accent-amber); font-weight: 600; }
+        .mf-details { margin-top: 8px; }
+        .mf-details summary { cursor: pointer; color: var(--accent); font-size: 11px; user-select: none; }
+        .mf-route-note { font-size: 11px; color: var(--text-dim); line-height: 1.6; margin-bottom: 10px; }
 
         /* ═══ Patient Drawer ═══ */
         .drawer-overlay {
@@ -354,11 +429,14 @@
         <a href="/" class="mf-back">← CDR Agent</a>
         <div class="mf-logo"><span class="mf-logo-dot"></span>病历筛选</div>
         <span class="mf-spacer"></span>
+        <span class="mf-spacer"></span>
+        <input id="inputRegisterNo" placeholder="登记号" style="width:120px;padding:4px 8px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;color:var(--text-primary);font-size:11px;font-family:var(--font-body);outline:none;" oninput="onParamChange()" onchange="onParamChange()">
+        <input id="inputGlobalPatientId" placeholder="全局患者ID" style="width:110px;padding:4px 8px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;color:var(--text-primary);font-size:11px;font-family:var(--font-body);outline:none;" oninput="onParamChange()" onchange="onParamChange()">
+        <input id="inputVisitNo" placeholder="就诊号" style="width:100px;padding:4px 8px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;color:var(--text-primary);font-size:11px;font-family:var(--font-body);outline:none;" oninput="onParamChange()" onchange="onParamChange()">
+        <input id="inputGlobalVisitId" placeholder="全局就诊号" style="width:110px;padding:4px 8px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;color:var(--text-primary);font-size:11px;font-family:var(--font-body);outline:none;" oninput="onParamChange()" onchange="onParamChange()">
         <span class="mf-patient-badge" id="patientBadge" onclick="toggleDrawer('patientDrawer','patientOverlay')">
-            <span class="dot empty" id="patientDot"></span>
-            <span id="patientBadgeText">选择患者</span>
+            <span id="patientBadgeText">📁</span>
         </span>
-        <select id="visitSelector" style="display:none;padding:4px 10px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:14px;color:var(--text-primary);font-size:11px;font-family:var(--font-body);outline:none;cursor:pointer;max-width:160px;" onchange="onVisitChange(this.value)"></select>
     </header>
 
     <!-- ═══ Main ═══ -->
@@ -368,7 +446,8 @@
             <div class="mf-query-input-row">
                 <input class="mf-query-input" id="queryInput" placeholder="输入自然语言条件，如：住院小于5天、诊断为糖尿病、做过手术...">
                 <select id="routerModel" style="width:130px;padding:8px 6px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;color:var(--accent-amber);font-size:11px;font-family:var(--font-body);outline:none;cursor:pointer;margin-right:2px;" title="路由模型"></select>
-                <select id="judgeModel" style="width:130px;padding:8px 6px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;color:var(--accent-green);font-size:11px;font-family:var(--font-body);outline:none;cursor:pointer;margin-right:4px;" title="判断模型"></select>
+                <select id="judgeModel" style="width:130px;padding:8px 6px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;color:var(--accent-green);font-size:11px;font-family:var(--font-body);outline:none;cursor:pointer;margin-right:2px;" title="判断模型"></select>
+                <select id="plannerModel" style="width:120px;padding:8px 6px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;color:var(--accent-purple);font-size:11px;font-family:var(--font-body);outline:none;cursor:pointer;margin-right:4px;" title="调度层（不选=不启用）"><option value="">不启用</option></select>
                 <button class="mf-query-submit" id="querySubmit" onclick="runQuery()" disabled>筛选</button>
             </div>
         </div>
@@ -529,6 +608,7 @@
 <script>
 // ── State ──────────────────────────────────
 let currentPatientId = null, currentPatientName = '', currentRegisterNo = '', currentVisitNo = '';
+let currentGlobalPatientId = '', currentGlobalVisitId = '';
 // currentPatientId is always the register_no now
 let selectedFiles = [], patients = [];
 let ollamaModels = [];
@@ -542,6 +622,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadOllamaModels();
     renderRouterModelSelect();
     renderJudgeModelSelect();
+    renderPlannerModelSelect();
     refreshPatients();
 });
 
@@ -558,7 +639,7 @@ function renderRouterModelSelect() {
     if (!sel) return;
     const models = ollamaModels.length ? ollamaModels : ['qwen2.5:3b','qwen2.5:7b'];
     sel.innerHTML = models.map(m => `<option value="${m}" style="color:var(--text-primary);">${m}</option>`).join('');
-    const pref = models.find(m=>m.includes('qwen2.5:3b')) || models[0];
+    const pref = models.find(m=>m.includes('medgemma')) || models.find(m=>m.includes('CoT')) || models.find(m=>m.includes('qwen2.5:3b')) || models[0];
     if (pref) sel.value = pref;
 }
 
@@ -568,8 +649,20 @@ function renderJudgeModelSelect() {
     const models = ollamaModels.length ? ollamaModels : ['qwen2.5:3b','qwen2.5:7b','qwen2:7b-instruct'];
     sel.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
     // Default to qwen2.5:3b if available
-    const pref = models.find(m=>m.includes('qwen2.5:3b')) || models[0];
+    const pref = models.find(m=>m.includes('medgemma')) || models.find(m=>m.includes('CoT')) || models.find(m=>m.includes('qwen2.5:3b')) || models[0];
     if (pref) sel.value = pref;
+}
+
+function renderPlannerModelSelect() {
+    const sel = document.getElementById('plannerModel');
+    if (!sel) return;
+    // Default: "不启用" + available models. Prefer native thinking models.
+    const thinkingModels = ollamaModels.filter(m=>m.includes('deepseek-r1')||m.includes('r1'));
+    const others = ollamaModels.filter(m=>!m.includes('deepseek-r1') && !m.includes('r1'));
+    const models = [...thinkingModels, ...others];
+    sel.innerHTML = '<option value="">不启用</option>' + models.map(m => `<option value="${m}">${m}</option>`).join('');
+    // Default to deepseek-r1 if available
+    if (thinkingModels.length) sel.value = thinkingModels[0];
 }
 
 function renderModelSelect(selectId, defaultModel) {
@@ -639,32 +732,46 @@ function selectPatient(id) {
     currentPatientId = id; currentRegisterNo = id;
     const p = patients.find(x=>x.register_no===id);
     currentPatientName = p?p.name:'';
+    currentGlobalPatientId = p?.global_patient_id||'';
+    currentGlobalVisitId = p?.global_visit_id||'';
+    // Sync to topbar input fields
+    document.getElementById('inputRegisterNo').value = currentRegisterNo;
+    document.getElementById('inputGlobalPatientId').value = currentGlobalPatientId;
+    document.getElementById('inputVisitNo').value = '';
+    document.getElementById('inputGlobalVisitId').value = currentGlobalVisitId;
     document.getElementById('querySubmit').disabled = false;
     document.getElementById('batchBindBtn').disabled = false;
     const vs = document.getElementById('visitSelector');
-    if (p && p.visits && p.visits.length > 0) {
-        vs.style.display = 'inline-block';
-        vs.innerHTML = '<option value="">全部就诊</option>' +
-            p.visits.map(v => `<option value="${v.visit_no}">${v.visit_no} (${v.total_files}文件)</option>`).join('');
-        currentVisitNo = '';
-    } else { vs.style.display = 'none'; currentVisitNo = ''; }
+    if (vs) {
+        if (p && p.visits && p.visits.length > 0) {
+            vs.style.display = 'inline-block';
+            vs.innerHTML = '<option value="">全部就诊</option>' +
+                p.visits.map(v => `<option value="${v.visit_no}">${v.visit_no} (${v.total_files}文件)</option>`).join('');
+            currentVisitNo = '';
+        } else { vs.style.display = 'none'; currentVisitNo = ''; }
+    }
     renderDrawerPatients(); updateBadge();
     closeDrawer('patientDrawer','patientOverlay');
+}
+function onParamChange() {
+    currentRegisterNo = document.getElementById('inputRegisterNo').value.trim();
+    currentGlobalPatientId = document.getElementById('inputGlobalPatientId').value.trim();
+    currentVisitNo = document.getElementById('inputVisitNo').value.trim();
+    currentGlobalVisitId = document.getElementById('inputGlobalVisitId').value.trim();
+    // Manual input sets currentPatientId so query works without opening patient drawer
+    currentPatientId = currentRegisterNo || currentGlobalPatientId;
+    const btn = document.getElementById('querySubmit');
+    btn.disabled = !currentPatientId;
+    btn.style.opacity = btn.disabled ? '0.4' : '1';
 }
 function onVisitChange(v) { currentVisitNo = v; }
 
 function updateBadge() {
-    const badge = document.getElementById('patientBadge');
     const text = document.getElementById('patientBadgeText');
-    const dot = document.getElementById('patientDot');
     if (currentPatientId) {
-        text.textContent = currentPatientName;
-        dot.className = 'dot ready';
-        badge.classList.add('active');
+        text.textContent = '📁';
     } else {
-        text.textContent = patients.length ? `共 ${patients.length} 位患者` : '选择患者';
-        dot.className = 'dot empty';
-        badge.classList.remove('active');
+        text.textContent = '📁';
     }
 }
 
@@ -684,9 +791,9 @@ function showUploadModal() {
     renderUploadPreview();
     document.getElementById('uploadConfirmBtn').disabled = true;
     // Populate binding model selectors
-    renderModelSelect('uploadBindModel1', ollamaModels.find(m=>m.includes('qwen2.5:7b'))||'qwen2.5:7b');
-    renderModelSelect('uploadBindModel3', ollamaModels.find(m=>m.includes('qwen2.5:7b'))||'qwen2.5:7b');
-    renderModelSelect('uploadBindModel4', ollamaModels.find(m=>m.includes('qwen2.5:7b'))||'qwen2.5:7b');
+    renderModelSelect('uploadBindModel1', ollamaModels.find(m=>m.includes('qwen2.5:3b'))||'qwen2.5:3b');
+    renderModelSelect('uploadBindModel3', ollamaModels.find(m=>m.includes('qwen2.5:3b'))||'qwen2.5:3b');
+    renderModelSelect('uploadBindModel4', ollamaModels.find(m=>m.includes('qwen2.5:3b'))||'qwen2.5:3b');
     document.getElementById('registerNoInput').value = '';
     document.getElementById('globalPatientIdInput').value = '';
     document.getElementById('visitNoInput').value = '';
@@ -741,6 +848,7 @@ async function uploadPatient() {
     if (d.error) { showToast('上传失败: '+d.error); btn.disabled=false; btn.textContent='上传并绑定'; return; }
     hideUploadModal(); await refreshPatients();
     currentRegisterNo = d.register_no; currentVisitNo = d.visit_no;
+    currentGlobalPatientId = d.global_patient_id||''; currentGlobalVisitId = d.global_visit_id||'';
     currentPatientName = d.patient_name; currentPatientId = d.register_no;
     updateBadge();
     document.getElementById('querySubmit').disabled = false;
@@ -769,9 +877,9 @@ async function openBindPanel() {
 
     // Load models
     if (!ollamaModels.length) await loadOllamaModels();
-    renderModelSelect('bindModel1', ollamaModels.find(m=>m.includes('qwen2.5:7b'))||'qwen2.5:7b');
-    renderModelSelect('bindModel3', ollamaModels.find(m=>m.includes('qwen2.5:7b'))||'qwen2.5:7b');
-    renderModelSelect('bindModel4', ollamaModels.find(m=>m.includes('qwen2.5:7b'))||'qwen2.5:7b');
+    renderModelSelect('bindModel1', ollamaModels.find(m=>m.includes('qwen2.5:3b'))||'qwen2.5:3b');
+    renderModelSelect('bindModel3', ollamaModels.find(m=>m.includes('qwen2.5:3b'))||'qwen2.5:3b');
+    renderModelSelect('bindModel4', ollamaModels.find(m=>m.includes('qwen2.5:3b'))||'qwen2.5:3b');
 
     document.getElementById('bindStartBtn').disabled = false;
 
@@ -953,11 +1061,15 @@ async function runQuery() {
     const btn = document.getElementById('querySubmit');
     btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 筛选中...';
     const routerModel = document.getElementById('routerModel')?.value || 'qwen2.5:3b';
-    const judgeModel = document.getElementById('judgeModel')?.value || 'qwen2.5:7b';
-    const data = await api('/api/medical/query', {method:'POST', body:JSON.stringify({
+    const judgeModel = document.getElementById('judgeModel')?.value || 'qwen2.5:3b';
+    const plannerModel = document.getElementById('plannerModel')?.value || '';
+    const body = {
         condition, register_no: currentRegisterNo, visit_no: currentVisitNo,
+        global_patient_id: currentGlobalPatientId, global_visit_id: currentGlobalVisitId,
         router_model: routerModel, judge_model: judgeModel
-    })});
+    };
+    if (plannerModel) body.planner_model = plannerModel;
+    const data = await api('/api/medical/query', {method:'POST', body:JSON.stringify(body)});
     showQueryResults(data);
     btn.disabled = false; btn.innerHTML = '筛选';
 }
@@ -965,70 +1077,355 @@ async function runQuery() {
 function showQueryResults(data) {
     const results = document.getElementById('resultsArea');
     const status = document.getElementById('statusBar');
+    const rows = data.results || [];
+    const first = rows[0] || {};
+    const finalStatus = data['判断状态'] || first['判断状态'] || (data.matched_count > 0 ? '符合' : '不符合');
+    const tone = statusTone(finalStatus);
     status.style.display = 'flex';
-    document.getElementById('statusCount').innerHTML = `<strong>${data.matched_count||0}/${(data.results||[]).length}</strong> 条匹配`;
-    document.getElementById('statusMeta').textContent = `条件: ${data.condition}`;
+    document.getElementById('statusCount').innerHTML = `<strong>${esc(finalStatus)}</strong> · ${data.matched_count||0}/${rows.length} 条匹配`;
+    document.getElementById('statusMeta').textContent = `耗时: ${data.total_ms||0}ms`;
 
-    if (!data.results || data.results.length===0) {
+    if (!rows.length) {
         results.innerHTML = `<div class="mf-empty"><p style="color:var(--text-dim);">没有绑定数据可查询</p></div>`;
         return;
     }
 
-    const route = data.route||{};
-    // Per-condition routing display
-    const perCond = (data.results||[])[0]?.per_condition || {};
-    let routeHtml = '';
-    for (const [sq, info] of Object.entries(perCond)) {
-        const files = info.files || [];
-        const matchedFiles = files.filter(f=>f.matched).map(f=>f.file);
-        const docs = info.docs||[];
-        const secs = info.sections||[];
-        const evidence = info.evidence||{};
-        const evHtml = Object.entries(evidence).map(([file, fields]) =>
-            `<div style="margin-top:4px;padding:4px 8px;background:var(--bg-primary);border-radius:4px;font-size:10px;color:var(--text-dim);font-family:var(--font-mono);word-break:break-all;">📎 ${esc(file)}: ${esc(String(fields).replace(/\n/g,' | '))}</div>`
-        ).join('');
-        routeHtml += `
-        <div style="margin-bottom:6px;padding:8px 10px;background:var(--bg-tertiary);border-radius:6px;font-size:11px;">
-            <div style="color:var(--accent-amber);font-weight:500;margin-bottom:3px;">🔹 ${esc(sq.substring(0,50))} <span style="font-weight:400;color:var(--text-dim);font-size:10px;">${info.elapsed_ms||0}ms</span></div>
-            <div><span style="color:var(--text-dim);">📂 </span><span style="color:var(--accent);">${esc(docs.join('、'))}</span></div>
-            <div><span style="color:var(--text-dim);">📋 </span><span style="color:var(--accent-amber);">${esc(secs.join('、'))}</span></div>
-            <div><span style="color:var(--text-dim);">📄 命中: </span><span style="color:${matchedFiles.length?'var(--accent-green)':'var(--text-dim)'};">${matchedFiles.length ? matchedFiles.join('、') : '无'}</span></div>
-            ${evHtml}
-        </div>`;
-    }
-
+    const perCond = first.per_condition || {};
+    const conditionCount = Object.keys(perCond).length;
+    const routeNote = buildRouteNote(data, perCond);
     let html = `
-        <div style="margin-bottom:12px;font-size:11px;color:var(--text-dim);padding:8px 12px;background:var(--bg-tertiary);border-radius:8px;">
-            📂 文档: <span style="color:var(--accent);">${esc((route.target_medical_doc||[]).join('、'))}</span>
-            | 📋 章节: <span style="color:var(--accent-amber);">${esc((route.target_sections||[]).join('、'))}</span>
-        </div>
-        ${routeHtml}`;
-
-    for (const r of (data.results||[])) {
-        const perCond = r.per_condition||{};
-        const matched = r.matched;
-        html += `
-        <div style="margin-bottom:16px;padding:14px;background:var(--bg-secondary);border:1px solid ${matched?'var(--accent-green)':'var(--border-color)'};border-radius:10px;">
-            <div style="font-size:14px;font-weight:600;margin-bottom:8px;color:${matched?'var(--accent-green)':'var(--text-primary)'};">
-                ${matched?'✓':'✗'} ${esc(data.condition)}
-            </div>
-            <div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px;">${esc(r.reason||'')}</div>
-            ${Object.entries(perCond).map(([sq, info]) => `
-                <div style="margin:6px 0;padding:8px 10px;background:var(--bg-tertiary);border-radius:6px;font-size:11px;">
-                    <span style="color:${info.matched?'var(--accent-green)':'var(--accent-red)'};">${info.matched?'✓':'✗'}</span>
-                    <span style="color:var(--text-primary);"> ${esc(sq.substring(0,40))}</span>
-                    <span style="color:var(--text-dim);margin-left:8px;">${esc(info.reason||'')}</span>
+        <div class="mf-result-summary">
+            <div class="mf-summary-head">
+                <div>
+                    <div class="mf-summary-title">${esc(data.condition || first.condition || '')}</div>
+                    ${renderUserExplain(first['用户解释'] || first.reason || data.message || '')}
+                    ${first['用户解释'] && first.reason ? renderReasonDetails(first.reason) : ''}
                 </div>
-            `).join('')}
-        </div>`;
-    }
+                <span class="mf-badge ${tone}">${esc(finalStatus)}</span>
+            </div>
+            <div class="mf-summary-meta">
+                <span class="mf-badge ${tone}">可判定: ${data['可判定'] === false ? '否' : '是'}</span>
+                <span class="mf-badge">置信度: ${formatConfidence(data['置信度'] ?? first['置信度'])}</span>
+                <span class="mf-badge">置信等级: ${esc(data['置信等级'] || first['置信等级'] || '-')}</span>
+                <span class="mf-badge">依据: ${esc(data['依据等级'] || first['依据等级'] || '-')}</span>
+                <span class="mf-badge">子条件: ${conditionCount || 1}</span>
+            </div>
+        </div>
+        ${routeNote ? `<div class="mf-route-note">${routeNote}</div>` : ''}`;
 
-    if (data.matched_count > 0) {
-        html += `<div style="margin-top:12px;text-align:center;color:var(--accent-green);font-size:13px;">✓ 患者符合条件</div>`;
-    } else if ((data.results||[]).length > 0) {
-        html += `<div style="margin-top:12px;text-align:center;color:var(--text-dim);font-size:13px;">✗ 患者不符合条件</div>`;
+    for (const r of rows) {
+        const perCond = r.per_condition||{};
+        if (!Object.keys(perCond).length) {
+            html += renderConditionCard(data.condition || '', r);
+        } else {
+            html += `<div class="mf-condition-grid">` +
+                orderedConditionEntries(data, perCond).map(([sq, info], idx) => renderConditionCard(sq, info, idx + 1)).join('') +
+                `</div>`;
+        }
     }
     results.innerHTML = html;
+}
+
+function orderedConditionEntries(data, perCond) {
+    const entries = Object.entries(perCond || {});
+    const order = (((data['查询IR'] || {})['子条件']) || []).map(c => c['条件文本']).filter(Boolean);
+    if (!order.length) return entries;
+    const rank = new Map(order.map((text, idx) => [text, idx]));
+    return entries.sort((a, b) => (rank.get(a[0]) ?? 999) - (rank.get(b[0]) ?? 999));
+}
+
+function renderConditionCard(title, info, index) {
+    const status = info['判断状态'] || (info.matched ? '符合' : '不符合');
+    const tone = statusTone(status);
+    const tw = info['时间范围'];
+    const timeHtml = tw ? `
+        <div class="mf-summary-meta" style="margin-top:4px;margin-bottom:8px;">
+            <span class="mf-badge">时间范围: ${esc(tw.scope || '')}</span>
+            <span class="mf-badge">开始: ${esc(tw.start || '未知')}</span>
+            <span class="mf-badge">结束: ${esc(tw.end || '未出院/开放')}</span>
+            <span class="mf-badge">来源: ${esc(sourceName(tw.source || ''))}</span>
+        </div>` : '';
+    const files = (info.files || []).slice().sort((a, b) => roleOrder(a) - roleOrder(b));
+    return `
+        <div class="mf-condition-card">
+            <div class="mf-condition-head">
+                <div class="mf-condition-title">${index ? `条件${index}：` : ''}${esc(title)}</div>
+                <span class="mf-badge ${tone}">${esc(status)}</span>
+            </div>
+            ${renderUserExplain(info['用户解释'] || info.reason || '')}
+            ${info['用户解释'] && info.reason ? renderReasonDetails(info.reason) : ''}
+            ${timeHtml}
+            ${renderEvidenceSections(files)}
+        </div>`;
+}
+
+function renderEvidenceSections(files) {
+    if (!files.length) return '<div class="mf-evidence-card"><div class="mf-evidence-reason">无证据源返回</div></div>';
+    const groups = [
+        ['主证据', files.filter(f => evidenceRole(f) === '主证据')],
+        ['时间与辅助依据', files.filter(f => ['时间范围依据','时间锚点','辅助依据'].includes(evidenceRole(f)))],
+        ['数据源状态', files.filter(f => evidenceRole(f) === '数据源状态')],
+        ['其他候选证据', files.filter(f => !['主证据','时间范围依据','时间锚点','辅助依据','数据源状态'].includes(evidenceRole(f)))],
+    ].filter(([, list]) => list.length);
+    return groups.map(([title, list]) => `
+        <div class="mf-evidence-section">
+            <div class="mf-evidence-section-title">${esc(title)}</div>
+            <div class="mf-evidence-list">${list.map(renderEvidenceCard).join('')}</div>
+        </div>`).join('');
+}
+
+function renderEvidenceCard(file) {
+    const role = evidenceRole(file);
+    const cls = roleClass(file, role);
+    const status = role === '数据源状态' ? '需检查' : (['时间范围依据','时间锚点','辅助依据'].includes(role) ? '辅助依据' : (file.matched ? '支持' : '未支持'));
+    const fields = String(file.fields || '').trim();
+    const candidates = renderCandidateRecords(file);
+    const raw = fields ? `
+        <details class="mf-details">
+            <summary>查看原始字段</summary>
+            <div class="mf-raw">${esc(fields)}</div>
+        </details>` : '';
+    const cot = file.cot_response ? `
+        <details class="mf-details">
+            <summary>查看模型判断记录</summary>
+            <div class="mf-raw">${esc(file.cot_response)}</div>
+        </details>` : '';
+    return `
+        <div class="mf-evidence-card ${cls}">
+            <div class="mf-evidence-head">
+                <span class="mf-evidence-name">${esc(file.file || '数据源')}</span>
+                <span class="mf-badge">${esc(role)} · ${esc(status)}</span>
+            </div>
+            ${file['用途'] ? `<div class="mf-evidence-reason">${esc(file['用途'])}</div>` : ''}
+            ${renderUserExplain(file['用户解释'] || file.reason || '')}
+            ${file['用户解释'] && file.reason ? renderReasonDetails(file.reason) : ''}
+            ${candidates}
+            ${raw}
+            ${cot}
+        </div>`;
+}
+
+function renderCandidateRecords(file) {
+    const rows = Array.isArray(file['候选记录']) ? file['候选记录'] : [];
+    if (!rows.length) return '';
+    const shown = rows.slice(0, 20);
+    const more = rows.length > shown.length ? `<div class="mf-evidence-reason" style="margin-top:6px;">另有 ${rows.length - shown.length} 条候选记录未展开</div>` : '';
+    const type = candidateRecordType(file, rows);
+    if (type === 'drug') return renderDrugCandidateRecords(file, shown, more);
+    if (type === 'diagnosis') return renderDiagnosisCandidateRecords(file, shown, more);
+    if (type === 'lab') return renderLabCandidateRecords(shown, more);
+    return renderGenericCandidateRecords(file, shown, more);
+}
+
+function candidateRecordType(file, rows) {
+    const name = String(file.file || '');
+    if (name.includes('用药医嘱查询')) return 'drug';
+    if (name.includes('诊断查询')) return 'diagnosis';
+    if (name.includes('检验指标查询')) return 'lab';
+    const keys = new Set();
+    (rows || []).forEach(r => Object.keys(r || {}).forEach(k => keys.add(k)));
+    if (keys.has('药物名称') || keys.has('医嘱名称') || keys.has('用药途径') || keys.has('开立日期时间')) return 'drug';
+    if (keys.has('诊断名称') || keys.has('诊断类型') || keys.has('诊断时间')) return 'diagnosis';
+    if (keys.has('检测时间') || keys.has('数值判断') || keys.has('数值是否满足')) return 'lab';
+    return 'generic';
+}
+
+function renderLabCandidateRecords(shown, more) {
+    return `<div class="mf-candidates">
+        <table>
+            <thead><tr><th>记录</th><th>项目</th><th>检测时间</th><th>结果</th><th>时间窗</th><th>数值</th></tr></thead>
+            <tbody>
+                ${shown.map(r => `<tr>
+                    <td>${esc(r['记录'] || '')}</td>
+                    <td>${esc(r['项目'] || '')}</td>
+                    <td>${esc(r['检测时间'] || '缺失')}</td>
+                    <td>${esc([r['结果'], r['单位']].filter(Boolean).join(''))}</td>
+                    <td>${renderMiniBool(r['是否在时间窗'])}</td>
+                    <td>${renderMiniBool(r['数值是否满足'])}<div style="color:var(--text-dim);margin-top:2px;">${esc(r['数值判断'] || '')}</div></td>
+                </tr>`).join('')}
+            </tbody>
+        </table>
+        ${more}
+    </div>`;
+}
+
+function renderDrugCandidateRecords(file, shown, more) {
+    return `<div class="mf-candidates">
+        <table>
+            <thead><tr><th>记录</th><th>药物名称</th><th>开立时间</th><th>用药途径</th><th>剂量/频次</th><th>时间窗</th></tr></thead>
+            <tbody>
+                ${shown.map(r => {
+                    const drug = candidateValue(file, r, ['药物名称', '医嘱名称', '项目']);
+                    const time = candidateValue(file, r, ['开立日期时间', '记录时间', '医嘱时间', '执行时间']);
+                    const route = candidateValue(file, r, ['用药途径', '给药途径']);
+                    const dose = [
+                        candidateValue(file, r, ['单次剂量']),
+                        candidateValue(file, r, ['剂量单位']),
+                    ].filter(Boolean).join('');
+                    const freq = candidateValue(file, r, ['频次']);
+                    return `<tr>
+                        <td>${esc(r['记录'] || '')}</td>
+                        <td>${esc(drug || '-')}</td>
+                        <td>${esc(time || '缺失')}</td>
+                        <td>${esc(route || '-')}</td>
+                        <td>${esc([dose, freq].filter(Boolean).join(' / ') || '-')}</td>
+                        <td>${renderMiniBool(r['是否在时间窗'])}</td>
+                    </tr>`;
+                }).join('')}
+            </tbody>
+        </table>
+        ${more}
+    </div>`;
+}
+
+function renderDiagnosisCandidateRecords(file, shown, more) {
+    return `<div class="mf-candidates">
+        <table>
+            <thead><tr><th>记录</th><th>诊断名称</th><th>诊断类型</th><th>诊断时间</th><th>时间窗</th></tr></thead>
+            <tbody>
+                ${shown.map(r => `<tr>
+                    <td>${esc(r['记录'] || '')}</td>
+                    <td>${esc(candidateValue(file, r, ['诊断名称', '项目']) || '-')}</td>
+                    <td>${esc(candidateValue(file, r, ['诊断类型', '诊断类别']) || '-')}</td>
+                    <td>${esc(candidateValue(file, r, ['诊断时间', '诊断日期', '记录时间']) || '缺失')}</td>
+                    <td>${renderMiniBool(r['是否在时间窗'])}</td>
+                </tr>`).join('')}
+            </tbody>
+        </table>
+        ${more}
+    </div>`;
+}
+
+function renderGenericCandidateRecords(file, shown, more) {
+    const keys = Array.from(new Set(shown.flatMap(r => Object.keys(r || {}))))
+        .filter(k => !['数值是否满足', '数值判断'].includes(k))
+        .slice(0, 6);
+    if (!keys.length) return '';
+    return `<div class="mf-candidates">
+        <table>
+            <thead><tr>${keys.map(k => `<th>${esc(k)}</th>`).join('')}</tr></thead>
+            <tbody>
+                ${shown.map(r => `<tr>${keys.map(k => `<td>${esc(formatCandidateCell(r[k]))}</td>`).join('')}</tr>`).join('')}
+            </tbody>
+        </table>
+        ${more}
+    </div>`;
+}
+
+function candidateValue(file, row, keys) {
+    for (const key of keys) {
+        const value = row && row[key];
+        if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+    }
+    const parsed = parseCandidateRawFields(file, row);
+    for (const key of keys) {
+        const value = parsed[key];
+        if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+    }
+    return '';
+}
+
+function parseCandidateRawFields(file, row) {
+    const record = String((row && row['记录']) || '').trim();
+    const fields = String((file && file.fields) || '');
+    if (!record || !fields) return {};
+    const line = fields.split(/\r?\n/).find(l => l.includes(record)) || '';
+    if (!line) return {};
+    const out = {};
+    line.split('|').forEach(part => {
+        const m = part.trim().match(/^(?:\[[^\]]+\]\s*)?([^:：]+)[:：]\s*(.*)$/);
+        if (m) out[m[1].trim()] = m[2].trim();
+    });
+    return out;
+}
+
+function formatCandidateCell(value) {
+    if (value === true) return '满足';
+    if (value === false) return '不满足';
+    if (value === undefined || value === null || value === '') return '-';
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+}
+
+function renderMiniBool(value) {
+    if (value === true) return '<span class="mf-mini-ok">满足</span>';
+    if (value === false) return '<span class="mf-mini-no">不满足</span>';
+    return '<span class="mf-mini-unknown">无法判断</span>';
+}
+
+function buildRouteNote(data, perCond) {
+    const roleMap = new Map();
+    Object.values(perCond || {}).forEach(info => {
+        (info.files || []).forEach(f => {
+            const role = evidenceRole(f);
+            if (!roleMap.has(role)) roleMap.set(role, new Set());
+            roleMap.get(role).add(f.file || '数据源');
+        });
+    });
+    if (roleMap.size) {
+        return `本次调用证据源：${Array.from(roleMap.entries()).map(([role, names]) =>
+            `${esc(role)} ${Array.from(names).length}个`
+        ).join('；')}`;
+    }
+    const route = data.route || {};
+    const docs = (route.target_medical_doc || []).join('、');
+    const secs = (route.target_sections || []).join('、');
+    return docs || secs ? `路由：${esc(docs || '无文档')} / ${esc(secs || '无章节')}` : '';
+}
+
+function renderUserExplain(text) {
+    if (!String(text || '').trim()) return '';
+    return `<div class="mf-user-explain"><span class="mf-user-explain-label">判定说明</span>${esc(text)}</div>`;
+}
+
+function renderReasonDetails(reason) {
+    if (!String(reason || '').trim()) return '';
+    return `<details class="mf-details">
+        <summary>查看判定依据</summary>
+        <div class="mf-raw">${esc(reason)}</div>
+    </details>`;
+}
+
+function evidenceRole(file) {
+    if (file['证据角色']) return file['证据角色'];
+    const name = String(file.file || '');
+    if (file.service_error || name.includes('接口失败') || name.includes('不可用') || name.includes('未取得数据')) return '数据源状态';
+    if (name.includes('检验指标查询')) return '主证据';
+    if (name.includes('数据库查询')) return '时间锚点';
+    if (name.includes('就诊信息查询')) return '辅助依据';
+    return file.matched ? '支持证据' : '候选证据';
+}
+
+function roleClass(file, role) {
+    if (role === '数据源状态') return 'error';
+    if (role === '主证据') return file.matched ? 'main support' : 'main reject';
+    if (role === '时间范围依据' || role === '时间锚点' || role === '辅助依据') return 'aux';
+    return file.matched ? 'support' : 'reject';
+}
+
+function roleOrder(file) {
+    const role = evidenceRole(file);
+    if (role === '主证据') return 1;
+    if (role === '时间范围依据' || role === '时间锚点' || role === '辅助依据') return 2;
+    if (role === '数据源状态') return 3;
+    return file.matched ? 3 : 4;
+}
+
+function statusTone(status) {
+    if (status === '符合') return 'ok';
+    if (status === '无法判断') return 'unknown';
+    return 'no';
+}
+
+function formatConfidence(value) {
+    if (value === undefined || value === null || value === '') return '-';
+    const num = Number(value);
+    return Number.isFinite(num) ? `${Math.round(num * 100)}%` : String(value);
+}
+
+function sourceName(source) {
+    const names = {'encounter-info': '就诊信息查询', 'lab-results': '检验指标查询'};
+    return names[source] || source;
 }
 
 // ── Utils ──────────────────────────────────

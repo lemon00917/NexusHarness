@@ -5,12 +5,23 @@ No ODBC/JDBC drivers needed for IRIS.
 
 import json
 import logging
+import os
+import threading
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).parent.parent.parent / "configs" / "database.json"
+
+
+def _sql_debug_enabled() -> bool:
+    return str(os.environ.get("MEDICAL_QUERY_DEBUG", "")).lower() in {"1", "true", "yes", "on"}
+
+
+def _sql_debug(sql: str, limit: int = 500) -> None:
+    if _sql_debug_enabled():
+        print(f"[SQL][debug] {sql[:limit]}", flush=True)
 
 
 def load_config() -> dict:
@@ -30,7 +41,7 @@ class IrisClient:
     def execute(self, sql: str) -> dict:
         """Execute SQL and return results."""
         import requests
-        print(f"[SQL] {sql[:400]}", flush=True)
+        _sql_debug(sql, 400)
         url = f"{self.base_url}/api/atelier/v1/{self.namespace}/action/query"
         resp = requests.post(url, json={"query": sql}, auth=self.auth, timeout=30)
         resp.raise_for_status()
@@ -39,8 +50,8 @@ class IrisClient:
             raise Exception(f"SQL Error: {data['status']['errors']}")
         return data.get("result", {}).get("content", [])
 
-    def insert(self, table: str, row: dict) -> bool:
-        """Insert a row into a table."""
+    def insert(self, table: str, row: dict):
+        """Insert a row into a table. Returns (ok: bool, error_msg: str)."""
         columns = list(row.keys())
         values = []
         for col in columns:
@@ -55,7 +66,7 @@ class IrisClient:
                 values.append(f"'{escaped}'")
 
         sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(values)})"
-        print(f"[SQL] {sql[:500]}", flush=True)
+        _sql_debug(sql, 500)
         try:
             self.execute(sql)
             logger.info(f"INSERT {table}: OK")
@@ -64,8 +75,8 @@ class IrisClient:
             logger.error(f"INSERT failed: {e}")
             return False, ""
 
-    def upsert(self, table: str, row: dict, key_col: str = "doc_id") -> bool:
-        """Insert or update using IRIS native INSERT OR UPDATE."""
+    def upsert(self, table: str, row: dict, key_col: str = "emr_hosdocid"):
+        """Insert or update using IRIS native INSERT OR UPDATE. Returns (ok, error_msg)."""
         columns = list(row.keys())
         values = []
         for col in columns:
@@ -79,7 +90,7 @@ class IrisClient:
                 escaped = s.replace("'", "''").replace("\n", " ").replace("\r", "")
                 values.append(f"'{escaped}'")
         sql = f"INSERT OR UPDATE {table} ({', '.join(columns)}) VALUES ({', '.join(values)})"
-        print(f"[SQL] {sql[:500]}", flush=True)
+        _sql_debug(sql, 500)
         try:
             self.execute(sql)
             logger.info(f"UPSERT {table}: OK")
@@ -93,7 +104,7 @@ class IrisClient:
             result = self.execute("SELECT 1 as test")
             return len(result) > 0
         except Exception as e:
-            logger.error(f"IRIS test failed: {e}")
+            logger.debug(f"Database test failed: {e}")
             return False
 
 
@@ -107,24 +118,63 @@ class MySQLClient:
         self.user = user
         self.password = password
         self._conn = None
+        self._local = threading.local()
+
+    def _connect(self):
+        import pymysql
+        return pymysql.connect(
+            host=self.host,
+            port=self.port,
+            database=self.database,
+            user=self.user,
+            password=self.password,
+            charset="utf8mb4",
+            autocommit=False,
+            connect_timeout=10,
+            read_timeout=60,
+            write_timeout=60,
+        )
 
     @property
     def conn(self):
-        if self._conn is None:
-            import pymysql
-            self._conn = pymysql.connect(
-                host=self.host, port=self.port, database=self.database,
-                user=self.user, password=self.password, charset="utf8mb4"
-            )
-        return self._conn
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = self._connect()
+            self._local.conn = conn
+        else:
+            try:
+                conn.ping(reconnect=True)
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                conn = self._connect()
+                self._local.conn = conn
+        return conn
+
+    def _reset_thread_conn(self):
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
 
     def execute(self, sql: str) -> list:
         import pymysql
-        with self.conn.cursor(pymysql.cursors.DictCursor) as cur:
-            cur.execute(sql)
-            return cur.fetchall()
+        _sql_debug(sql, 400)
+        try:
+            with self.conn.cursor(pymysql.cursors.DictCursor) as cur:
+                cur.execute(sql)
+                return cur.fetchall()
+        except Exception:
+            self._reset_thread_conn()
+            raise
 
-    def insert(self, table: str, row: dict) -> bool:
+    def insert(self, table: str, row: dict):
+        """Insert a row. Returns (ok, error_msg)."""
         try:
             columns = list(row.keys())
             placeholders = ", ".join(["%s"] * len(columns))
@@ -135,13 +185,15 @@ class MySQLClient:
             self.conn.commit()
             return True, ""
         except Exception as e:
+            self._reset_thread_conn()
             logger.error(f"MySQL INSERT failed: {e}")
-            return False, ""
+            return False, str(e)[:200]
 
-    def upsert(self, table: str, row: dict, key_col: str = "doc_id") -> tuple:
+    def upsert(self, table: str, row: dict, key_col: str = "emr_hosdocid"):
+        """Insert or update. Returns (ok, error_msg)."""
         key_val = row.get(key_col)
-        if not key_val:
-            return self.insert(table, row), ""
+        if not key_val and key_val != 0:
+            return False, f"Missing key column: {key_col}"
         try:
             columns = list(row.keys())
             placeholders = ", ".join(["%s"] * len(columns))
@@ -152,6 +204,7 @@ class MySQLClient:
             self.conn.commit()
             return True, ""
         except Exception as e:
+            self._reset_thread_conn()
             logger.error(f"MySQL UPSERT failed: {e}")
             return False, str(e)[:200]
 
@@ -160,7 +213,7 @@ class MySQLClient:
             self.execute("SELECT 1")
             return True
         except Exception as e:
-            logger.error(f"MySQL test failed: {e}")
+            logger.debug(f"Database test failed: {e}")
             return False
 
 
