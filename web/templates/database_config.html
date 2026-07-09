@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>数据库配置 — CDR Agent</title>
+    <title>数据源配置 — CDR Agent</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <style>
         body { overflow: auto; }
@@ -31,7 +31,7 @@
 <body>
 <div class="dc-container">
     <div class="dc-header">
-        <h1>🗄️ 数据库配置</h1>
+        <h1>🗄️ 数据源配置</h1>
         <a href="/">← CDR Agent</a>
     </div>
     <div class="dc-card">
@@ -64,13 +64,22 @@
         <button class="btn btn-ghost" onclick="testDB('mysql')">测试连接</button>
         <span id="mysqlTest"></span>
     </div>
+    <div class="dc-card" id="servicesCard">
+        <h3>🔗 外部服务</h3>
+        <div class="dc-row"><label>Base URL</label><input id="svcBaseUrl" placeholder="http://43.143.68.242:9090/emviewdoctor/hdc/" style="flex:1;"></div>
+        <div id="servicesList"></div>
+        <button class="btn btn-ghost" onclick="addService()" style="width:100%;margin-top:8px;">+ 添加服务</button>
+    </div>
     <div class="dc-save">
-        <button class="btn btn-ghost" onclick="loadDB()">🔄 重新加载</button>
-        <button class="btn btn-primary" onclick="saveDB()">💾 保存配置</button>
+        <button class="btn btn-ghost" onclick="loadAll()">🔄 重新加载</button>
+        <button class="btn btn-primary" onclick="saveAll()">💾 保存配置</button>
     </div>
 </div>
 <script>
-async function loadDB() {
+let _services = { base_url: '', services: {} };
+
+async function loadAll() {
+    // Load DB config
     const r = await fetch('/api/database/config');
     const d = await r.json();
     document.getElementById('dbType').value = d.type||'iris';
@@ -87,30 +96,50 @@ async function loadDB() {
     document.getElementById('mysqlUser').value = mc.user||'';
     document.getElementById('mysqlPass').value = mc.password||'';
     onTypeChange();
+    // Load services
+    const sr = await fetch('/api/external-services/config');
+    _services = await sr.json();
+    document.getElementById('svcBaseUrl').value = _services.base_url||'';
+    _services.services = _services.services || {};
+    renderServices();
     showToast('已加载');
 }
-async function saveDB() {
+async function saveAll() {
     const data = {
         type: document.getElementById('dbType').value,
-        iris: {
-            base_url: document.getElementById('irisUrl').value,
-            namespace: document.getElementById('irisNs').value,
-            schema: document.getElementById('irisSchema').value,
-            username: document.getElementById('irisUser').value,
-            password: document.getElementById('irisPass').value
-        },
-        mysql: {
-            host: document.getElementById('mysqlHost').value,
-            port: parseInt(document.getElementById('mysqlPort').value)||3306,
-            database: document.getElementById('mysqlDb').value,
-            user: document.getElementById('mysqlUser').value,
-            password: document.getElementById('mysqlPass').value
-        }
+        iris: { base_url: document.getElementById('irisUrl').value, namespace: document.getElementById('irisNs').value, schema: document.getElementById('irisSchema').value, username: document.getElementById('irisUser').value, password: document.getElementById('irisPass').value },
+        mysql: { host: document.getElementById('mysqlHost').value, port: parseInt(document.getElementById('mysqlPort').value)||3306, database: document.getElementById('mysqlDb').value, user: document.getElementById('mysqlUser').value, password: document.getElementById('mysqlPass').value }
     };
-    const r = await fetch('/api/database/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
-    if (r.ok) showToast('✅ 配置已保存，重启生效');
-    else showToast('保存失败');
+    await fetch('/api/database/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
+    // Save services
+    _services.base_url = document.getElementById('svcBaseUrl').value;
+    await fetch('/api/external-services/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({base_url: _services.base_url, services: _services.services || {}})});
+    showToast('✅ 配置已保存，重启生效');
 }
+
+function renderServices() {
+    const el = document.getElementById('servicesList');
+    const services = _services.services || {};
+    const keys = Object.keys(services);
+    el.innerHTML = keys.map(k => {
+        const s = services[k];
+        return `<div class="dc-row" style="background:var(--bg-primary);padding:8px;border-radius:6px;margin-bottom:4px;">
+            <input value="${escapeHtml(s.name||k)}" placeholder="名称" style="width:100px;" onchange="_services.services['${k}'].name=this.value">
+            <input value="${escapeHtml(s.url||'')}" placeholder="接口路径" style="flex:1;" onchange="_services.services['${k}'].url=this.value">
+            <input value="${escapeHtml((s.triggers||[]).join(','))}" placeholder="触发词" style="width:150px;" onchange="_services.services['${k}'].triggers=this.value.split(',').map(x=>x.trim()).filter(Boolean)">
+            <button class="btn btn-ghost" onclick="delete _services.services['${k}']; renderServices();" style="font-size:10px;">✕</button>
+        </div>`;
+    }).join('');
+}
+
+function addService() {
+    const id = 'svc_' + Date.now();
+    _services.services = _services.services || {};
+    _services.services[id] = { name: '新服务', url: '', triggers: [], method: 'POST' };
+    renderServices();
+}
+
+function loadDB() { loadAll(); }
 async function testDB(type) {
     const el = document.getElementById(type+'Test');
     el.innerHTML = '<span style="color:var(--text-dim);">测试中...</span>';

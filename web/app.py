@@ -4645,19 +4645,24 @@ async def get_external_services_config():
 
 @app.post("/api/external-services/config")
 async def save_external_services_config(request: Request):
-    """Save external services config (base_url)."""
+    """Save external services config."""
     data = await request.json()
     from pathlib import Path as _P
     _cfg_path = _P(__file__).parent.parent / "configs" / "external_services.json"
-    # Read existing config, update base_url
     existing = {}
     if _cfg_path.exists():
         import json as _j
         existing = _j.loads(_cfg_path.read_text(encoding="utf-8"))
     if isinstance(data, dict) and "base_url" in data:
         existing["base_url"] = data["base_url"]
+    if isinstance(data, dict) and isinstance(data.get("services"), dict):
+        existing["services"] = data["services"]
     _cfg_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"status": "saved", "base_url": existing.get("base_url", "")}
+    return {
+        "status": "saved",
+        "base_url": existing.get("base_url", ""),
+        "services": existing.get("services", {}),
+    }
 
 
 if __name__ == "__main__":

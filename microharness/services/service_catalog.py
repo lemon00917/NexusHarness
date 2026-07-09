@@ -18,6 +18,17 @@ _CONFIG_PATH = Path(__file__).parent.parent.parent / "configs" / "external_servi
 _BASE_URL = "http://43.143.68.242:9090/emviewdoctor/hdc/"
 
 
+def _load_config() -> dict:
+    """Load external service config."""
+    try:
+        if _CONFIG_PATH.exists():
+            cfg = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+            return cfg if isinstance(cfg, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
 def _parse_skill_md(path: Path) -> Optional[dict]:
     """Parse SKILL.md YAML frontmatter and body metadata."""
     text = path.read_text(encoding="utf-8")
@@ -73,14 +84,10 @@ def _parse_field_labels(md_text: str) -> dict:
 
 def _load_base_url() -> str:
     """Load base_url from config file, fallback to default."""
-    try:
-        if _CONFIG_PATH.exists():
-            cfg = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
-            url = cfg.get("base_url", "").strip()
-            if url:
-                return url
-    except Exception:
-        pass
+    cfg = _load_config()
+    url = cfg.get("base_url", "").strip()
+    if url:
+        return url
     return _BASE_URL
 
 
@@ -100,9 +107,10 @@ def save_base_url(url: str) -> None:
 def load_services() -> dict:
     """Scan skills directory for API-enabled skills."""
     services = {"base_url": _load_base_url()}
+    cfg = _load_config()
 
     if not _SKILLS_DIR.exists():
-        return services
+        return _merge_config_services(services, cfg)
 
     for skill_dir in _SKILLS_DIR.iterdir():
         if not skill_dir.is_dir():
@@ -149,6 +157,17 @@ def load_services() -> dict:
             "temporal_semantics": api_cfg.get("temporal_semantics", {}),
         }
 
+    return _merge_config_services(services, cfg)
+
+
+def _merge_config_services(services: dict, cfg: dict) -> dict:
+    """Merge explicitly configured services over skill metadata services."""
+    configured = cfg.get("services", {})
+    if not isinstance(configured, dict):
+        return services
+    for sid, svc in configured.items():
+        if isinstance(sid, str) and isinstance(svc, dict) and svc.get("url"):
+            services[sid] = svc
     return services
 
 
