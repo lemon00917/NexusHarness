@@ -179,12 +179,9 @@ def get_llm(model: str = None):
         )
 
     if provider == "ollama":
-        # Ollama uses OpenAI compatible API
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(
-            model=model,
-            api_key="ollama-local",  # Ollama doesn't need real API key
-            base_url="http://localhost:11434/v1",
+        raise RuntimeError(
+            "Ollama provider is disabled for the CDR Agent. "
+            "Medical filtering uses Ollama directly via microharness.ollama."
         )
 
     # 其他 provider 统一走 OpenAI 兼容接口

@@ -50,12 +50,23 @@ cache/rag_index_test/
 *.bak
 .DS_Store
 Thumbs.db
+/_codex_*
+/_test_*
+/_r[0-9]*.json
+/_route_test.json
+/_run_batch_test.py
+/result*.json
+/test_fixed_result.json
+/workdevelopAINexusHarnesstest_burn.json
+/artifacts/manual-runs/
 
 # Documentation (generated)
 docs/
 
 # Claude
-.claude/.playwright-mcp/
+.claude/
+.workbuddy/
+Microsoft/
 *.png
 test_patient.html
 data/medicine/features.pkl

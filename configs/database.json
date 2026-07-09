@@ -3,9 +3,9 @@
   "iris": {
     "base_url": "http://124.222.57.198:52773",
     "namespace": "HDCV2DEV",
+    "schema": "hdc_userv2",
     "username": "_system",
-    "password": "cdrsys",
-    "schema": "hdc_userv2"
+    "password": "cdrsys"
   },
   "mysql": {
     "host": "127.0.0.1",

@@ -72,7 +72,7 @@ class IndexLoadError(RAGException):
 
 # Embedding model settings
 # Use multilingual model for better Chinese/CJK support
-DEFAULT_EMBEDDING_MODEL = 'bge-m3'
+DEFAULT_EMBEDDING_MODEL = 'quentinz/bge-large-zh-v1.5:latest'
 
 # ChromaDB settings
 CHROMA_COLLECTION_NAME = "documents"
@@ -340,10 +340,13 @@ class SimpleRAG:
         # Remove from document store
         del self._documents[doc_id]
 
-        # Remove from vector store
+        # Remove from vector store (skip if ChromaDB disabled)
         chunks_to_remove = self._get_document_chunks(doc_id)
         if chunks_to_remove:
-            self._get_chroma_collection().delete(ids=chunks_to_remove)
+            try:
+                self._get_chroma_collection().delete(ids=chunks_to_remove)
+            except RuntimeError:
+                pass  # ChromaDB disabled, nothing to delete
 
         # Clean up chunk mapping
         self._cleanup_chunk_mappings(doc_id)
@@ -464,33 +467,8 @@ class SimpleRAG:
             # Restore chunk mapping
             self._chunk_to_parent = data.get("chunk_mapping", {})
 
-            # Verify ChromaDB state (skip if skipped by force_rebuild)
-            if not force_rebuild:
-                try:
-                    chroma_count = self._get_chroma_collection().count()
-                    # Calculate expected count: multi-chunk docs only store chunks, single-chunk docs store parent
-                    expected_count = 0
-                    for doc_id in self._documents:
-                        chunks = self._get_document_chunks(doc_id)
-                        if chunks:
-                            # Multi-chunk doc: only chunks stored (no parent entry)
-                            expected_count += len(chunks)
-                        else:
-                            # Single-chunk doc: parent doc_id stored as entry
-                            expected_count += 1
-
-                    if chroma_count == 0 and self._documents:
-                        print("[RAG] Warning: ChromaDB empty but documents exist. Rebuilding...")
-                        self._rebuild_chroma_from_documents()
-                    elif chroma_count > expected_count:
-                        print(f"[RAG] Warning: ChromaDB has extra chunks ({chroma_count} vs {expected_count}). Cleaning up...")
-                        self._rebuild_chroma_from_documents()
-                    # Note: chroma_count < expected_count is ignored - existing data is valid, just incomplete
-                except Exception as e:
-                    print(f"[RAG] Warning: ChromaDB verification failed: {e}. Rebuilding...")
-                    self._rebuild_chroma_from_documents()
-            else:
-                self._rebuild_chroma_from_documents()
+            # ChromaDB disabled for now — skip verification and rebuild
+            print(f"[RAG] ChromaDB disabled, skipping. {len(self._documents)} docs loaded (BM25 only)")
 
             # Rebuild BM25
             if self._documents:
@@ -516,14 +494,18 @@ class SimpleRAG:
     # ──────────────────────── Search Implementation ────────────────────────
 
     def _vector_search(self, query: str, top_k: int, deduplicate: bool = True) -> List[SearchResult]:
-        """Pure vector similarity search."""
+        """Pure vector similarity search (falls back to BM25 when ChromaDB disabled)."""
         query_embedding = self._embed_texts([query])[0]
 
-        results = self._get_chroma_collection().query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            include=["documents"]
-        )
+        try:
+            results = self._get_chroma_collection().query(
+                query_embeddings=[query_embedding],
+                n_results=top_k,
+                include=["documents"]
+            )
+        except RuntimeError:
+            # ChromaDB disabled — fall back to BM25-only keyword search
+            return self._bm25_search(query, top_k)
 
         if deduplicate:
             return self._deduplicate_results(
@@ -546,14 +528,18 @@ class SimpleRAG:
         bm25_weight: float,
         deduplicate: bool = True,
     ) -> List[SearchResult]:
-        """Combine vector and BM25 scores for improved retrieval."""
+        """Combine vector and BM25 scores for improved retrieval (BM25-only fallback when ChromaDB disabled)."""
         # Get vector search candidates (more than needed for scoring)
         query_embedding = self._embed_texts([query])[0]
-        vector_results = self._get_chroma_collection().query(
-            query_embeddings=[query_embedding],
-            n_results=self._calculate_hybrid_candidate_count(top_k),
-            include=["distances", "documents"]
-        )
+        try:
+            vector_results = self._get_chroma_collection().query(
+                query_embeddings=[query_embedding],
+                n_results=self._calculate_hybrid_candidate_count(top_k),
+                include=["distances", "documents"]
+            )
+        except RuntimeError:
+            # ChromaDB disabled — fall back to BM25-only
+            return self._bm25_search(query, top_k)
 
         # Get BM25 scores
         bm25_scores = self._compute_bm25_scores(query)
@@ -590,6 +576,15 @@ class SimpleRAG:
                 sorted_scores,
                 vector_results.get("documents", [[]])[0]
             )[:top_k]
+
+    def _bm25_search(self, query: str, top_k: int) -> List[SearchResult]:
+        """BM25-only keyword search (used when ChromaDB vector search is unavailable)."""
+        scores = self._compute_bm25_scores(query)
+        if not scores:
+            return []
+        sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
+        sorted_scores = [scores[cid] for cid in sorted_ids]
+        return self._deduplicate_results(sorted_ids, scores=sorted_scores)[:top_k]
 
     def _compute_bm25_scores(self, query: str) -> Dict[str, float]:
         """Compute BM25 scores and map to document IDs."""
@@ -712,8 +707,12 @@ class SimpleRAG:
         filename: str,
         chunks: List[str]
     ) -> None:
-        """Add chunks to the vector store."""
-        collection = self._get_chroma_collection()
+        """Add chunks to the vector store (skipped when ChromaDB disabled)."""
+        # ChromaDB disabled — skip vector indexing, BM25 still works
+        try:
+            collection = self._get_chroma_collection()
+        except RuntimeError:
+            return
 
         if len(chunks) == 1:
             # Single chunk - store with doc_id
@@ -779,6 +778,19 @@ class SimpleRAG:
             print(f"[RAG] Embedding model loaded: {DEFAULT_EMBEDDING_MODEL}")
         return self._embedding_model
 
+    def _check_ollama_ready(self) -> bool:
+        """Quick check if Ollama is running and has the embedding model. Returns False if not ready."""
+        try:
+            import requests
+            resp = requests.get("http://localhost:11434/api/tags", timeout=3)
+            if resp.status_code != 200:
+                return False
+            models = resp.json().get("models", [])
+            return any(m["name"].startswith(DEFAULT_EMBEDDING_MODEL.split(":")[0])
+                       for m in models)
+        except Exception:
+            return False
+
     def _get_ollama_client(self):
         """Lazy initialize Ollama client for embeddings."""
         if self._ollama_client is None:
@@ -787,56 +799,15 @@ class SimpleRAG:
         return self._ollama_client
 
     def _embed_texts(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings for a batch of texts. Truncates to 10000 chars per text."""
-        # Truncate each text to avoid Ollama embedding limit
-        MAX_EMBED_CHARS = 10000
-        texts = [t[:MAX_EMBED_CHARS] for t in texts]
-
-        if self._use_ollama:
-            client = self._get_ollama_client()
-            return client.embed_batch(texts)
-        model = self._get_embedding_model()
-        embeddings = model.encode(texts, show_progress_bar=False)
-        return embeddings.tolist()
+        """Embeddings disabled — return zero vectors. ChromaDB not in use."""
+        print(f"[RAG] Embeddings disabled, returning zero vectors for {len(texts)} text(s)")
+        return [[0.0] * 768 for _ in texts]  # dummy 768-dim vectors
 
     # ──────────────────────── ChromaDB Management ────────────────────────
 
     def _get_chroma_collection(self):
-        """Lazy initialize ChromaDB client and collection."""
-        if self._chroma_client is None:
-            import chromadb
-            from chromadb.config import Settings
-
-            self._chroma_client = chromadb.PersistentClient(
-                path=str(self.index_dir / "chroma_db"),
-                settings=Settings(anonymized_telemetry=False)
-            )
-
-        # Always get a fresh collection reference to avoid stale cached references
-        # after rebuilds or when collection was deleted and recreated
-        try:
-            self._collection = self._chroma_client.get_collection(name=CHROMA_COLLECTION_NAME)
-            # Verify the collection is usable by checking its ID matches what we expect
-            if self._collection is not None:
-                # Test if collection is actually usable by calling count
-                try:
-                    self._collection.count()
-                except Exception:
-                    # Collection exists but is corrupted, recreate it
-                    self._chroma_client.delete_collection(name=CHROMA_COLLECTION_NAME)
-                    self._collection = None
-        except Exception:
-            # Collection doesn't exist, create it
-            self._collection = None
-
-        if self._collection is None:
-            self._collection = self._chroma_client.get_or_create_collection(
-                name=CHROMA_COLLECTION_NAME,
-                metadata={"hnsw:space": CHROMA_DISTANCE_METRIC}
-            )
-            print(f"[RAG] ChromaDB initialized: {self.index_dir / 'chroma_db'}")
-
-        return self._collection
+        """ChromaDB disabled — vector search not in use."""
+        raise RuntimeError("[RAG] ChromaDB disabled. Vector operations not available.")
 
     def _rebuild_chroma_from_documents(self) -> None:
         """Rebuild ChromaDB collection from in-memory documents."""

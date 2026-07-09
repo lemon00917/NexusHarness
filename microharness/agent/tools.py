@@ -194,7 +194,7 @@ def medical_record_filter(condition: str, patient_id: str = "") -> str:
                 resp = requests.post(
                     "http://127.0.0.1:8000/api/medical/query",
                     json={"condition": condition, "patient_id": patient_id},
-                    timeout=60
+                    timeout=120
                 )
                 data = resp.json()
                 results = data.get("results", [])

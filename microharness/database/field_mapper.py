@@ -130,7 +130,7 @@ def map_bindings_to_row(doc_title: str, bindings: list, meta: dict) -> dict:
     bfc = gvid.split("_")[0] if "_" in gvid else doc_title
 
     row = {
-        "doc_id": uuid.uuid4().hex[:16],
+        "emr_hosdocid": uuid.uuid4().hex[:16],
         "registerno": meta.get("register_no", ""),
         "visitnumber": meta.get("visit_no", ""),
         "papat_relpatientid": meta.get("global_patient_id") or meta.get("register_no", ""),
@@ -157,10 +157,19 @@ def map_bindings_to_row(doc_title: str, bindings: list, meta: dict) -> dict:
         if not value or value == "None":
             continue
 
-        # Normalize Chinese date format: "2024-09-12 09时43分" → "2024-09-12 09:43:00"
-        date_match = re.match(r'(\d{4}-\d{2}-\d{2})\s+(\d{2})时(\d{2})分', value)
-        if date_match:
-            value = f"{date_match.group(1)} {date_match.group(2)}:{date_match.group(3)}:00"
+        # Normalize Chinese date formats to SQL standard
+        # "2024-09-12 09时43分" → "2024-09-12 09:43:00"
+        dm = re.match(r'(\d{4}-\d{2}-\d{2})\s+(\d{2})时(\d{2})分', value)
+        if dm:
+            value = f"{dm.group(1)} {dm.group(2)}:{dm.group(3)}:00"
+        # "2026年06月05日" → "2026-06-05"
+        dm2 = re.match(r'(\d{4})年(\d{1,2})月(\d{1,2})日', value)
+        if dm2:
+            value = f"{dm2.group(1)}-{int(dm2.group(2)):02d}-{int(dm2.group(3)):02d}"
+        # "2026年06月05日 10:30 -- ..." → take only date part
+        dm3 = re.match(r'(\d{4})年(\d{1,2})月(\d{1,2})日.*', value)
+        if dm3 and not dm2:
+            value = f"{dm3.group(1)}-{int(dm3.group(2)):02d}-{int(dm3.group(3)):02d}"
 
         # Check common fields
         col = COMMON_FIELDS.get(field_name)

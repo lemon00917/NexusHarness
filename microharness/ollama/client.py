@@ -6,19 +6,30 @@ Simple wrapper for Ollama API.
 
 import os
 import time
+import threading
 from typing import List, Optional
 
 from microharness.observability.logger import ollama_logger
 
+# Global concurrency guard for CPU-only servers.
+# On 16C/39G VM with AVX512, 2 concurrent inferences keeps CPU near
+# saturation without thrashing. Bump to 3 if GPU-accelerated.
+_OLLAMA_SEMAPHORE = threading.Semaphore(2)
+
 
 class OllamaClient:
-    """Simple Ollama API client."""
+    """Simple Ollama API client.
+
+    All chat()/generate() calls are automatically serialized through
+    a global semaphore to prevent CPU saturation on multi-core CPU servers.
+    """
 
     def __init__(
         self,
         base_url: str = "http://localhost:11434",
-        model: str = "qwen2:1.5b",
+        model: str = "qwen2.5:3b",
         timeout: int = 120,
+        format_json: bool = False,
         **options
     ):
         self.base_url = base_url.rstrip("/")
@@ -26,10 +37,34 @@ class OllamaClient:
         self.timeout = timeout
         self.options = options
 
+        # ── Output format control ──
+        # format_json=True: Ollama grammar-constrained JSON output
+        #   → guaranteed valid JSON, no CoT preamble possible
+        self.format_json = format_json
+
+        # ── Enforced defaults for all Ollama calls ──
+        # num_ctx: context window (4096 tokens = ~3000 Chinese chars)
+        # num_predict: max output tokens (prevent runaway generation)
+        self.options.setdefault("num_ctx", 4096)
+        self.options.setdefault("num_predict", 256)
+
+        # reader-lm needs much larger context for HTML→Markdown conversion
         if "reader-lm" in model.lower():
-            self.options.setdefault("num_ctx", 131072)
+            self.options["num_ctx"] = 131072
+            self.options.pop("num_predict", None)  # no output limit for reader-lm
 
         self.timeout = timeout
+
+        # Auto-detect profile for this model (imported lazily to avoid circular)
+        self._profile = None
+
+    @property
+    def profile(self):
+        """Lazy-load model profile."""
+        if self._profile is None:
+            from microharness.ollama.model_profile import get_profile
+            self._profile = get_profile(self.model)
+        return self._profile
 
     def chat(self, messages: list, temperature: float = 0.1, model: Optional[str] = None) -> str:
         """
@@ -41,7 +76,9 @@ class OllamaClient:
             model: Override model (uses self.model if None)
 
         Returns:
-            Model's response text
+            Model's response text.
+            For thinking models (deepseek-r1), only the final content is
+            returned; thinking is logged separately.
         """
         import requests
 
@@ -52,42 +89,74 @@ class OllamaClient:
             "model": used_model,
             "messages": messages,
             "temperature": temperature,
-            "stream": False
+            "stream": False,
+            "keep_alive": -1,  # never unload — avoids cold-start penalty on CPU servers
         }
 
-        # 合并额外选项
+        # ── Format: JSON (grammar-constrained output) ──
+        if self.format_json:
+            payload["format"] = "json"
+
+        # Merge options (copy to avoid mutating shared defaults)
         if self.options:
-            payload["options"] = self.options
-            # temperature 可以被 messages 级别覆盖
-            if "options" in payload and temperature != 0.1:
+            import copy
+            payload["options"] = copy.deepcopy(self.options)
+            if temperature != 0.1:
                 payload["options"]["temperature"] = temperature
 
-        ollama_logger.debug(f"Chat请求 | 模型: {used_model} | 消息数: {len(messages)} | 选项: {self.options}")
+        ollama_logger.debug(f"Chat请求 | 模型: {used_model} | 消息数: {len(messages)} | format_json: {self.format_json} | 选项: {self.options}")
 
+        # Acquire semaphore with timeout — don't wait forever if Ollama is overloaded
+        _acquired = _OLLAMA_SEMAPHORE.acquire(timeout=60)
+        if not _acquired:
+            ollama_logger.error(f"Chat繁忙 | 模型: {used_model} | 排队超时60s")
+            raise RuntimeError(f"Ollama busy: semaphore wait timeout (60s)")
         try:
-            response = requests.post(url, json=payload, timeout=self.timeout)
-            response.raise_for_status()
-            result = response.json()["message"]["content"]
+            try:
+                response = requests.post(url, json=payload, timeout=self.timeout)
+                response.raise_for_status()
+                body = response.json()
+                message = body["message"]
+                result = message.get("content", "").strip()
+                thinking = message.get("thinking", "").strip()
 
-            duration = (time.time() - start_time) * 1000
-            ollama_logger.info(
-                f"Chat成功 | 模型: {used_model} | "
-                f"消息数: {len(messages)} | "
-                f"输出长度: {len(result)} | "
-                f"耗时: {duration:.2f}ms"
-            )
+                # ── Native thinking fallback ──
+                # Some thinking models (deepseek-r1) occasionally put the
+                # entire answer in `thinking` and leave `content` empty.
+                if not result and thinking:
+                    ollama_logger.info(
+                        f"Chat(thinking→content) | 模型: {used_model} | "
+                        f"content为空, 回退使用thinking ({len(thinking)}字)"
+                    )
+                    result = thinking
+                elif thinking:
+                    ollama_logger.info(
+                        f"Chat(thinking) | 模型: {used_model} | "
+                        f"思考长度: {len(thinking)} | "
+                        f"输出长度: {len(result)}"
+                    )
 
-            return result
+                duration = (time.time() - start_time) * 1000
+                ollama_logger.info(
+                    f"Chat成功 | 模型: {used_model} | "
+                    f"消息数: {len(messages)} | "
+                    f"输出长度: {len(result)} | "
+                    f"耗时: {duration:.2f}ms"
+                )
 
-        except requests.exceptions.Timeout:
-            ollama_logger.error(f"Chat超时 | 模型: {self.model} | 超时: {self.timeout}s")
-            raise
-        except requests.exceptions.RequestException as e:
-            ollama_logger.error(f"Chat失败 | 模型: {self.model} | 错误: {str(e)}")
-            raise
-        except Exception as e:
-            ollama_logger.error(f"Chat异常 | 模型: {self.model} | 错误: {str(e)}")
-            raise
+                return result
+
+            except requests.exceptions.Timeout:
+                ollama_logger.error(f"Chat超时 | 模型: {self.model} | 超时: {self.timeout}s")
+                raise
+            except requests.exceptions.RequestException as e:
+                ollama_logger.error(f"Chat失败 | 模型: {self.model} | 错误: {str(e)}")
+                raise
+            except Exception as e:
+                ollama_logger.error(f"Chat异常 | 模型: {self.model} | 错误: {str(e)}")
+                raise
+        finally:
+            _OLLAMA_SEMAPHORE.release()
 
     def generate(self, prompt: str, temperature: float = 0.1) -> str:
         """
@@ -108,32 +177,44 @@ class OllamaClient:
             "model": self.model,
             "prompt": prompt,
             "temperature": temperature,
-            "stream": False
+            "stream": False,
+            "keep_alive": -1,
+            "options": self.options,
         }
 
         ollama_logger.debug(f"Generate请求 | 模型: {self.model} | Prompt长度: {len(prompt)}")
 
+        _acquired = _OLLAMA_SEMAPHORE.acquire(timeout=60)
+        if not _acquired:
+            ollama_logger.error(f"Generate繁忙 | 模型: {self.model} | 排队超时60s")
+            raise RuntimeError(f"Ollama busy: semaphore wait timeout (60s)")
         try:
-            response = requests.post(url, json=payload, timeout=self.timeout)
-            response.raise_for_status()
-            result = response.json()["response"]
+            try:
+                response = requests.post(url, json=payload, timeout=self.timeout)
+                response.raise_for_status()
+                result = response.json()["response"]
 
-            duration = (time.time() - start_time) * 1000
-            ollama_logger.info(
-                f"Generate成功 | 模型: {self.model} | "
-                f"Prompt长度: {len(prompt)} | "
-                f"输出长度: {len(result)} | "
-                f"耗时: {duration:.2f}ms"
-            )
+                duration = (time.time() - start_time) * 1000
+                ollama_logger.info(
+                    f"Generate成功 | 模型: {self.model} | "
+                    f"Prompt长度: {len(prompt)} | "
+                    f"输出长度: {len(result)} | "
+                    f"耗时: {duration:.2f}ms"
+                )
 
-            return result
+                return result
 
-        except requests.exceptions.Timeout:
-            ollama_logger.error(f"Generate超时 | 模型: {self.model} | 超时: {self.timeout}s")
-            raise
-        except requests.exceptions.RequestException as e:
-            ollama_logger.error(f"Generate失败 | 模型: {self.model} | 错误: {str(e)}")
-            raise
+            except requests.exceptions.Timeout:
+                ollama_logger.error(f"Generate超时 | 模型: {self.model} | 超时: {self.timeout}s")
+                raise
+            except requests.exceptions.RequestException as e:
+                ollama_logger.error(f"Generate失败 | 模型: {self.model} | 错误: {str(e)}")
+                raise
+            except Exception as e:
+                ollama_logger.error(f"Generate异常 | 模型: {self.model} | 错误: {str(e)}")
+                raise
+        finally:
+            _OLLAMA_SEMAPHORE.release()
 
     def is_available(self) -> bool:
         """Check if Ollama server is running."""
@@ -221,7 +302,7 @@ def get_client() -> OllamaClient:
     """Get or create default Ollama client."""
     global _default_client
     if _default_client is None:
-        model = os.environ.get("OLLAMA_MODEL", "qwen2:1.5b")
+        model = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
         _default_client = OllamaClient(model=model)
     return _default_client
 

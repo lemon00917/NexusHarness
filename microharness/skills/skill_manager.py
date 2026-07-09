@@ -355,7 +355,7 @@ def _register_skill(skill_data, skill_dir: Path) -> None:
 
     bash_blocks = skill_data.bash_blocks if hasattr(skill_data, 'bash_blocks') else skill_data.get("bash_blocks", [])
     if not bash_blocks:
-        logger.warning(f"[SkillManager] No bash blocks in skill '{skill_data.name}', skipping")
+        logger.debug(f"[SkillManager] No bash blocks in skill '{skill_data.name}', skipping")
         return
 
     safety = _get_safety_level(skill_data)
