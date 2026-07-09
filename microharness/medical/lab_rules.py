@@ -150,6 +150,20 @@ def lab_records_from_bindings(bindings: list[dict[str, Any]]) -> list[LabRecord]
     return list(records.values())
 
 
+def _condition_without_time_scope(condition: str) -> str:
+    """Remove temporal scope grammar before parsing lab value comparisons."""
+    text = normalize_numeric_text(condition or "")
+    duration = r"第?[零〇一二两三四五六七八九十百千万亿\d.]+\s*(?:天|日|小时|分钟|周|月|个月)"
+    text = re.sub(r"(?:住院期间|住院期内|本次住院|住院内|住院过程中)", "", text)
+    text = re.sub(
+        rf"(?:入院前|入院后|出院前|出院后|术前|术后|手术前|手术后)\s*{duration}\s*(?:内|前|后)?",
+        "",
+        text,
+    )
+    text = re.sub(r"(?:入院前|入院后|出院前|出院后|术前|术后|手术前|手术后)", "", text)
+    return text.strip()
+
+
 def extract_lab_keyword(condition: str) -> str:
     condition = normalize_numeric_text(condition or "")
     clauses = [
@@ -165,8 +179,9 @@ def extract_lab_keyword(condition: str) -> str:
         ]
         if lab_clauses:
             condition = max(lab_clauses, key=len)
-    parsed = parse_numeric_comparison(condition)
-    text = parsed.subject if parsed else condition
+    value_condition = _condition_without_time_scope(condition)
+    parsed = parse_numeric_comparison(value_condition)
+    text = parsed.subject if parsed else value_condition
     scope_match = list(re.finditer(r"(住院期间|住院期内|入院前|入院后|出院前|出院后|术前|术后|手术前|手术后)", text))
     if scope_match:
         last_scope = scope_match[-1]
@@ -265,7 +280,7 @@ def _unit_has_scientific_volume(unit: str) -> bool:
 
 
 def _condition_expects_scientific_volume(condition: str) -> bool:
-    text = normalize_numeric_text(condition or "")
+    text = _condition_without_time_scope(condition)
     return bool(
         re.search(r"(?:x|\*)\s*10(?:\s*\^\s*[+-]?\d+|[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+)", text)
         and ("/" in text or re.search(r"[Ll升]", text) or parse_numeric_comparison(text))
@@ -273,9 +288,10 @@ def _condition_expects_scientific_volume(condition: str) -> bool:
 
 
 def _filter_by_numeric_dimension(condition: str, records: list[LabRecord]) -> list[LabRecord]:
-    if not records or not parse_numeric_comparison(condition):
+    value_condition = _condition_without_time_scope(condition)
+    if not records or not parse_numeric_comparison(value_condition):
         return records
-    if not _condition_expects_scientific_volume(condition):
+    if not _condition_expects_scientific_volume(value_condition):
         return records
     compatible = [
         rec for rec in records
@@ -324,6 +340,7 @@ def _parse_range_bounds(raw_range: str, unit: str) -> tuple[Optional[float], Opt
     raw = normalize_numeric_text(raw_range or "")
     if not raw:
         return None, None
+    raw = re.sub(r"(?<=\d)\s*(?:-|~|－|—|–|至)\s*(?=\d)", " ", raw)
     nums = re.findall(
         r"[+-]?\d+(?:\.\d+)?(?:\s*(?:x|\*)\s*10(?:\s*\^\s*[+-]?\d+|[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+))?",
         raw,
@@ -402,7 +419,8 @@ def _qualitative_wanted(condition: str) -> str:
 
 
 def _record_satisfies(record: LabRecord, condition: str) -> tuple[bool, str]:
-    cmp_info = parse_numeric_comparison(condition)
+    value_condition = _condition_without_time_scope(condition)
+    cmp_info = parse_numeric_comparison(value_condition)
     if cmp_info:
         value = _record_numeric_value(record)
         if value is None:
@@ -412,7 +430,7 @@ def _record_satisfies(record: LabRecord, condition: str) -> tuple[bool, str]:
             return False, f"不支持的比较符{cmp_info.operator}"
         return ok, _comparison_reason(value, cmp_info.operator, cmp_info.threshold, bool(ok))
 
-    wanted = _wanted_status(condition)
+    wanted = _wanted_status(value_condition)
     if wanted:
         status = _abnormal_status(record)
         status_text = display_status(status or "unknown")
@@ -422,7 +440,7 @@ def _record_satisfies(record: LabRecord, condition: str) -> tuple[bool, str]:
             return status == "normal", f"异常状态：{status_text}"
         return status == wanted, f"异常状态：{status_text}"
 
-    qualitative = _qualitative_wanted(condition)
+    qualitative = _qualitative_wanted(value_condition)
     if qualitative:
         text = record.result_text()
         return qualitative in text, f"定性结果{'包含' if qualitative in text else '不包含'}{qualitative}"
@@ -468,6 +486,20 @@ def _record_evidence_summary(records: list[LabRecord], condition: str, limit: in
     if len(sorted_records) > limit:
         lines.append(f"另有{len(sorted_records) - limit}条候选记录未展开")
     return "；".join(lines)
+
+
+def _record_judgment_summary(record: LabRecord, judgment: str) -> str:
+    inspected_at = record.inspection_datetime()
+    inspected_text = inspected_at.strftime("%Y-%m-%d %H:%M:%S") if inspected_at else "缺少检测时间"
+    value = record.get("inspectionValue", "结果", "inspectionResult", "定性结果")
+    unit = _display_unit(record.get("inspResultUnitCode", "单位"))
+    flag = record.get("inspAbnoFlag", "异常标志") or "无"
+    reference = record.get("inspResultRange", "参考范围") or "未提供"
+    item = record.get("inspItemDesc", "化验项目描述") or record.get("inspItemAbbr", "缩写") or "检验项目"
+    return (
+        f"{record.prefix or '检验记录'} 项目={item}，检测时间={inspected_text}，"
+        f"结果={_display_measurement(value, unit)}，异常标志={flag}，参考范围={reference}，{judgment}"
+    )
 
 
 def _record_candidate_detail(
@@ -519,10 +551,11 @@ def judge_lab_condition(
         return {"applicable": True, "matched": False, "reason": "检验结果为空", "fields": ""}
 
     keyword = extract_lab_keyword(condition)
+    value_condition = _condition_without_time_scope(condition)
     has_lab_predicate = bool(
-        parse_numeric_comparison(condition)
-        or _wanted_status(condition)
-        or _qualitative_wanted(condition)
+        parse_numeric_comparison(value_condition)
+        or _wanted_status(value_condition)
+        or _qualitative_wanted(value_condition)
     )
     if len(keyword) < 2 and not has_lab_predicate:
         return {"applicable": False}
@@ -620,13 +653,13 @@ def judge_lab_condition(
         if ok:
             matched_records.append((rec, reason))
         else:
-            failed_reasons.append(f"{rec.prefix or '检验记录'}: {reason}")
+            failed_reasons.append(_record_judgment_summary(rec, reason))
 
     if matched_records:
         prefixes = [rec.prefix for rec, _ in matched_records if rec.prefix]
         evidence = "\n".join(rec.compact_line() for rec, _ in matched_records)[:4000]
         detail = "；".join(
-            f"{rec.prefix or '检验记录'} {reason}" for rec, reason in matched_records[:5]
+            _record_judgment_summary(rec, reason) for rec, reason in matched_records[:5]
         )
         in_window_count = len(candidate_records) if requires_period_window(condition) else len(all_candidate_records)
         return {

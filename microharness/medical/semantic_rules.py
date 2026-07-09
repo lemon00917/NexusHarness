@@ -429,11 +429,12 @@ def split_compound_clauses(condition: str) -> tuple[list[str], str]:
     if re.search(r"(或者|或)", text):
         parts = [part.strip() for part in re.split(r"\s*(?:或者|或)\s*", text) if part.strip()]
         return (parts, "or") if len(parts) > 1 else ([], "")
-    if re.search(r"(并且|而且|同时|且|以及)", text):
-        parts = [part.strip() for part in re.split(r"\s*(?:并且|而且|同时|且|以及)\s*", text) if part.strip()]
-        return (parts, "and") if len(parts) > 1 else ([], "")
-    if re.search(r"[，,；;]", text):
-        parts = [part.strip() for part in re.split(r"\s*[，,；;]\s*", text) if part.strip()]
+    if re.search(r"(并且|而且|同时|且|以及|[，,；;])", text):
+        parts = [
+            part.strip()
+            for part in re.split(r"\s*(?:并且|而且|同时|且|以及|[，,；;])\s*", text)
+            if part.strip()
+        ]
         return (parts, "and") if len(parts) > 1 else ([], "")
     return [], ""
 

@@ -44,7 +44,7 @@ def _build_payload(result: dict[str, Any]) -> dict[str, Any]:
                 "证据角色": file_info.get("证据角色", ""),
                 "用途": file_info.get("用途", ""),
                 "是否支持条件": bool(file_info.get("matched", False)),
-                "判定依据": _clip(file_info.get("reason"), 600),
+                "判定依据": _clip(file_info.get("用户解释") or file_info.get("reason"), 900),
             })
         conditions.append({
             "id": f"C{idx}",
@@ -67,13 +67,13 @@ def _build_payload(result: dict[str, Any]) -> dict[str, Any]:
 def _fallback_explanations(result: dict[str, Any]) -> None:
     first = (result.get("results") or [{}])[0] if isinstance(result.get("results"), list) else {}
     if isinstance(first, dict):
-        first["用户解释"] = _overall_fallback_explanation(result, first)
         for info in (first.get("per_condition") or {}).values():
             if isinstance(info, dict):
                 info["用户解释"] = _condition_fallback_explanation(info)
                 for file_info in info.get("files") or []:
                     if isinstance(file_info, dict):
                         file_info["用户解释"] = _file_fallback_explanation(file_info, info)
+        first["用户解释"] = _overall_fallback_explanation(result, first)
 
 
 def _overall_fallback_explanation(result: dict[str, Any], first: dict[str, Any]) -> str:
@@ -85,7 +85,7 @@ def _overall_fallback_explanation(result: dict[str, Any], first: dict[str, Any])
         if not isinstance(info, dict):
             continue
         status = info.get("判断状态") or ("符合" if info.get("matched") else "不符合")
-        reason = _clip(info.get("reason"), 260)
+        reason = _clip(info.get("用户解释") or info.get("reason"), 360)
         parts.append(f"条件{idx}「{cond_text}」：{status}。{reason}")
     if parts:
         overall = first.get("判断状态") or result.get("判断状态") or ""
@@ -166,34 +166,75 @@ def _one_candidate_record_sentence(source: str, record: dict[str, Any], file_inf
     enriched = {**_parse_record_fields(file_info or {}, prefix), **record}
     in_window = record.get("是否在时间窗")
     window_text = "在时间范围内" if in_window is True else "不在时间范围内" if in_window is False else "时间范围无法判断"
+    pair_texts = _candidate_display_pairs(enriched)
+    detail_text = "，".join(pair_texts[:8])
+    detail_text = f"，{detail_text}" if detail_text else ""
+    return f"{prefix}{detail_text}，{window_text}。"
 
-    if "用药" in source:
-        name = _first_present(enriched, ("药物名称", "医嘱名称", "项目")) or "候选用药"
-        time = _first_present(enriched, ("开立日期时间", "记录时间", "医嘱时间", "执行时间")) or "缺少开立时间"
-        route = _first_present(enriched, ("用药途径", "给药途径"))
-        route_text = f"，用药途径为{route}" if route else ""
-        return f"{prefix}为{name}，开立时间{time}{route_text}，{window_text}。"
 
-    if "诊断" in source:
-        name = _first_present(enriched, ("诊断名称", "项目")) or "候选诊断"
-        diag_type = _first_present(enriched, ("诊断类型", "诊断类别"))
-        time = _first_present(enriched, ("诊断时间", "诊断日期", "记录时间")) or "缺少诊断时间"
-        type_text = f"，诊断类型为{diag_type}" if diag_type else ""
-        return f"{prefix}为{name}{type_text}，诊断时间{time}，{window_text}。"
+_INTERNAL_RECORD_KEYS = {"记录", "是否在时间窗", "时间窗", "时间判断", "数值是否满足"}
+_LOW_VALUE_LABEL_TOKENS = ("代码", "编号", "序号", "ID", "Id", "id", "科室", "医生", "医师", "人员")
+_IDENTITY_LABEL_TOKENS = ("名称", "项目", "描述", "标题", "章节", "诊断", "药物", "医嘱")
+_TIME_LABEL_TOKENS = ("时间", "日期")
+_CLINICAL_DETAIL_TOKENS = ("类型", "类别", "途径", "方式", "剂型", "剂量", "单位", "频次", "结果", "标志", "范围", "判断")
 
-    if "检验" in source:
-        item = _first_present(enriched, ("项目", "化验项目描述")) or "候选检验项目"
-        time = _first_present(enriched, ("检测时间", "记录时间")) or "缺少检测时间"
-        result = _first_present(enriched, ("结果",))
-        unit = _first_present(enriched, ("单位",))
-        numeric = _first_present(enriched, ("数值判断",))
-        result_text = f"，结果{result}{unit or ''}" if result else ""
-        numeric_text = f"，{numeric}" if numeric else ""
-        return f"{prefix}为{item}，检测时间{time}{result_text}，{window_text}{numeric_text}。"
 
-    time = _first_present(enriched, ("记录时间", "检测时间", "开立日期时间", "诊断时间"))
-    time_text = f"，记录时间{time}" if time else ""
-    return f"{prefix}{time_text}，{window_text}。"
+def _candidate_display_pairs(data: dict[str, Any]) -> list[str]:
+    result = str(data.get("结果") or "").strip()
+    unit = str(data.get("单位") or "").strip()
+    has_specific_time = any(
+        key not in _INTERNAL_RECORD_KEYS
+        and key != "记录时间"
+        and any(token in str(key) for token in _TIME_LABEL_TOKENS)
+        for key, value in data.items()
+        if str(value or "").strip()
+    )
+
+    selected: list[tuple[int, str, str]] = []
+    for idx, (key, raw_value) in enumerate(data.items()):
+        key_text = str(key or "").strip()
+        value = str(raw_value or "").strip()
+        if not key_text or not value or key_text in _INTERNAL_RECORD_KEYS:
+            continue
+        if key_text == "记录时间" and has_specific_time:
+            continue
+        if key_text == "单位" and result:
+            continue
+        if any(token in key_text for token in _LOW_VALUE_LABEL_TOKENS):
+            continue
+        if key_text == "结果" and unit:
+            value = f"{value}{unit}"
+
+        rank = _candidate_label_rank(key_text)
+        if rank is None:
+            continue
+        selected.append((rank, key_text, value))
+
+    selected.sort(key=lambda item: item[0])
+    pairs = []
+    seen = set()
+    for _, key, value in selected:
+        marker = (key, value)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        if key == "数值判断":
+            pairs.append(value)
+        else:
+            pairs.append(f"{key}为{value}")
+    return pairs
+
+
+def _candidate_label_rank(label: str) -> int | None:
+    if any(token in label for token in _IDENTITY_LABEL_TOKENS):
+        return 10
+    if any(token in label for token in _TIME_LABEL_TOKENS):
+        return 20
+    if any(token in label for token in ("途径", "方式", "类型", "类别", "结果", "判断")):
+        return 30
+    if any(token in label for token in _CLINICAL_DETAIL_TOKENS):
+        return 40
+    return None
 
 
 def _parse_record_fields(file_info: dict[str, Any], record_prefix: str) -> dict[str, str]:
@@ -232,6 +273,13 @@ def _useful_explanation(text: str, basis: str, condition: str = "") -> bool:
     if condition and text.replace("的患者", "") == condition.replace("的患者", ""):
         return False
     required_groups = []
+    if (
+        "候选记录" in basis
+        and "不在" in basis
+        and any(token in basis for token in ("范围", "时间窗", "住院期间", "期间"))
+    ):
+        required_groups.append(("不在",))
+        required_groups.append(("范围", "时间窗", "检测时间"))
     if any(token in basis for token in ("不在", "范围", "期间", "检测时间", "入院", "出院")):
         required_groups.append(("不在", "范围", "期间", "检测时间", "入院", "出院"))
     if any(token in basis for token in ("结果", "异常标志", "高于", "低于", "参考范围")):

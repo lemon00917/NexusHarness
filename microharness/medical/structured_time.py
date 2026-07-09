@@ -107,6 +107,85 @@ def _field_value(fields: list[dict[str, str]], names: tuple[str, ...]) -> str:
     return ""
 
 
+def _candidate_detail(
+    item: dict[str, Any],
+    *,
+    in_window: bool,
+    time_window: TimeWindow,
+) -> dict[str, Any]:
+    fields = item.get("fields") or []
+    detail: dict[str, Any] = {
+        "记录": item["prefix"],
+        "记录时间": _format_time(item["time"]),
+        "是否在时间窗": in_window,
+        "时间窗": time_window.describe(),
+    }
+    for field in fields:
+        label = str(field.get("label") or "").strip()
+        value = str(field.get("value") or "").strip()
+        if label and value and label not in detail:
+            detail[label] = value
+    return detail
+
+
+def _first_field_with_label(
+    fields: list[dict[str, str]],
+    include: tuple[str, ...],
+    exclude: tuple[str, ...] = (),
+) -> tuple[str, str]:
+    for field in fields:
+        label = str(field.get("label") or "")
+        value = str(field.get("value") or "").strip()
+        if not value:
+            continue
+        if any(token in label for token in include) and not any(token in label for token in exclude):
+            return label, value
+    return "", ""
+
+
+def _first_display_name(fields: list[dict[str, str]]) -> tuple[str, str]:
+    preferred = (("名称",), ("项目",), ("描述",), ("标题",), ("章节",))
+    for must_have in preferred:
+        for field in fields:
+            label = str(field.get("label") or "")
+            value = str(field.get("value") or "").strip()
+            if value and all(token in label for token in must_have):
+                return label, value
+    return _first_field_with_label(fields, ("名称", "项目", "描述", "标题", "章节"), ("科室", "医生", "医师", "人员"))
+
+
+def _first_display_time(fields: list[dict[str, str]]) -> tuple[str, str]:
+    for field in fields:
+        label = str(field.get("label") or "")
+        eng = str(field.get("eng") or "")
+        value = str(field.get("value") or "").strip()
+        if value and "开立" in label and (_is_datetime_label(label, eng) or "日期" in label):
+            return label, value
+    for field in fields:
+        label = str(field.get("label") or "")
+        eng = str(field.get("eng") or "")
+        value = str(field.get("value") or "").strip()
+        if value and _is_datetime_label(label, eng):
+            return label, value
+    return "", ""
+
+
+def _candidate_time_example(item: dict[str, Any], time_window: TimeWindow, *, in_window: bool) -> str:
+    fields = item.get("fields") or []
+    name_label, display_name = _first_display_name(fields)
+    time_label, display_time = _first_display_time(fields)
+    _, route = _first_field_with_label(fields, ("途径", "方式"))
+    if display_name:
+        parts = [f"{item['prefix']} {name_label or '项目'}={display_name}"]
+        parts.append(f"{time_label or '记录时间'}={display_time or _format_time(item['time'])}")
+        if route:
+            parts.append(f"途径/方式={route}")
+        judgement = "在" if in_window else "不在"
+        parts.append(f"{judgement}{time_window.scope}（范围：{time_window.describe()}）")
+        return "，".join(parts)
+    return f"{item['prefix']} 记录时间={_format_time(item['time'])}"
+
+
 def _semantic_time_match(
     condition: str,
     fields: list[dict[str, str]],
@@ -194,6 +273,7 @@ def filter_bindings_by_time_window(
             "time": record_time,
             "line": _format_record_line(prefix, fields),
             "semantic_reason": semantic_reason,
+            "fields": fields,
         }
         if semantic_match:
             semantic_window.append(item)
@@ -232,14 +312,14 @@ def filter_bindings_by_time_window(
             "matched": True,
             "filtered_lines": [item["line"] for item in in_window],
             "candidate_records": [
-                {"记录": item["prefix"], "记录时间": _format_time(item["time"]), "是否在时间窗": True}
+                _candidate_detail(item, in_window=True, time_window=time_window)
                 for item in in_window
             ],
         }
 
     if outside:
         examples = "；".join(
-            f"{item['prefix']} 记录时间={_format_time(item['time'])}"
+            _candidate_time_example(item, time_window, in_window=False)
             for item in outside[:5]
         )
         more = f"；另有{len(outside) - 5}条" if len(outside) > 5 else ""
@@ -253,7 +333,7 @@ def filter_bindings_by_time_window(
             "reason": reason,
             "fields": "\n".join(item["line"] for item in outside[:20]),
             "candidate_records": [
-                {"记录": item["prefix"], "记录时间": _format_time(item["time"]), "是否在时间窗": False}
+                _candidate_detail(item, in_window=False, time_window=time_window)
                 for item in outside
             ],
         }

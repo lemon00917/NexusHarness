@@ -13,17 +13,28 @@
       {
         "name": "主诉",
         "purpose": "患者入院时自述的核心主观症状及持续时间（入院前已存在的症状），如'头痛3天''发热伴咳嗽1周'，是判断入院前已有哪些症状的直接证据",
-        "info_type": "主观症状"
+        "info_type": "主观症状",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "symptom_evidence"
+        ]
       },
       {
         "name": "现病史",
         "purpose": "本次发病全过程：起病时间、诱因、症状演变、伴随症状、外院诊疗经过",
-        "info_type": "发病经过"
+        "info_type": "发病经过",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "symptom_evidence"
+        ]
       },
       {
         "name": "既往史",
         "purpose": "既往疾病史、手术史、慢性病史（如糖尿病/高血压/乙肝）、过敏史",
-        "info_type": "既往病史"
+        "info_type": "既往病史",
+        "evidence_roles": [
+          "disease_symptom_evidence"
+        ]
       },
       {
         "name": "个人史",
@@ -63,7 +74,11 @@
       {
         "name": "初步诊断",
         "purpose": "入院时的初步诊断列表（对应诊断接口的diagTypeDesc=入院诊断），列出所有入院时诊断的疾病",
-        "info_type": "初步诊断"
+        "info_type": "初步诊断",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "diagnosis_evidence"
+        ]
       },
       {
         "name": "中医四诊观察结果",
@@ -85,12 +100,20 @@
       {
         "name": "入院情况",
         "purpose": "入院时主要症状和体征的简要概述",
-        "info_type": "入院概况"
+        "info_type": "入院概况",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "symptom_evidence"
+        ]
       },
       {
         "name": "入院诊断",
         "purpose": "入院时经检查确认的诊断",
-        "info_type": "入院诊断"
+        "info_type": "入院诊断",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "diagnosis_evidence"
+        ]
       },
       {
         "name": "诊疗经过",
@@ -100,7 +123,11 @@
       {
         "name": "出院诊断",
         "purpose": "出院时最终诊断结论（主要诊断+次要诊断+合并症），是确诊疾病的权威来源",
-        "info_type": "最终诊断"
+        "info_type": "最终诊断",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "diagnosis_evidence"
+        ]
       },
       {
         "name": "出院情况",
@@ -136,17 +163,28 @@
       {
         "name": "主诉",
         "purpose": "本次就诊的主要症状和持续时间",
-        "info_type": "主观症状"
+        "info_type": "主观症状",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "symptom_evidence"
+        ]
       },
       {
         "name": "现病史",
         "purpose": "本次发病经过",
-        "info_type": "发病经过"
+        "info_type": "发病经过",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "symptom_evidence"
+        ]
       },
       {
         "name": "既往史",
         "purpose": "既往病史",
-        "info_type": "既往病史"
+        "info_type": "既往病史",
+        "evidence_roles": [
+          "disease_symptom_evidence"
+        ]
       },
       {
         "name": "体格检查",
@@ -161,7 +199,11 @@
       {
         "name": "诊断",
         "purpose": "门急诊诊断结论",
-        "info_type": "诊断"
+        "info_type": "诊断",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "diagnosis_evidence"
+        ]
       },
       {
         "name": "治疗意见",
@@ -192,17 +234,29 @@
       {
         "name": "诊断依据",
         "purpose": "支持诊断的临床表现和检查依据",
-        "info_type": "诊断证据"
+        "info_type": "诊断证据",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "diagnosis_evidence"
+        ]
       },
       {
         "name": "初步诊断",
         "purpose": "初步诊断列表",
-        "info_type": "诊断"
+        "info_type": "诊断",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "diagnosis_evidence"
+        ]
       },
       {
         "name": "鉴别诊断",
         "purpose": "需要排除的其他可能诊断",
-        "info_type": "鉴别诊断"
+        "info_type": "鉴别诊断",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "diagnosis_evidence"
+        ]
       },
       {
         "name": "诊疗计划",
@@ -267,12 +321,20 @@
       {
         "name": "术前诊断",
         "purpose": "手术前确认的诊断",
-        "info_type": "术前诊断"
+        "info_type": "术前诊断",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "diagnosis_evidence"
+        ]
       },
       {
         "name": "术中诊断",
         "purpose": "手术过程中新发现的诊断",
-        "info_type": "术中诊断"
+        "info_type": "术中诊断",
+        "evidence_roles": [
+          "disease_symptom_evidence",
+          "diagnosis_evidence"
+        ]
       },
       {
         "name": "手术经过",

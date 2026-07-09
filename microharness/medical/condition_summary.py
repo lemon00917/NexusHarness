@@ -58,15 +58,23 @@ def extract_condition_qualifiers(text: str) -> list[str]:
     return found
 
 
+def _text_without_qualifiers(text: str) -> str:
+    cleaned = str(text or "")
+    for pattern in reversed(_QUALIFIER_PATTERNS):
+        cleaned = re.sub(pattern, "", cleaned)
+    return cleaned.strip()
+
+
 def extract_condition_judgment(text: str) -> str:
     """Extract comparison/status/action words for display."""
     text = str(text or "")
-    cmp_info = parse_numeric_comparison(text)
+    judgment_text = _text_without_qualifiers(text)
+    cmp_info = parse_numeric_comparison(judgment_text)
     if cmp_info:
         return f"{operator_display(cmp_info.operator)}{cmp_info.threshold:g}{cmp_info.unit or ''}"
 
     for pattern in _STATUS_PATTERNS + _ACTION_PATTERNS:
-        match = re.search(pattern, text)
+        match = re.search(pattern, judgment_text or text)
         if match:
             return match.group(0)
     return "存在/匹配"

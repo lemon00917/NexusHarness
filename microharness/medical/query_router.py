@@ -138,11 +138,29 @@ try:
     _config_path = _Path(__file__).parent.parent.parent / "configs" / "medical_catalog.json"
     if _config_path.exists():
         import json as _json
-        _saved = _json.loads(_config_path.read_text(encoding="utf-8"))
+        _saved = _json.loads(_config_path.read_text(encoding="utf-8-sig"))
         if isinstance(_saved, dict) and len(_saved) > 0:
             DOCUMENT_CATALOG = _saved
 except Exception:
     pass
+
+
+def _diagnosis_evidence_targets() -> dict[str, list[str]]:
+    """Select disease/symptom evidence sections from catalog metadata."""
+    target_roles = {"disease_symptom_evidence", "diagnosis_evidence", "symptom_evidence"}
+    targets: dict[str, list[str]] = {}
+    for doc_name, doc_info in DOCUMENT_CATALOG.items():
+        sections = []
+        for sec in doc_info.get("sections", []) or []:
+            name = str(sec.get("name") or "")
+            roles = sec.get("evidence_roles") or []
+            if isinstance(roles, str):
+                roles = [roles]
+            if name and set(str(role) for role in roles) & target_roles:
+                sections.append(name)
+        if sections:
+            targets[doc_name] = list(dict.fromkeys(sections))
+    return targets
 
 # ═══════════════════════════════════════════════════════════════
 # Disease → Document → Section Mapping (fast keyword path)
@@ -582,6 +600,32 @@ def _validate_cot_steps(text: str, context: str = "") -> None:
             _router_debug(f"[CoT校验] {context}模型未按CoT格式输出，无步骤标记 | 内容: {truncated}")
 
 
+def _normalize_route_label(value: str) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^[《<「『【\[]+|[》>」』】\]]+$", "", text)
+    text = re.sub(r"\s+", "", text)
+    return text
+
+
+def _normalize_catalog_name(value: str, valid_names: set[str]) -> tuple[str, str]:
+    """Map minor LLM label variants back to catalog names."""
+    raw = str(value or "")
+    cleaned = _normalize_route_label(raw)
+    if cleaned in valid_names:
+        return cleaned, "" if cleaned == raw else f"{raw}->{cleaned}"
+    candidates = [cleaned]
+    for suffix in ("文档", "病历", "记录单", "表单", "表"):
+        if cleaned.endswith(suffix):
+            candidates.append(cleaned[: -len(suffix)])
+    for candidate in candidates:
+        if candidate in valid_names:
+            return candidate, f"{raw}->{candidate}"
+    matches = [name for name in valid_names if name in cleaned or cleaned in name]
+    if len(matches) == 1:
+        return matches[0], f"{raw}->{matches[0]}"
+    return "", ""
+
+
 # ═══════════════════════════════════════════════════════════════
 # Router System Prompt
 # ═══════════════════════════════════════════════════════════════
@@ -600,7 +644,9 @@ ROUTER_SYSTEM = """你是病历查询路由专家。查询→文档→章节。
 - 不确定时宁可多选，不要漏选
 
 ## 输出JSON
-{"targets":{"文档名":["章节1","章节2"]},"match_reason":{"文档名.章节":"简短理由"}}"""
+只允许使用上方目录中真实存在的文档名和章节名；不要输出“文档名”“章节1”这类占位符。
+示例：
+{"targets":{"入院记录":["主诉","现病史"]},"match_reason":{"入院记录.主诉":"查询入院症状"}}"""
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -747,22 +793,67 @@ class QueryRouter:
                 docs = parsed.get("target_medical_doc", kw_result["target_medical_doc"] if kw_result else [])
                 secs = parsed.get("target_sections", kw_result["target_sections"] if kw_result else [])
                 raw_targets = {doc: list(secs) for doc in docs} if docs else {}
-            # Filter to valid document and section names only.
+            # Validate route targets. Invalid LLM choices are preserved as
+            # diagnostics so the evidence chain explains why fallback happened.
             targets = {}
+            invalid_targets = []
+            route_warnings = []
+            route_repairs = []
+            valid_docs = set(DOCUMENT_CATALOG.keys())
             for doc, secs in raw_targets.items():
-                if doc not in DOCUMENT_CATALOG:
-                    print(f"[路由] ⚠️ LLM返回未知文档{doc}，已丢弃", flush=True)
+                normalized_doc, doc_repair = _normalize_catalog_name(str(doc), valid_docs)
+                if not normalized_doc:
+                    item = {"doc": doc, "sections": list(secs or []), "reason": "未知文档"}
+                    invalid_targets.append(item)
+                    warning = f"LLM返回无效文档名「{doc}」，未用于查库"
+                    route_warnings.append(warning)
+                    print(f"[路由] ⚠️ {warning}，将保留诊断并尝试兜底", flush=True)
                     continue
-                known = {s["name"] for s in DOCUMENT_CATALOG.get(doc, {}).get("sections", [])}
-                valid = [s for s in secs if s in known]
-                unknown = [s for s in secs if s not in known]
-                if unknown and len(secs) > 0:
-                    print(f"[路由] ⚠️ {doc}: LLM返回未知章节{unknown}，已过滤。可用章节: {known}", flush=True)
+                if doc_repair:
+                    route_repairs.append({"from": str(doc), "to": normalized_doc, "type": "document"})
+                    print(f"[路由] ℹ️ 文档名已归一化：{doc_repair}", flush=True)
+                known = {s["name"] for s in DOCUMENT_CATALOG.get(normalized_doc, {}).get("sections", [])}
+                valid = []
+                unknown = []
+                for sec in secs or []:
+                    normalized_sec, sec_repair = _normalize_catalog_name(str(sec), known)
+                    if normalized_sec:
+                        valid.append(normalized_sec)
+                        if sec_repair:
+                            route_repairs.append({
+                                "doc": normalized_doc,
+                                "from": str(sec),
+                                "to": normalized_sec,
+                                "type": "section",
+                            })
+                            print(f"[路由] ℹ️ 章节名已归一化：{normalized_doc} {sec_repair}", flush=True)
+                    else:
+                        unknown.append(sec)
+                valid = list(dict.fromkeys(valid))
+                if unknown and len(secs or []) > 0:
+                    invalid_targets.append({"doc": normalized_doc, "raw_doc": doc, "sections": unknown, "reason": "未知章节"})
+                    warning = f"{normalized_doc}: LLM返回无效章节{unknown}，未用于查库"
+                    route_warnings.append(warning)
+                    print(f"[路由] ⚠️ {warning}。可用章节: {known}", flush=True)
                 if valid:
-                    targets[doc] = valid
+                    targets[normalized_doc] = valid
             if not targets and kw_result:
-                return kw_result
+                fallback = dict(kw_result)
+                fallback["source"] = f"{fallback.get('source', 'keyword')}+llm_invalid_route_fallback"
+                fallback["llm_invalid_targets"] = invalid_targets
+                fallback["route_warnings"] = route_warnings
+                fallback["route_repairs"] = route_repairs
+                fallback["raw_response"] = resp
+                fallback["judge_reason"] = (
+                    (fallback.get("judge_reason") or "")
+                    + ("；" if fallback.get("judge_reason") and route_warnings else "")
+                    + "；".join(route_warnings)
+                )[:300]
+                return fallback
             parsed["targets"] = targets
+            parsed["llm_invalid_targets"] = invalid_targets
+            parsed["route_warnings"] = route_warnings
+            parsed["route_repairs"] = route_repairs
 
             # Backward compat: derive flat lists from targets
             parsed["target_medical_doc"] = list(targets.keys())
@@ -773,6 +864,14 @@ class QueryRouter:
             parsed.setdefault("user_query", condition)
             if isinstance(parsed.get("match_reason"), dict):
                 parsed["judge_reason"] = "；".join(f"{k}:{v}" for k,v in parsed["match_reason"].items())[:100]
+            if not targets and route_warnings:
+                parsed["confidence"] = 0
+                parsed["judge_reason"] = "LLM路由未给出有效文档/章节：" + "；".join(route_warnings)
+            elif route_warnings:
+                parsed["judge_reason"] = (
+                    str(parsed.get("judge_reason") or "")
+                    + "；路由诊断：" + "；".join(route_warnings)
+                )[:300]
             parsed["source"] = "llm"
             parsed["raw_response"] = resp
             return parsed
@@ -1147,7 +1246,37 @@ class QueryRouter:
                     best_doc_score = doc_total
                     best_sections = doc_sections
 
+        # Step 3: Match concepts to services (deterministic + LLM fallback).
+        # Service-only routes are valid: structured services can be the primary
+        # evidence even when the document catalog has no phrase-level hit.
+        target_services = self._match_services(concepts, condition)
+
         if not best_doc or not best_sections:
+            if target_services:
+                evidence_targets = _diagnosis_evidence_targets() if "diagnosis-query" in target_services else {}
+                flat_sections = list(dict.fromkeys(
+                    section for sections in evidence_targets.values() for section in sections
+                ))
+                print(f"[路由] 概念匹配: concepts={concepts} → 服务{target_services}", flush=True)
+                return {
+                    "user_query": condition,
+                    "targets": evidence_targets,
+                    "target_medical_doc": list(evidence_targets.keys()),
+                    "target_sections": flat_sections,
+                    "target_xml_paths": [],
+                    "target_services": target_services,
+                    "confidence": 0.85,
+                    "match_reason": {
+                        **{svc: "概念命中服务目录" for svc in target_services},
+                        **{
+                            f"{doc}.{section}": "目录角色提示为疾病/症状证据章节"
+                            for doc, sections in evidence_targets.items()
+                            for section in sections
+                        },
+                    },
+                    "judge_reason": "；".join(f"{svc}:概念命中服务目录" for svc in target_services)[:120],
+                    "source": "concept_service_match",
+                }
             return None
 
         best_sections.sort(key=lambda x: x[1], reverse=True)
@@ -1163,8 +1292,6 @@ class QueryRouter:
             matched_c = [c for c in concepts if c in sec_purpose]
             simple_reason[f"{best_doc}.{s[0]}"] = f"概念{matched_c}命中"
 
-        # Step 3: Match concepts to services (deterministic + LLM fallback)
-        target_services = self._match_services(concepts, condition)
         if "lab-results" in target_services:
             print(
                 f"[路由] 概念匹配: concepts={concepts} → 主证据服务 lab-results"

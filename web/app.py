@@ -2478,13 +2478,30 @@ async def medical_query(request: Request):
             max_workers=4, thread_name_prefix="medquery-"
         )
 
-    result = await asyncio.get_running_loop().run_in_executor(
-        _MEDICAL_QUERY_POOL,
-        _run_medical_query,
-        condition, register_no, visit_no, global_patient_id, global_visit_id,
-        judge_model, router_model, planner_model
-    )
-    return result
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(
+            _MEDICAL_QUERY_POOL,
+            _run_medical_query,
+            condition, register_no, visit_no, global_patient_id, global_visit_id,
+            judge_model, router_model, planner_model
+        )
+        return result
+    except Exception as exc:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[medical_query] 未处理异常: {exc}\n{tb}", flush=True)
+        error_response = {
+            "condition": condition,
+            "register_no": register_no,
+            "matched_count": 0,
+            "判断状态": "无法判断",
+            "可判定": False,
+            "error": "病历筛选执行失败",
+            "reason": str(exc)[:300],
+        }
+        if str(os.environ.get("MEDICAL_QUERY_DEBUG", "")).lower() in {"1", "true", "yes", "on"}:
+            error_response["debug_trace"] = tb[-2000:]
+        return error_response
 
 
 def _precompute_hints(fields_text: str) -> str:
@@ -3425,7 +3442,10 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
     # ── Unified pipeline (uses understand_query results directly) ──
     analysis = _repair_analysis_structure(analysis, condition)
     _query_ir = build_query_ir(analysis, condition)
-    raw_conditions = analysis.get("conditions", [])
+    raw_conditions = [
+        c for c in (analysis.get("conditions", []) or [])
+        if isinstance(c, dict) and str(c.get("text") or "").strip()
+    ]
     filtered_conditions = [
         c for c in raw_conditions
         if not _is_non_executable_subcondition(c.get("text", ""))
@@ -3434,7 +3454,8 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
         dropped = [c.get("text", "") for c in raw_conditions if c not in filtered_conditions]
         log(f"[Step1-理解] 过滤非执行子条件: {dropped}")
         analysis["conditions"] = filtered_conditions
-    _sub_conditions = [c["text"] for c in analysis.get("conditions", [])]
+    analysis["conditions"] = filtered_conditions or raw_conditions
+    _sub_conditions = [str(c.get("text") or "").strip() for c in analysis.get("conditions", []) if isinstance(c, dict) and str(c.get("text") or "").strip()]
     if not _sub_conditions:
         _sub_conditions = [condition]
 
@@ -3445,7 +3466,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
 
     log(f"\n{'='*60}")
     log(f"[Step1-理解] 原始问题: {condition}")
-    log(f"[Step1-理解] 分析: type={analysis['type']} connector={analysis.get('connector')} negated={_negate} source={analysis.get('source')}")
+    log(f"[Step1-理解] 分析: type={analysis.get('type', 'simple')} connector={analysis.get('connector')} negated={_negate} source={analysis.get('source')}")
     sub_queries = _sub_conditions
     _sub_index = {sq: i for i, sq in enumerate(sub_queries, 1)}
     from microharness.medical.condition_summary import summarize_condition_structure
@@ -3517,7 +3538,11 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
 
         # Use analysis results for service matching (no additional LLM call)
         for cond_analysis in analysis.get("conditions", []):
-            sq = cond_analysis["text"]
+            if not isinstance(cond_analysis, dict):
+                continue
+            sq = str(cond_analysis.get("text") or "").strip()
+            if not sq:
+                continue
             skill_ids = cond_analysis.get("target_skills", [])
             matched = []
             for sid in skill_ids:
@@ -3562,7 +3587,11 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
 
         # ── For EACH sub-condition, check ALL files in parallel ──
         # Build a map from sub-condition text to its analysis (for routing without 2nd LLM call)
-        _cond_analysis_map = {c["text"]: c for c in analysis.get("conditions", [])}
+        _cond_analysis_map = {
+            str(c.get("text") or "").strip(): c
+            for c in analysis.get("conditions", [])
+            if isinstance(c, dict) and str(c.get("text") or "").strip()
+        }
         # Fix: when sub_queries is replaced by full condition (len<=1 case),
         # the map key won't match. Add full condition as alias.
         if len(_cond_analysis_map) == 1 and len(sub_queries) == 1 and sub_queries[0] not in _cond_analysis_map:
@@ -3579,6 +3608,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
             cond_a = _cond_analysis_map.get(sq, {})
             sq_docs = cond_a.get("target_docs", [])
             sq_sections = cond_a.get("target_sections", [])
+            sq_targets = cond_a.get("targets", {}) if isinstance(cond_a.get("targets", {}), dict) else {}
             sq_keyword = cond_a.get("keyword", sq)
             _clean_sq_keyword = _extract_core_keyword(str(sq_keyword))
             if _clean_sq_keyword and len(_clean_sq_keyword) < len(str(sq_keyword)):
@@ -3593,6 +3623,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 fallback_route = router.route(sq)
                 sq_docs = fallback_route.get("target_medical_doc", [])
                 sq_sections = fallback_route.get("target_sections", [])
+                sq_targets = fallback_route.get("targets", {}) if isinstance(fallback_route.get("targets", {}), dict) else {}
                 log(f"  [Step2-路由] 子问题: {sq} (fallback路由)")
                 # Also check for services from concept_match route
                 fallback_skills = fallback_route.get("target_services", [])
@@ -3651,20 +3682,31 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 sq_docs = list(dict.fromkeys(list(sq_docs or []) + anchor_docs))
             if anchor_sections:
                 sq_sections = list(dict.fromkeys(list(sq_sections or []) + anchor_sections))
+                for doc in anchor_docs or []:
+                    sq_targets[doc] = list(dict.fromkeys(list(sq_targets.get(doc, [])) + anchor_sections))
 
+            pre_prune_docs = list(sq_docs or [])
+            pre_prune_sections = list(sq_sections or [])
             sq_docs, sq_sections, route_note = _prune_primary_service_route(
                 sq,
                 sq_docs,
                 sq_sections,
                 route_services,
             )
+            if sq_docs != pre_prune_docs or sq_sections != pre_prune_sections:
+                sq_targets = {}
             if route_note:
                 log(f"  [Step2-路由]   → {route_note}")
 
             # Build sq_route in the format _query_db expects
-            targets = {}
+            targets = {
+                doc: [sec for sec in (sq_targets.get(doc, []) or []) if sec]
+                for doc in sq_docs
+                if sq_targets.get(doc)
+            }
             for doc in sq_docs:
-                targets[doc] = list(sq_sections)
+                if doc not in targets:
+                    targets[doc] = list(sq_sections)
             sq_route = {
                 "user_query": sq,
                 "targets": targets,
