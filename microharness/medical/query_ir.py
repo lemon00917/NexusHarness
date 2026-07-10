@@ -71,7 +71,15 @@ def build_query_ir(analysis: dict, original_condition: str) -> QueryIR:
     conditions = []
     for cond in analysis.get("conditions", []) or []:
         text = cond.get("text") or original_condition
-        cmp_info = parse_numeric_comparison(text)
+        has_explicit_numeric_predicate = bool(re.search(
+            r"(>=|<=|>|<|=|\u2265|\u2264|\uff1e|\uff1c|\u5927\u4e8e|\u5c0f\u4e8e|\u9ad8\u4e8e|\u4f4e\u4e8e|\u8d85\u8fc7|\u4e0d\u5c11\u4e8e|\u4e0d\u4f4e\u4e8e|\u4e0d\u8d85\u8fc7|\u81f3\u591a|\u81f3\u5c11|\u7b49\u4e8e)",
+            text or "",
+        ))
+        cmp_info = (
+            parse_numeric_comparison(text)
+            if has_explicit_numeric_predicate
+            else None
+        )
         has_explicit_predicate = bool(re.search(
             r"(>|<|>=|<=|=|≥|≤|＞|＜|大于|小于|高于|低于|超过|不少于|不低于|不超过|至多|至少|等于|偏高|偏低|异常|正常)",
             text or "",

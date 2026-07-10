@@ -4,19 +4,21 @@
 
 1. Normalize 层：处理符号、错别字、中文数字、科学计数法和单位写法。
 2. LLM Understand 层：由 qwen2.5:3b 输出初版结构，不能直接作为最终执行依据。
-3. Deterministic IR Validator 层：集中校验和修复 LLM/兜底分析结果，防止时间、数值、单位、否定、连接关系丢失或被改写。
-4. Executor 层：按稳定 IR 查接口、算时间窗、比数值/单位、生成证据链。
+3. Scope Guard 层：在理解结果修复后判断请求是否属于病历筛选能力范围。
+4. Deterministic IR Validator 层：集中校验和修复 LLM/兜底分析结果，防止时间、数值、单位、否定、连接关系丢失或被改写。
+5. Executor 层：按稳定 IR 查接口、算时间窗、比数值/单位、生成证据链。
 
 ## 计划改造项
 
 - [x] 建立统一 Query IR Validator 模块。
+- [x] 建立 Scope Guard 并在 Scheduler/Executor 前接入主流程。
 - [x] 将“LLM 改坏子条件数字/单位时回退原文字面量”的逻辑集中到 Validator。
 - [x] 将“单条件时间问题不能丢时间上下文”的逻辑集中到 Validator。
 - [x] 将“术后24小时内这类时间数字不当作普通数值条件”的判断集中到 Validator。
 - [x] 将 `web/app.py` 中的大型结构增强逻辑继续迁移到 Validator 或独立结构解析模块。
 - [ ] 让 Validator 输出更标准的 IR 字段：`domain/entity/temporal/numeric/negation`。
 - [ ] 让 Executor 完全按 IR 执行，减少路由和执行阶段的重复猜测。
-- [ ] 增加固定回归用例集，覆盖用药、诊断、检验、住院时长、术前/术后、复合 AND/OR。
+- [x] 增加核心固定离线回归用例集，覆盖用药、症状、检验、住院时长、术前时间窗和复合 AND。
 
 ## 本轮已改
 
@@ -82,3 +84,24 @@ python -m py_compile web\app.py microharness\medical\query_ir_validator.py micro
   - `术后24小时内开了维生素的患者` 保留完整时间上下文。
   - `40岁以上并且背痛，住院期间血红蛋白指标偏高` 拆成 `年龄>=40岁`、`背痛`、`住院期间血红蛋白指标偏高`。
   - `术前24小时使用过阿司匹林且术前48小时内中性粒细胞数>1.5x10⁹/L的患者` 拆成两个可执行子条件，并保留原始科学计数法。
+
+## 第三轮已改：核心离线回归与 Scope Guard
+
+- 新增 `microharness/medical/scope_guard.py`：
+  - 拒绝空/模糊筛选条件、天气/写代码等无关请求、治疗建议等非筛选医学请求。
+  - 对 CT/MRI 原图、病理切片、基因测序和院外设备随访返回“数据源不支持”。
+  - 保守允许未知疾病/症状和短条件，防止 Scope Guard 变成新的实体白名单。
+- `web/app.py` 在 `understand_query`、结构修复和 `build_query_ir` 后执行 Scope Guard，拒绝请求不进入 Router、Scheduler、DB 或外部服务。
+- `microharness/medical/query_ir.py` 仅在显式数值比较谓词存在时调用 `parse_numeric_comparison`：
+  - `术前48小时内中性粒细胞数偏低` 的 `numeric_comparison` 为 `None`。
+  - `术前48小时内中性粒细胞数＞1.5×10⁹/L` 仍解析为 `operator=>`、`threshold=1500000000.0`。
+- 新增测试：
+  - `tests/test_scope_guard.py`：15 条边界判定与响应契约用例，加 1 条主流程提前返回集成用例。
+  - `tests/test_medical_query_offline_regression.py`：5 条交接问题固定回归。
+
+## 第三轮验证
+
+- `python -m py_compile web/app.py microharness/medical/scope_guard.py microharness/medical/query_ir.py` 通过。
+- `python -m pytest tests/test_scope_guard.py tests/test_medical_query_offline_regression.py -q`：21 条通过。
+- 相关既有回归：24 条通过。
+- 当前是离线回归，未验证真实 Ollama、DB 和外部服务的端到端匹配结果。

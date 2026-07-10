@@ -14,6 +14,16 @@
 
 ## 已完成
 
+- Scope Guard 已完成：
+  - 新增 `microharness/medical/scope_guard.py`，保守拦截模糊请求、无关请求、非筛选医学请求和明确缺少数据源的请求。
+  - 接入点位于 Understand + IR 结构修复之后、Scheduler/Executor 之前。
+  - 拒绝响应保留 `results`、`reason`、`用户解释` 和 `scope_guard`，前端可直接展示。
+  - 未知疾病/症状和暂未识别的路由默认允许，避免误杀“背痛”、“烧伤”等短条件。
+- 核心离线回归已固化：
+  - 新增 `tests/test_medical_query_offline_regression.py`，固定 5 条交接问题的拆分、AND 关系、服务路由和数值语义。
+  - 新增 `tests/test_scope_guard.py`，覆盖边界判定、拒绝响应契约和主流程提前返回。
+  - Query IR 只在出现显式数值比较谓词时生成 `numeric_comparison`，“术前48小时内...偏低”不再误解为 `<48小时`。
+
 - Normalize 层已增加比较签名保护：
   - 防止 LLM 把 `>` 改成 `<`。
   - 防止 LLM 丢失 `1.5x10^9/L` 这类科学计数阈值。
@@ -176,9 +186,9 @@
 - `microharness/ollama/prompt_adapter.py`
   - prompt 中有服务选择示例和实体例子，允许作为提示示例，但不能成为执行依据。
 
-### 需要新增的适用范围提示
+### 已完成的适用范围提示
 
-- 在 LLM Understand 之后、Executor 之前增加 Scope Guard：
+- 已在 LLM Understand 之后、Executor 之前增加 Scope Guard：
   - 如果问题不是“筛选患者/判断患者是否符合某个病历条件”，直接返回提示，不调用病历接口。
   - 如果问题和病历数据源无关，例如闲聊、天气、写代码、医学常识问答、治疗建议、药品说明书解释等，提示用户输入病历筛选条件。
   - 如果问题属于医疗但当前数据源无法支持，例如要求影像原图诊断、基因测序结论、院外长期随访等，返回“当前数据源不支持/需要补充数据源”。
@@ -194,7 +204,7 @@
 ### P0：先稳住正确性
 
 - 完成 Normalize 层保护。
-- 增加 Scope Guard：
+- [x] 增加 Scope Guard：
   - 非病历筛选问题不进入 Executor。
   - 无法映射到数据源的问题返回能力范围提示。
   - 模糊问题要求用户补充明确筛选条件。
@@ -235,6 +245,9 @@
 
 ### P3：测试与落地
 
+- [x] 已固化 5 条核心问题的离线结构/IR 回归和 Scope Guard 回归。
+- [ ] 待在可用的 Ollama、DB 和外部服务环境补真实数据端到端回归。
+
 - 固化真实回归问题集：
   - 住院天数比较。
   - 术前/术后用药。
@@ -254,9 +267,9 @@
 
 ## 下一步
 
-进入 P1 去硬编码：
+P0 中的核心离线回归和 Scope Guard 已完成。接下来进入 P1 去硬编码：
 
-1. 增加 Scope Guard，先拦截非病历筛选/无关/无法映射数据源的问题。
-2. 把当前 `query_router.py` 里的默认 `DISEASE_SECTION_MAP` 逐步迁出到 `configs/medical_routing_map.json`。
-3. 把 `semantic_rules.py` 中检验/用药/诊断服务触发语义统一改为读取 skill metadata。
-4. 把 `web/app.py` 的主证据服务选择泛化为 service metadata 策略。
+1. 把当前 `query_router.py` 里的默认 `DISEASE_SECTION_MAP` 逐步迁出到 `configs/medical_routing_map.json`。
+2. 把 `semantic_rules.py` 中检验/用药/诊断服务触发语义统一改为读取 skill metadata。
+3. 把 `web/app.py` 的主证据服务选择泛化为 service metadata 策略。
+4. 在真实环境补 Scope Guard 拒绝率监控和 5 条固定问题的端到端验证。

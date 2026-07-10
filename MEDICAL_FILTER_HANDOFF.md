@@ -14,6 +14,7 @@
 - 解释润色和防漂移：`microharness/medical/reason_polisher.py`
 - 检验规则：`microharness/medical/lab_rules.py`
 - 结构化时间规则：`microharness/medical/structured_time.py`
+- 能力边界守卫：`microharness/medical/scope_guard.py`
 - 服务目录：`microharness/services/service_catalog.py`
 
 ## 2. 运行前提
@@ -32,7 +33,7 @@ python -m uvicorn web.app:app --host 0.0.0.0 --port 8000
 健康验证：
 
 ```powershell
-python -m py_compile web\app.py microharness\medical\query_router.py microharness\medical\reason_polisher.py
+python -m py_compile web/app.py microharness/medical/scope_guard.py microharness/medical/query_ir.py
 ```
 
 ## 3. 病历筛选接口
@@ -73,9 +74,10 @@ Content-Type: application/json
 
 1. Query Planner/Router：LLM 或规则把自然语言拆成子条件和候选证据源。
 2. Metadata Router：根据 `medical_catalog.json`、service catalog 和 skill metadata 选择文档/章节/外部服务。
-3. Executor：按结构化规则查询用药、检验、诊断、文档章节等证据。
-4. Deterministic Rules：时间窗、数值阈值、异常标志、单位、否定、AND/OR 由规则校验。
-5. Reason Polisher：LLM 只做展示优化；如果润色改变证据含义，会回退规则解释。
+3. Scope Guard：在理解/IR 修复后、Scheduler/Executor 前拦截模糊请求、无关请求和当前数据源不支持的请求。
+4. Executor：按结构化规则查询用药、检验、诊断、文档章节等证据。
+5. Deterministic Rules：时间窗、数值阈值、异常标志、单位、否定、AND/OR 由规则校验。
+6. Reason Polisher：LLM 只做展示优化；如果润色改变证据含义，会回退规则解释。
 
 原则：
 
@@ -93,12 +95,15 @@ Content-Type: application/json
 - 诊断/症状证据源改为依赖 metadata 角色，不按具体疾病名写死。
 - LLM 返回非法文档名时保留 `llm_invalid_targets`，便于分析为什么没查到。
 - 外部服务配置页支持维护 `base_url` 和服务列表，服务路由仍由配置/skill metadata 驱动。
+- Scope Guard 已接入主查询流程，拒绝时统一返回 `判断状态=无法执行`、`可判定=false` 和 `scope_guard` 诊断信息。
+- 五条核心问题已固化为 `tests/test_medical_query_offline_regression.py`，不依赖 Ollama、数据库或外部服务。
+- Query IR 已区分显式数值比较和“偏高/偏低/异常”，不再把时间窗数字写入 `numeric_comparison`。
 
 ## 6. 仍需重点关注
 
 - 通用 Query IR 仍需继续标准化为 `domain/entity/temporal/numeric/negation`。
 - 文档章节、诊断、结构化接口之间的优先级还需要更清晰的场景配置。
-- 需要补固定回归集，覆盖：
+- 核心离线回归集已固化；仍需在可用的 Ollama/DB/外部服务环境补端到端回归，覆盖：
   - 术前/术后用药时间窗。
   - 检验数值大于/小于/偏高/偏低/异常。
   - 年龄、住院天数、烧伤、背痛等诊断/症状问题。
@@ -107,6 +112,8 @@ Content-Type: application/json
 
 ## 7. 建议回归问题
 
+以下 5 条已作为离线结构/IR 回归用例固化：
+
 ```text
 术前24小时使用过阿司匹林且术前48小时内中性粒细胞数偏低的患者
 术前24小时使用过阿司匹林且术前48小时内中性粒细胞数＞1.5×10⁹/L的患者
@@ -114,6 +121,14 @@ Content-Type: application/json
 住院天数小于5天并且烧伤的患者
 住院期间血红蛋白指标偏高的患者
 ```
+
+离线验证：
+
+```powershell
+python -m pytest tests/test_scope_guard.py tests/test_medical_query_offline_regression.py -q
+```
+
+注意：该离线回归只验证能力边界、子条件拆分、路由和 Query IR 数值语义；真实患者匹配结果仍需连接 Ollama、数据库和外部服务验证。
 
 ## 8. 提交与排除说明
 

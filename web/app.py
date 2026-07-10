@@ -3345,6 +3345,23 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
     analysis = _repair_analysis_structure(analysis, condition)
     _query_ir = build_query_ir(analysis, condition)
 
+    from microharness.medical.scope_guard import (
+        build_scope_rejection_response,
+        evaluate_medical_filter_scope,
+    )
+    _scope_decision = evaluate_medical_filter_scope(condition, analysis)
+    if not _scope_decision.allowed:
+        log(f"[ScopeGuard] rejected: {_scope_decision.code} ({_scope_decision.signals})")
+        _scope_result = build_scope_rejection_response(
+            condition,
+            _scope_decision,
+            original_condition=original_condition,
+            query_ir=_query_ir.to_dict(),
+        )
+        if _normalization is not None:
+            _scope_result["\u67e5\u8be2\u5f52\u4e00\u5316"] = _normalization.to_dict()
+        return _sanitize_response(_scope_result)
+
     # Negation
     _negate = analysis.get("negated", False)
     if _negate:
