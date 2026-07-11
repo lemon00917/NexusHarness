@@ -33,10 +33,25 @@
         .mc-section-del:hover { border-color: var(--accent-red); color: var(--accent-red); }
         .mc-add-section { margin-top: 8px; padding: 6px 12px; background: var(--accent-dim); border: 1px dashed var(--accent); border-radius: 6px; color: var(--accent); cursor: pointer; font-size: 11px; font-family: var(--font-body); width: 100%; }
         .mc-add-section:hover { background: var(--accent); color: #fff; }
+        .mc-source { display: flex; align-items: center; gap: 16px; padding: 12px 0 18px; margin-bottom: 18px; border-bottom: 1px solid var(--border-color); }
+        .mc-source-label { min-width: 92px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+        .mc-source-options { display: inline-flex; padding: 3px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 7px; }
+        .mc-source-option { min-width: 104px; padding: 7px 12px; border: 0; border-radius: 5px; background: transparent; color: var(--text-secondary); cursor: pointer; font: 500 12px var(--font-body); }
+        .mc-source-option.active { background: var(--accent); color: #fff; }
+        .mc-source-option:disabled { cursor: wait; opacity: .65; }
+        .mc-source-status { flex: 1; min-width: 0; color: var(--text-dim); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+        .mc-source-status.error { color: var(--accent-red); }
+        .mc-readonly-note { display: none; margin: -6px 0 14px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--accent-dim); color: var(--text-secondary); font-size: 11px; }
+        .mc-readonly-note.visible { display: block; }
+        .mc-container.external-mode .mc-field input:disabled,
+        .mc-container.external-mode .mc-field textarea:disabled,
+        .mc-container.external-mode .mc-section input:disabled,
+        .mc-container.external-mode .mc-section textarea:disabled { opacity: .8; cursor: not-allowed; }
         .mc-save-bar { position: sticky; bottom: 0; padding: 14px 20px; background: var(--bg-elevated); border-top: 1px solid var(--border-color); display: flex; gap: 10px; justify-content: flex-end; z-index: 10; }
         .btn { padding: 8px 20px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 500; cursor: pointer; font-family: var(--font-body); transition: all 0.15s; border: none; }
         .btn-primary { background: var(--accent); color: #fff; }
         .btn-primary:hover { background: var(--accent-hover); }
+        .btn:disabled { opacity: .5; cursor: not-allowed; }
         .btn-ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); }
         .btn-ghost:hover { background: var(--bg-hover); }
         .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--bg-elevated); color: var(--text-primary); padding: 10px 22px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-size: 13px; z-index: 9999; }
@@ -55,24 +70,107 @@
     <p style="font-size:12px;color:var(--text-dim);margin-bottom:20px;">
         配置每类病历文档的用途和每个章节的临床用途描述。这些元数据用于 LLM 路由推理——修改后立即生效。
     </p>
+    <div class="mc-source">
+        <div class="mc-source-label">元数据来源</div>
+        <div class="mc-source-options" role="group" aria-label="元数据来源">
+            <button id="sourceLocal" class="mc-source-option" onclick="setCatalogSource('local')">本地配置</button>
+            <button id="sourceExternal" class="mc-source-option" onclick="setCatalogSource('external')">外部接口</button>
+        </div>
+        <div id="sourceStatus" class="mc-source-status">正在读取来源配置...</div>
+    </div>
+    <div id="readonlyNote" class="mc-readonly-note">
+        当前展示外部接口数据，并自动合并本地配置中的语义字段。外部基础数据请在外部系统维护；切换到本地配置后可编辑本地目录。
+    </div>
     <div id="catalog"></div>
 </div>
 <div class="mc-save-bar">
-    <button class="btn btn-ghost" onclick="loadConfig()">🔄 重新加载</button>
-    <button class="btn btn-primary" onclick="saveConfig()">💾 保存配置</button>
+    <button class="btn btn-ghost" onclick="reloadConfig()">重新加载</button>
+    <button id="saveButton" class="btn btn-primary" onclick="saveConfig()">保存配置</button>
 </div>
 
 <script>
 let catalog = {};
+let catalogSource = 'local';
+let sourceBusy = false;
+
+async function loadSourceConfig() {
+    const res = await fetch('/api/medical/catalog-source');
+    if (!res.ok) throw new Error(`来源配置读取失败 (${res.status})`);
+    const data = await res.json();
+    catalogSource = data.source || 'local';
+    renderSourceState(data.status || {});
+}
+
+function renderSourceState(status = {}) {
+    document.getElementById('sourceLocal').classList.toggle('active', catalogSource === 'local');
+    document.getElementById('sourceExternal').classList.toggle('active', catalogSource === 'external');
+    document.getElementById('sourceLocal').disabled = sourceBusy;
+    document.getElementById('sourceExternal').disabled = sourceBusy;
+
+    const externalMode = catalogSource === 'external';
+    document.querySelector('.mc-container').classList.toggle('external-mode', externalMode);
+    document.getElementById('readonlyNote').classList.toggle('visible', externalMode);
+    document.getElementById('saveButton').disabled = externalMode;
+
+    const statusEl = document.getElementById('sourceStatus');
+    statusEl.classList.toggle('error', Boolean(status.fallback || status.error));
+    if (sourceBusy) {
+        statusEl.textContent = '正在切换并重新加载元数据...';
+    } else if (catalogSource === 'local') {
+        statusEl.textContent = `当前使用本地配置，共 ${status.document_count || 0} 类文档`;
+    } else if (status.fallback) {
+        statusEl.textContent = `外部接口不可用，当前已回退本地配置：${status.error || '未知错误'}`;
+    } else {
+        statusEl.textContent = `当前使用外部接口，并合并本地语义配置，共 ${status.document_count || 0} 类文档`;
+    }
+}
+
+async function setCatalogSource(source, quiet = false) {
+    if (sourceBusy) return;
+    sourceBusy = true;
+    catalogSource = source;
+    renderSourceState({});
+    try {
+        const res = await fetch('/api/medical/catalog-source', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({source})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `切换失败 (${res.status})`);
+        catalogSource = data.source;
+        sourceBusy = false;
+        renderSourceState(data.source_status || {});
+        await loadConfig();
+        if (!quiet) showToast(data.source_status?.fallback ? '外部接口不可用，已回退本地配置' : '元数据来源已切换');
+    } catch(e) {
+        sourceBusy = false;
+        await loadSourceConfig().catch(() => {});
+        renderSourceState({error: e.message});
+        showToast('切换失败: ' + e.message);
+    }
+}
 
 async function loadConfig() {
     try {
-        const res = await fetch('/api/medical/catalog-config');
+        const endpoint = catalogSource === 'external'
+            ? '/api/medical/catalog-config?effective=true'
+            : '/api/medical/catalog-config';
+        const res = await fetch(endpoint);
+        if (!res.ok) throw new Error(`配置读取失败 (${res.status})`);
         catalog = await res.json();
         renderCatalog();
-        showToast('已加载');
     } catch(e) {
         showToast('加载失败: ' + e.message);
+    }
+}
+
+async function reloadConfig() {
+    if (catalogSource === 'external') {
+        await setCatalogSource('external', true);
+    } else {
+        await loadConfig();
+        showToast('已重新加载');
     }
 }
 
@@ -80,6 +178,7 @@ function renderCatalog() {
     const el = document.getElementById('catalog');
     const entries = Object.entries(catalog);
     if (entries.length === 0) { el.innerHTML = '<div style="color:var(--text-dim);text-align:center;padding:40px;">暂无数据</div>'; return; }
+    const disabled = catalogSource === 'external' ? 'disabled' : '';
 
     el.innerHTML = entries.map(([docName, doc], di) => `
         <div class="mc-doc">
@@ -90,26 +189,26 @@ function renderCatalog() {
             <div class="mc-doc-body">
                 <div class="mc-field">
                     <label>文档整体用途</label>
-                    <textarea rows="2" onchange="catalog['${esc(docName)}'].purpose=this.value">${esc(doc.purpose||'')}</textarea>
+                    <textarea rows="2" ${disabled} onchange="catalog['${esc(docName)}'].purpose=this.value">${esc(doc.purpose||'')}</textarea>
                 </div>
                 <div class="mc-field">
                     <label>适用场景（逗号分隔）</label>
-                    <input value="${esc((doc.used_for||[]).join(','))}" onchange="catalog['${esc(docName)}'].used_for=this.value.split(',').map(s=>s.trim())">
+                    <input value="${esc((doc.used_for||[]).join(','))}" ${disabled} onchange="catalog['${esc(docName)}'].used_for=this.value.split(',').map(s=>s.trim())">
                 </div>
                 <label style="font-size:11px;font-weight:500;color:var(--text-secondary);margin:12px 0 6px;display:block;">章节列表</label>
                 <div id="sections-${di}">
                     ${(doc.sections||[]).map((sec, si) => `
                         <div class="mc-section" id="sec-${di}-${si}">
                             <div class="mc-section-header">
-                                <input value="${esc(sec.name||'')}" placeholder="章节名" style="width:120px;" onchange="catalog['${esc(docName)}'].sections[${si}].name=this.value">
-                                <textarea placeholder="临床用途描述" onchange="catalog['${esc(docName)}'].sections[${si}].purpose=this.value">${esc(sec.purpose||'')}</textarea>
-                                <input value="${esc(sec.info_type||'')}" class="info-type" placeholder="信息类型" onchange="catalog['${esc(docName)}'].sections[${si}].info_type=this.value">
-                                <button class="mc-section-del" onclick="deleteSection('${esc(docName)}',${si})">✕</button>
+                                <input value="${esc(sec.name||'')}" placeholder="章节名" style="width:120px;" ${disabled} onchange="catalog['${esc(docName)}'].sections[${si}].name=this.value">
+                                <textarea placeholder="临床用途描述" ${disabled} onchange="catalog['${esc(docName)}'].sections[${si}].purpose=this.value">${esc(sec.purpose||'')}</textarea>
+                                <input value="${esc(sec.info_type||'')}" class="info-type" placeholder="信息类型" ${disabled} onchange="catalog['${esc(docName)}'].sections[${si}].info_type=this.value">
+                                <button class="mc-section-del" ${disabled} onclick="deleteSection('${esc(docName)}',${si})">✕</button>
                             </div>
                         </div>
                     `).join('')}
                 </div>
-                <button class="mc-add-section" onclick="addSection('${esc(docName)}', ${di})">+ 添加章节</button>
+                <button class="mc-add-section" ${disabled} onclick="addSection('${esc(docName)}', ${di})">+ 添加章节</button>
             </div>
         </div>
     `).join('');
@@ -130,6 +229,10 @@ function deleteSection(docName, si) {
 }
 
 async function saveConfig() {
+    if (catalogSource !== 'local') {
+        showToast('外部接口模式下不能在此修改基础元数据');
+        return;
+    }
     try {
         const res = await fetch('/api/medical/catalog-config', {
             method: 'POST',
@@ -151,7 +254,16 @@ function showToast(msg) {
     document.body.appendChild(t); setTimeout(()=>t.remove(), 3000);
 }
 
-loadConfig();
+async function initialize() {
+    try {
+        await loadSourceConfig();
+        await loadConfig();
+    } catch(e) {
+        showToast('初始化失败: ' + e.message);
+    }
+}
+
+initialize();
 </script>
 </body>
 </html>

@@ -13,9 +13,11 @@ Usable as:
 2. LangChain tool:    medical_disease_section_router("找出糖尿病患者")
 """
 
+import copy
 import json
 import os
 import re
+import threading
 from typing import Optional, Dict, List
 
 from microharness.medical.field_catalog import get_catalog, FILENAME_TO_TEMPLATE
@@ -126,30 +128,71 @@ DOCUMENT_CATALOG: Dict[str, dict] = {
     },
 }
 
-# Backward-compat lookup
-SECTION_PURPOSE_LOOKUP = {}
-for doc_name, doc_info in DOCUMENT_CATALOG.items():
-    for s in doc_info.get("sections", []):
-        SECTION_PURPOSE_LOOKUP[s["name"]] = s
-
-# Load persisted config if exists (allows user edits via UI)
-try:
-    from pathlib import Path as _Path
-    _config_path = _Path(__file__).parent.parent.parent / "configs" / "medical_catalog.json"
-    if _config_path.exists():
-        import json as _json
-        _saved = _json.loads(_config_path.read_text(encoding="utf-8-sig"))
-        if isinstance(_saved, dict) and len(_saved) > 0:
-            DOCUMENT_CATALOG = _saved
-except Exception:
-    pass
+_DEFAULT_DOCUMENT_CATALOG = copy.deepcopy(DOCUMENT_CATALOG)
+SECTION_PURPOSE_LOOKUP: Dict[str, dict] = {}
+CATALOG_SOURCE_STATUS: dict = {}
+CATALOG_RELOAD_LOCK = threading.RLock()
 
 
-def _diagnosis_evidence_targets() -> dict[str, list[str]]:
+def format_catalog_source_log(prefix: str = "[病历元数据]", status: dict | None = None) -> str:
+    """Build one explicit log line describing the configured and effective source."""
+    current = status if status is not None else CATALOG_SOURCE_STATUS
+    configured = current.get("configured_source", "local")
+    effective = current.get("effective_source", configured)
+    source_labels = {"local": "本地配置", "external": "外部接口"}
+    parts = [
+        prefix,
+        f"配置来源={source_labels.get(configured, configured)}",
+        f"实际来源={source_labels.get(effective, effective)}",
+        f"文档数={current.get('document_count', len(DOCUMENT_CATALOG))}",
+        f"是否回退={'是' if current.get('fallback') else '否'}",
+    ]
+    if configured == "external":
+        parts.append(f"外部URL={current.get('external_url') or '-'}")
+    if current.get("error"):
+        parts.append(f"原因={current['error']}")
+    return " | ".join(parts)
+
+
+def reload_document_catalog(
+    log_prefix: str = "[病历元数据配置刷新]",
+    emit_log: bool = True,
+) -> dict:
+    """Reload the active metadata source and rebuild compatibility indexes."""
+    global DOCUMENT_CATALOG, SECTION_PURPOSE_LOOKUP, CATALOG_SOURCE_STATUS
+    from microharness.medical.catalog_source import load_effective_catalog
+
+    with CATALOG_RELOAD_LOCK:
+        DOCUMENT_CATALOG, CATALOG_SOURCE_STATUS = load_effective_catalog(
+            _DEFAULT_DOCUMENT_CATALOG
+        )
+        SECTION_PURPOSE_LOOKUP = {
+            section["name"]: section
+            for doc_info in DOCUMENT_CATALOG.values()
+            for section in doc_info.get("sections", [])
+            if isinstance(section, dict) and section.get("name")
+        }
+        if emit_log:
+            print(format_catalog_source_log(log_prefix), flush=True)
+        return dict(CATALOG_SOURCE_STATUS)
+
+
+def reload_document_catalog_snapshot() -> tuple[dict, dict]:
+    """Reload metadata and return an isolated catalog snapshot for one query."""
+    with CATALOG_RELOAD_LOCK:
+        status = reload_document_catalog(emit_log=False)
+        return copy.deepcopy(DOCUMENT_CATALOG), status
+
+
+reload_document_catalog(log_prefix="[病历元数据初始化]")
+
+
+def _diagnosis_evidence_targets(document_catalog: dict | None = None) -> dict[str, list[str]]:
     """Select disease/symptom evidence sections from catalog metadata."""
+    catalog = document_catalog if document_catalog is not None else DOCUMENT_CATALOG
     target_roles = {"disease_symptom_evidence", "diagnosis_evidence", "symptom_evidence"}
     targets: dict[str, list[str]] = {}
-    for doc_name, doc_info in DOCUMENT_CATALOG.items():
+    for doc_name, doc_info in catalog.items():
         sections = []
         for sec in doc_info.get("sections", []) or []:
             name = str(sec.get("name") or "")
@@ -656,12 +699,16 @@ ROUTER_SYSTEM = """你是病历查询路由专家。查询→文档→章节。
 class QueryRouter:
     """Disease-aware medical query router."""
 
-    def __init__(self, model: str = None, timeout: int = 120):
+    def __init__(self, model: str = None, timeout: int = 120,
+                 document_catalog: dict | None = None):
         if model is None:
             model = "medaibase/medgemma1.5:4b"
         self.model = model
         self.timeout = timeout
         self.catalog = get_catalog()
+        self.document_catalog = copy.deepcopy(
+            document_catalog if document_catalog is not None else DOCUMENT_CATALOG
+        )
         self._client = None
 
     @property
@@ -708,7 +755,7 @@ class QueryRouter:
         all_xml = []
         keywords = []
         notes = []
-        doc_catalog = DOCUMENT_CATALOG  # the 6-document routing catalog
+        doc_catalog = self.document_catalog  # per-query routing catalog snapshot
         for kw, mp in matches:
             keywords.append(kw)
             notes.append(mp.get("note", ""))
@@ -755,7 +802,7 @@ class QueryRouter:
         """Use LLM with hierarchical document catalog to reason about query routing."""
         # Build compact catalog: strip info_type, shorten descriptions
         compact = {}
-        for doc, info in DOCUMENT_CATALOG.items():
+        for doc, info in self.document_catalog.items():
             compact[doc] = {
                 "用途": info["purpose"],
                 "章节": {s["name"]: s["purpose"] for s in info["sections"]}
@@ -799,7 +846,7 @@ class QueryRouter:
             invalid_targets = []
             route_warnings = []
             route_repairs = []
-            valid_docs = set(DOCUMENT_CATALOG.keys())
+            valid_docs = set(self.document_catalog.keys())
             for doc, secs in raw_targets.items():
                 normalized_doc, doc_repair = _normalize_catalog_name(str(doc), valid_docs)
                 if not normalized_doc:
@@ -812,7 +859,7 @@ class QueryRouter:
                 if doc_repair:
                     route_repairs.append({"from": str(doc), "to": normalized_doc, "type": "document"})
                     print(f"[路由] ℹ️ 文档名已归一化：{doc_repair}", flush=True)
-                known = {s["name"] for s in DOCUMENT_CATALOG.get(normalized_doc, {}).get("sections", [])}
+                known = {s["name"] for s in self.document_catalog.get(normalized_doc, {}).get("sections", [])}
                 valid = []
                 unknown = []
                 for sec in secs or []:
@@ -1220,7 +1267,7 @@ class QueryRouter:
         best_sections = []
         best_doc_score = 0
 
-        for doc_name, doc_info in DOCUMENT_CATALOG.items():
+        for doc_name, doc_info in self.document_catalog.items():
             doc_sections = []
             doc_total = 0
 
@@ -1253,7 +1300,7 @@ class QueryRouter:
 
         if not best_doc or not best_sections:
             if target_services:
-                evidence_targets = _diagnosis_evidence_targets() if "diagnosis-query" in target_services else {}
+                evidence_targets = _diagnosis_evidence_targets(self.document_catalog) if "diagnosis-query" in target_services else {}
                 flat_sections = list(dict.fromkeys(
                     section for sections in evidence_targets.values() for section in sections
                 ))
@@ -1285,7 +1332,7 @@ class QueryRouter:
         simple_reason = {}
         for s in best_sections:
             sec_purpose = ""
-            for sec in DOCUMENT_CATALOG.get(best_doc, {}).get("sections", []):
+            for sec in self.document_catalog.get(best_doc, {}).get("sections", []):
                 if sec["name"] == s[0]:
                     sec_purpose = sec.get("purpose", "")
                     break

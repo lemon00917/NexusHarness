@@ -17,6 +17,8 @@
         }
         .mf-topbar .mf-back { color: var(--text-dim); text-decoration: none; font-size: 12px; padding: 5px 10px; border-radius: var(--radius-sm); transition: all .15s; }
         .mf-topbar .mf-back:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+        .mf-topbar .mf-config { color: var(--text-secondary); text-decoration: none; font-size: 11px; padding: 5px 10px; border-radius: var(--radius-sm); transition: all .15s; white-space: nowrap; }
+        .mf-topbar .mf-config:hover { background: var(--bg-tertiary); color: var(--accent); }
         .mf-topbar .mf-logo { font-size: 14px; font-weight: 600; color: var(--text-primary); letter-spacing: -.2px; display: flex; align-items: center; gap: 8px; }
         .mf-topbar .mf-logo-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
         .mf-topbar .mf-spacer { flex: 1; }
@@ -434,6 +436,7 @@
         <input id="inputGlobalPatientId" placeholder="全局患者ID" style="width:110px;padding:4px 8px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;color:var(--text-primary);font-size:11px;font-family:var(--font-body);outline:none;" oninput="onParamChange()" onchange="onParamChange()">
         <input id="inputVisitNo" placeholder="就诊号" style="width:100px;padding:4px 8px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;color:var(--text-primary);font-size:11px;font-family:var(--font-body);outline:none;" oninput="onParamChange()" onchange="onParamChange()">
         <input id="inputGlobalVisitId" placeholder="全局就诊号" style="width:110px;padding:4px 8px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;color:var(--text-primary);font-size:11px;font-family:var(--font-body);outline:none;" oninput="onParamChange()" onchange="onParamChange()">
+        <a class="mf-config" href="/templates/medical_config.html" title="配置病历元数据来源">元数据配置</a>
         <span class="mf-patient-badge" id="patientBadge" onclick="toggleDrawer('patientDrawer','patientOverlay')">
             <span id="patientBadgeText">📁</span>
         </span>

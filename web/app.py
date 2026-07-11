@@ -25,7 +25,7 @@ from typing import Optional
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastapi import FastAPI, Request, UploadFile, Form
+from fastapi import FastAPI, HTTPException, Request, UploadFile, Form
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
@@ -2390,17 +2390,20 @@ async def get_field_catalog():
 
 
 @app.get("/api/medical/catalog-config")
-async def get_catalog_config():
-    """Get the editable DOCUMENT_CATALOG config."""
+async def get_catalog_config(effective: bool = False):
+    """Get the local editable catalog or the currently effective merged catalog."""
+    if effective:
+        from microharness.medical.query_router import DOCUMENT_CATALOG
+        return DOCUMENT_CATALOG
+
     config_path = PROJECT_ROOT / "configs" / "medical_catalog.json"
     if config_path.exists():
         try:
             return json.loads(config_path.read_text(encoding="utf-8"))
         except Exception:
             pass
-    # Return current in-code catalog
-    from microharness.medical.query_router import DOCUMENT_CATALOG
-    return DOCUMENT_CATALOG
+    from microharness.medical.query_router import _DEFAULT_DOCUMENT_CATALOG
+    return _DEFAULT_DOCUMENT_CATALOG
 
 
 @app.post("/api/medical/catalog-config")
@@ -2409,10 +2412,39 @@ async def save_catalog_config(request: Request):
     data = await request.json()
     config_path = PROJECT_ROOT / "configs" / "medical_catalog.json"
     config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    # Reload into the router module
     import microharness.medical.query_router as qr
-    qr.DOCUMENT_CATALOG = data
-    return {"status": "saved"}
+    source_status = qr.reload_document_catalog()
+    return {"status": "saved", "source_status": source_status}
+
+
+@app.get("/api/medical/catalog-source")
+async def get_catalog_source():
+    """Get the configured and currently effective medical metadata source."""
+    from microharness.medical.catalog_source import load_source_config
+    import microharness.medical.query_router as qr
+
+    return {
+        **load_source_config(),
+        "status": dict(qr.CATALOG_SOURCE_STATUS),
+    }
+
+
+@app.post("/api/medical/catalog-source")
+async def set_catalog_source(request: Request):
+    """Persist and immediately activate the selected medical metadata source."""
+    from microharness.medical.catalog_source import save_source_config
+    import microharness.medical.query_router as qr
+
+    data = await request.json()
+    try:
+        settings = save_source_config(
+            source=data.get("source"),
+            external_url=data.get("external_url"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    status = qr.reload_document_catalog()
+    return {"status": "saved", **settings, "source_status": status}
 
 
 @app.get("/api/medical/binding-result/{register_no}/{filename}")
@@ -3266,7 +3298,8 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                        judge_model: str, router_model: str,
                        planner_model: str = None) -> dict:
     """All blocking LLM/DB work runs in thread pool so other endpoints stay responsive."""
-    from microharness.medical.query_router import QueryRouter
+    import microharness.medical.query_router as medical_query_router
+    QueryRouter = medical_query_router.QueryRouter
     from microharness.medical.field_catalog import get_catalog
     import sys
     log = lambda msg: (print(msg, flush=True), sys.stdout.flush())
@@ -3289,7 +3322,6 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 return f"{m.group(1)}条记录"
         return f"{len(results)}组结果"
     original_condition = condition
-
     try:
         from microharness.agent.query_normalizer import normalize_query
         _normalization = normalize_query(condition, model=router_model)
@@ -3335,32 +3367,40 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
         from microharness.medical.evidence import judgment_status
         return judgment_status(matched, reason, per_condition)
 
-    # ═══════════════════════════════════════════════════════════════════
-    # Stage 0: Unified Query Understanding (1 LLM call replaces 4 stages)
-    # Merges: analyze_query + router.route + _decompose_semantic + match_services
-    # ═══════════════════════════════════════════════════════════════════
-    from microharness.agent.query_understanding import understand_query
-    from microharness.medical.query_ir import build_query_ir
-    analysis = understand_query(condition, model=router_model)
-    analysis = _repair_analysis_structure(analysis, condition)
-    _query_ir = build_query_ir(analysis, condition)
-
+    # Reject requests outside the medical-filter capability before loading
+    # metadata or invoking the query-understanding model.
     from microharness.medical.scope_guard import (
         build_scope_rejection_response,
         evaluate_medical_filter_scope,
     )
-    _scope_decision = evaluate_medical_filter_scope(condition, analysis)
+    _scope_decision = evaluate_medical_filter_scope(condition)
     if not _scope_decision.allowed:
         log(f"[ScopeGuard] rejected: {_scope_decision.code} ({_scope_decision.signals})")
         _scope_result = build_scope_rejection_response(
             condition,
             _scope_decision,
             original_condition=original_condition,
-            query_ir=_query_ir.to_dict(),
         )
         if _normalization is not None:
             _scope_result["\u67e5\u8be2\u5f52\u4e00\u5316"] = _normalization.to_dict()
         return _sanitize_response(_scope_result)
+
+    query_document_catalog, source_status = medical_query_router.reload_document_catalog_snapshot()
+    log(medical_query_router.format_catalog_source_log("[病历筛选元数据实时刷新]", source_status))
+
+    # ═══════════════════════════════════════════════════════════════════
+    # Stage 0: Unified Query Understanding (1 LLM call replaces 4 stages)
+    # Merges: analyze_query + router.route + _decompose_semantic + match_services
+    # ═══════════════════════════════════════════════════════════════════
+    from microharness.agent.query_understanding import understand_query
+    from microharness.medical.query_ir import build_query_ir
+    analysis = understand_query(
+        condition,
+        model=router_model,
+        document_catalog=query_document_catalog,
+    )
+    analysis = _repair_analysis_structure(analysis, condition)
+    _query_ir = build_query_ir(analysis, condition)
 
     # Negation
     _negate = analysis.get("negated", False)
@@ -3636,7 +3676,10 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
 
             # Fallback: if analysis had no routing (e.g. fallback source), use keyword router
             if not sq_docs:
-                router = QueryRouter(model=router_model)
+                router = QueryRouter(
+                    model=router_model,
+                    document_catalog=query_document_catalog,
+                )
                 fallback_route = router.route(sq)
                 sq_docs = fallback_route.get("target_medical_doc", [])
                 sq_sections = fallback_route.get("target_sections", [])

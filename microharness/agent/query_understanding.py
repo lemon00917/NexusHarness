@@ -27,7 +27,7 @@ def _understanding_debug(message: str) -> None:
 
 
 def understand_query(condition: str, model: str = "qwen2.5:3b",
-                     timeout: int = 60) -> dict:
+                     timeout: int = 60, document_catalog: dict | None = None) -> dict:
     """Analyze a medical query in a single LLM call.
 
     Uses the provided model (default qwen2.5:3b for best Chinese instruction following).
@@ -58,7 +58,7 @@ def understand_query(condition: str, model: str = "qwen2.5:3b",
     # ═══════════════════════════════════════════════════════════
     # Build compact catalogs for the prompt
     # ═══════════════════════════════════════════════════════════
-    doc_catalog = _build_compact_catalog()
+    doc_catalog = _build_compact_catalog(document_catalog)
     skills_menu = _build_skills_menu()
 
     # ═══════════════════════════════════════════════════════════
@@ -109,12 +109,13 @@ def understand_query(condition: str, model: str = "qwen2.5:3b",
         return _fallback_understand(condition, model)
 
 
-def _build_compact_catalog() -> dict:
+def _build_compact_catalog(document_catalog: dict | None = None) -> dict:
     """Build compact DOCUMENT_CATALOG for prompt injection."""
     from microharness.medical.query_router import DOCUMENT_CATALOG
 
+    source_catalog = document_catalog if document_catalog is not None else DOCUMENT_CATALOG
     compact = {}
-    for doc_name, doc_info in DOCUMENT_CATALOG.items():
+    for doc_name, doc_info in source_catalog.items():
         sections = {}
         for sec in doc_info.get("sections", []):
             sec_name = sec.get("name", "")

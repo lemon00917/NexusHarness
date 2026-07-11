@@ -26,6 +26,9 @@
         .dc-test { font-size: 11px; padding: 4px 10px; border-radius: 6px; margin-left: 8px; }
         .dc-test.ok { background: rgba(34,197,94,.12); color: var(--accent-green); }
         .dc-test.fail { background: rgba(239,68,68,.12); color: var(--accent-red); }
+        .dc-help { margin: -4px 0 12px 112px; color: var(--text-dim); font-size: 11px; line-height: 1.6; }
+        .dc-help a { color: var(--accent); text-decoration: none; }
+        .dc-help a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -70,6 +73,21 @@
         <div id="servicesList"></div>
         <button class="btn btn-ghost" onclick="addService()" style="width:100%;margin-top:8px;">+ 添加服务</button>
     </div>
+    <div class="dc-card" id="medicalCatalogCard">
+        <h3>病历元数据接口</h3>
+        <div class="dc-row">
+            <label>接口 URL</label>
+            <input id="medicalCatalogUrl" type="url" placeholder="http://localhost:8006/cdr-api/standard/doc/template/node/customselect">
+        </div>
+        <div class="dc-row">
+            <label>当前来源</label>
+            <span id="medicalCatalogSource" style="font-size:12px;color:var(--text-secondary);">读取中...</span>
+        </div>
+        <div class="dc-help">
+            URL 保存后立即生效。来源切换及外部数据状态请前往
+            <a href="/templates/medical_config.html">病历元数据配置</a>。
+        </div>
+    </div>
     <div class="dc-save">
         <button class="btn btn-ghost" onclick="loadAll()">🔄 重新加载</button>
         <button class="btn btn-primary" onclick="saveAll()">💾 保存配置</button>
@@ -77,6 +95,7 @@
 </div>
 <script>
 let _services = { base_url: '', services: {} };
+let _medicalCatalog = { source: 'local', external_url: '' };
 
 async function loadAll() {
     // Load DB config
@@ -102,6 +121,13 @@ async function loadAll() {
     document.getElementById('svcBaseUrl').value = _services.base_url||'';
     _services.services = _services.services || {};
     renderServices();
+    // Load medical catalog source without changing the active source.
+    const mr = await fetch('/api/medical/catalog-source');
+    if (!mr.ok) throw new Error(`病历元数据配置读取失败 (${mr.status})`);
+    _medicalCatalog = await mr.json();
+    document.getElementById('medicalCatalogUrl').value = _medicalCatalog.external_url || '';
+    document.getElementById('medicalCatalogSource').textContent =
+        _medicalCatalog.source === 'external' ? '外部接口' : '本地配置';
     showToast('已加载');
 }
 async function saveAll() {
@@ -114,7 +140,24 @@ async function saveAll() {
     // Save services
     _services.base_url = document.getElementById('svcBaseUrl').value;
     await fetch('/api/external-services/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({base_url: _services.base_url, services: _services.services || {}})});
-    showToast('✅ 配置已保存，重启生效');
+    // Persist the URL while preserving the source selected on the metadata page.
+    const catalogResponse = await fetch('/api/medical/catalog-source', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+            source: _medicalCatalog.source || 'local',
+            external_url: document.getElementById('medicalCatalogUrl').value.trim()
+        })
+    });
+    const catalogResult = await catalogResponse.json();
+    if (!catalogResponse.ok) {
+        showToast(catalogResult.detail || `病历元数据接口保存失败 (${catalogResponse.status})`);
+        return;
+    }
+    _medicalCatalog = {..._medicalCatalog, ...catalogResult};
+    document.getElementById('medicalCatalogSource').textContent =
+        _medicalCatalog.source === 'external' ? '外部接口' : '本地配置';
+    showToast('配置已保存；病历元数据接口立即生效，数据库配置重启生效');
 }
 
 function renderServices() {
