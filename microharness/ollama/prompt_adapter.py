@@ -355,7 +355,8 @@ def build_service_router_prompt(profile: ModelProfile, condition: str,
 # ═══════════════════════════════════════════════════════════════
 
 def build_query_understanding_prompt(profile: ModelProfile, condition: str,
-                                     doc_catalog: dict, skills_menu: list) -> str:
+                                     doc_catalog: dict, skills_menu: list,
+                                     retry_feedback: str = "") -> str:
     """Build a unified query understanding prompt.
 
     Catalog is presented as readable text (not JSON) so the LLM can scan and pick
@@ -393,11 +394,19 @@ def build_query_understanding_prompt(profile: ModelProfile, condition: str,
             svc_lines.append(f"返回字段：{returns}")
         svc_lines.append("")
     svc_text = "\n".join(svc_lines)
+    correction_text = ""
+    if retry_feedback:
+        correction_text = (
+            "\n## 上一次输出需要修正\n"
+            f"{retry_feedback}\n"
+            "必须重新分析原句并补齐这些字段，不要照抄上一次结果。\n"
+        )
 
     if profile.thinking == "native":
         return f"""分析医学查询。阅读下方的病历文档目录和外部服务菜单，判断查询类型并选择路由目标。
 
 查询：{condition}
+{correction_text}
 
 ## 病历文档及章节
 {docs_text}
@@ -419,13 +428,19 @@ def build_query_understanding_prompt(profile: ModelProfile, condition: str,
 11. target_sections: 在选定文档的章节中选择相关章节，章节名必须逐字复制
 12. target_skills: 阅读上方各服务的"描述"和"触发词"，选择相关服务id列表，无则[]
 13. 语义归一规则："有X/患有X/存在X/诊断为X/诊断有X/有诊断有X"都是诊断存在类，entity=X，entity_type=diagnosis，target_skills必须包含diagnosis-query
+14. domain: 条件所属通用领域，如demographic/encounter/diagnosis/symptom/clinical_sign/medication/laboratory/procedure/document_semantic/clinical_concept
+15. temporal: 时间约束对象；无则null。有则输出scope、event、relation、duration、unit、selection、raw。event使用通用事件语义，不得填文档名
+16. assertion: 断言对象，输出present、certainty(confirmed/suspected)、subject(patient/family)、temporal_context(current/history)
+17. quantifier: 次数或序列约束；无则null。有则输出mode(at_least/more_than/exact/consecutive/first/last/any)、count、unit
+18. depends_on: 依赖的事件写成["event:事件名"]，无依赖为[]；attributes保存剂量、途径、部位、程度等未被固定字段表达的属性
 
 输出JSON：
-{{"reasoning":"简述推理","type":"simple","negated":false,"connector":null,"conditions":[{{"text":"子条件原文","entity":"医学实体","entity_type":"diagnosis","predicate":"exists","keyword":"核心概念","modifiers":[],"is_numeric":false,"target_docs":["文档名"],"target_sections":["章节名"],"target_skills":["skill-id"]}}]}}"""
+{{"reasoning":"简述推理","type":"simple","negated":false,"connector":null,"conditions":[{{"text":"子条件原文","entity":"医学实体","entity_type":"diagnosis","domain":"diagnosis","predicate":"exists","keyword":"核心概念","temporal":null,"assertion":{{"present":true,"certainty":"confirmed","subject":"patient","temporal_context":"current"}},"quantifier":null,"depends_on":[],"attributes":{{}},"modifiers":[],"is_numeric":false,"target_docs":["文档名"],"target_sections":["章节名"],"target_skills":["skill-id"]}}]}}"""
     else:
         return f"""分析医学查询。阅读下方的病历文档目录和外部服务菜单，判断类型并选择路由。
 
 查询：{condition}
+{correction_text}
 
 ## 病历文档及章节
 {docs_text}
@@ -447,6 +462,11 @@ def build_query_understanding_prompt(profile: ModelProfile, condition: str,
 11. target_sections: 阅读章节说明选择，章节名逐字复制
 12. target_skills: 阅读服务描述和触发词选择服务id，无则[]
 13. "有X/患有X/存在X/诊断为X/诊断有X/有诊断有X"都是诊断存在类，entity=X，entity_type=diagnosis，target_skills包含diagnosis-query
-14. ⚠️ simple类型conditions数组只有1个元素
+14. domain: 通用领域，如demographic/encounter/diagnosis/symptom/clinical_sign/medication/laboratory/procedure/document_semantic/clinical_concept
+15. temporal: 无时间约束为null；否则输出scope/event/relation/duration/unit/selection/raw，event不得填文档名
+16. assertion: 输出present/certainty/subject/temporal_context
+17. quantifier: 无次数约束为null；否则输出mode/count/unit
+18. depends_on: 事件依赖格式为["event:事件名"]，无则[]；attributes保存剂量、途径、部位、程度等扩展属性
+19. ⚠️ simple类型conditions数组只有1个元素
 
-只输出JSON："""
+只输出JSON，conditions每项必须包含domain、temporal、assertion、quantifier、depends_on、attributes："""

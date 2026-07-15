@@ -6,6 +6,10 @@ description: |
 metadata:
   emoji: "🏥"
   safety: AUTO_APPROVE
+  semantic:
+    entity_type: encounter
+    domain: encounter
+    evidence_types: [encounter_evidence, demographic_evidence]
   triggers: ["就诊","住院","出院","入院","就诊科室","就诊医生","病区","就诊状态","就诊类型","科室","病房","住院天数","入院日期","出院日期"]
   api:
     url: SerachQuery/MES0002

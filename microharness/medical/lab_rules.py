@@ -19,8 +19,8 @@ from microharness.medical.temporal_parser import (
     normalize_numeric_text,
     operator_display,
     parse_measurement_value,
-    parse_numeric_comparison,
 )
+from microharness.medical.query_ir_validator import parse_executable_numeric_comparison
 from microharness.medical.display_text import display_status
 from microharness.medical.time_window import TimeWindow, parse_datetime_value, requires_period_window
 
@@ -160,6 +160,7 @@ def _condition_without_time_scope(condition: str) -> str:
         "",
         text,
     )
+    text = re.sub(rf"(?:入院|出院)\s*{duration}\s*(?:内|之内)", "", text)
     text = re.sub(r"(?:入院前|入院后|出院前|出院后|术前|术后|手术前|手术后)", "", text)
     return text.strip()
 
@@ -180,7 +181,7 @@ def extract_lab_keyword(condition: str) -> str:
         if lab_clauses:
             condition = max(lab_clauses, key=len)
     value_condition = _condition_without_time_scope(condition)
-    parsed = parse_numeric_comparison(value_condition)
+    parsed = parse_executable_numeric_comparison(value_condition)
     text = parsed.subject if parsed else value_condition
     scope_match = list(re.finditer(r"(住院期间|住院期内|入院前|入院后|出院前|出院后|术前|术后|手术前|手术后)", text))
     if scope_match:
@@ -283,13 +284,13 @@ def _condition_expects_scientific_volume(condition: str) -> bool:
     text = _condition_without_time_scope(condition)
     return bool(
         re.search(r"(?:x|\*)\s*10(?:\s*\^\s*[+-]?\d+|[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+)", text)
-        and ("/" in text or re.search(r"[Ll升]", text) or parse_numeric_comparison(text))
+        and ("/" in text or re.search(r"[Ll升]", text) or parse_executable_numeric_comparison(text))
     )
 
 
 def _filter_by_numeric_dimension(condition: str, records: list[LabRecord]) -> list[LabRecord]:
     value_condition = _condition_without_time_scope(condition)
-    if not records or not parse_numeric_comparison(value_condition):
+    if not records or not parse_executable_numeric_comparison(value_condition):
         return records
     if not _condition_expects_scientific_volume(value_condition):
         return records
@@ -420,7 +421,7 @@ def _qualitative_wanted(condition: str) -> str:
 
 def _record_satisfies(record: LabRecord, condition: str) -> tuple[bool, str]:
     value_condition = _condition_without_time_scope(condition)
-    cmp_info = parse_numeric_comparison(value_condition)
+    cmp_info = parse_executable_numeric_comparison(value_condition)
     if cmp_info:
         value = _record_numeric_value(record)
         if value is None:
@@ -553,7 +554,7 @@ def judge_lab_condition(
     keyword = extract_lab_keyword(condition)
     value_condition = _condition_without_time_scope(condition)
     has_lab_predicate = bool(
-        parse_numeric_comparison(value_condition)
+        parse_executable_numeric_comparison(value_condition)
         or _wanted_status(value_condition)
         or _qualitative_wanted(value_condition)
     )

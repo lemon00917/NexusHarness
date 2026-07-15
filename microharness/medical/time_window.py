@@ -233,7 +233,7 @@ def _clean_label(label: str) -> str:
     return label
 
 
-def extract_encounter_window(service_results: list[dict[str, Any]]) -> TimeWindow:
+def _extract_encounter_bounds(service_results: list[dict[str, Any]]) -> tuple[Optional[datetime], Optional[datetime]]:
     start_date = start_time = end_date = end_time = ""
     for binding in _iter_bindings(service_results):
         label = _clean_label(str(binding.get("html_field") or ""))
@@ -252,6 +252,11 @@ def extract_encounter_window(service_results: list[dict[str, Any]]) -> TimeWindo
 
     start = parse_datetime_value(start_date, start_time)
     end = parse_datetime_value(end_date, end_time) if end_date or end_time else None
+    return start, end
+
+
+def extract_encounter_window(service_results: list[dict[str, Any]]) -> TimeWindow:
+    start, end = _extract_encounter_bounds(service_results)
     if not start:
         return TimeWindow(scope="住院期间", source="encounter-info", required=True, reason="缺少入院时间")
     return TimeWindow(scope="住院期间", start=start, end=end, source="encounter-info", required=True)
@@ -288,31 +293,31 @@ def extract_event_anchor_window(condition: str, records: list[dict[str, Any]], p
 
 
 def extract_encounter_anchor_window(condition: str, service_results: dict[str, list]) -> TimeWindow:
-    encounter = extract_encounter_window((service_results or {}).get("encounter-info", []))
-    if not encounter.resolved:
-        return TimeWindow(scope="就诊时间锚点", source=encounter.source, required=True, reason=encounter.reason)
+    start, end = _extract_encounter_bounds((service_results or {}).get("encounter-info", []))
     text = condition or ""
     if "入院" in text:
+        if not start:
+            return TimeWindow(scope="入院时间锚点", source="encounter-info", required=True, reason="缺少入院时间")
         return TimeWindow(
             scope="入院时间锚点",
-            start=encounter.start,
-            end=encounter.start,
-            source=encounter.source,
+            start=start,
+            end=start,
+            source="encounter-info",
             required=True,
             reason="使用就诊信息的入院日期时间",
         )
     if "出院" in text:
-        if not encounter.end:
-            return TimeWindow(scope="出院时间锚点", source=encounter.source, required=True, reason="缺少出院时间，可能仍在住院")
+        if not end:
+            return TimeWindow(scope="出院时间锚点", source="encounter-info", required=True, reason="缺少出院时间，可能仍在住院")
         return TimeWindow(
             scope="出院时间锚点",
-            start=encounter.end,
-            end=encounter.end,
-            source=encounter.source,
+            start=end,
+            end=end,
+            source="encounter-info",
             required=True,
             reason="使用就诊信息的出院日期时间",
         )
-    return TimeWindow(scope="就诊时间锚点", source=encounter.source, required=True, reason="未识别入院/出院锚点")
+    return TimeWindow(scope="就诊时间锚点", source="encounter-info", required=True, reason="未识别入院/出院锚点")
 
 
 def _offset_window_from_event(condition: str, event: TimeWindow, aliases: list[str] | None = None) -> TimeWindow:

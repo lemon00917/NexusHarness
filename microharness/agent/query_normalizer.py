@@ -201,6 +201,12 @@ def _comparison_signatures_preserved(deterministic: str, candidate: str) -> bool
     return True
 
 
+def _temporal_quantities_preserved(deterministic: str, candidate: str) -> bool:
+    from microharness.medical.query_ir_validator import temporal_quantity_signatures
+
+    return temporal_quantity_signatures(deterministic) == temporal_quantity_signatures(candidate)
+
+
 def _safe_accept_llm(original: str, deterministic: str, candidate: str, confidence: float) -> bool:
     if not candidate or not isinstance(candidate, str):
         return False
@@ -242,6 +248,8 @@ def _safe_accept_llm(original: str, deterministic: str, candidate: str, confiden
     if len(re.findall(cmp_pat, candidate)) > len(re.findall(cmp_pat, deterministic)):
         return False
     if not _comparison_signatures_preserved(deterministic, candidate):
+        return False
+    if not _temporal_quantities_preserved(deterministic, candidate):
         return False
     qualitative_markers = ("偏高", "偏低", "升高", "降低", "增高", "减少", "异常", "不正常", "正常")
     if any(marker in deterministic for marker in qualitative_markers):

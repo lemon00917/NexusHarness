@@ -678,7 +678,16 @@ function renderModelSelect(selectId, defaultModel) {
 // ── API ────────────────────────────────────
 async function api(url, opts={}) {
     const r = await fetch(url, {headers:{'Content-Type':'application/json'},...opts});
-    return r.json();
+    const data = await r.json();
+    if (!r.ok) {
+        const detail = data?.detail;
+        const message = data?.error || detail?.message || detail || `请求失败 (${r.status})`;
+        const error = new Error(message);
+        error.status = r.status;
+        error.data = data;
+        throw error;
+    }
+    return data;
 }
 
 // ── Patients ───────────────────────────────
@@ -1062,19 +1071,47 @@ async function runQuery() {
     const condition = document.getElementById('queryInput').value.trim();
     if (!condition || !currentPatientId) return;
     const btn = document.getElementById('querySubmit');
-    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 筛选中...';
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 正在提交...';
     const routerModel = document.getElementById('routerModel')?.value || 'qwen2.5:3b';
     const judgeModel = document.getElementById('judgeModel')?.value || 'qwen2.5:3b';
     const plannerModel = document.getElementById('plannerModel')?.value || '';
+    const requestId = globalThis.crypto?.randomUUID?.() || `medical-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const body = {
         condition, register_no: currentRegisterNo, visit_no: currentVisitNo,
         global_patient_id: currentGlobalPatientId, global_visit_id: currentGlobalVisitId,
-        router_model: routerModel, judge_model: judgeModel
+        router_model: routerModel, judge_model: judgeModel, request_id: requestId
     };
     if (plannerModel) body.planner_model = plannerModel;
-    const data = await api('/api/medical/query', {method:'POST', body:JSON.stringify(body)});
-    showQueryResults(data);
-    btn.disabled = false; btn.innerHTML = '筛选';
+    let polling = false;
+    const pollTimer = setInterval(async () => {
+        if (polling) return;
+        polling = true;
+        try {
+            const state = await api(`/api/medical/query/status?request_id=${encodeURIComponent(requestId)}`);
+            if (state.status === 'waiting') {
+                const ahead = Math.max(0, (state.queue_position || 1) - 1);
+                btn.innerHTML = `<span class="spinner"></span> 排队中，前方 ${ahead} 个`;
+            } else if (state.status === 'running') {
+                btn.innerHTML = '<span class="spinner"></span> 筛选中...';
+            }
+        } catch (_) {
+            // The POST remains authoritative; transient status polling errors are ignored.
+        } finally {
+            polling = false;
+        }
+    }, 1000);
+
+    try {
+        const data = await api('/api/medical/query', {method:'POST', body:JSON.stringify(body)});
+        showQueryResults(data);
+    } catch (error) {
+        const results = document.getElementById('resultsArea');
+        results.innerHTML = `<div class="mf-empty"><p style="color:var(--accent-red);">${esc(error.message)}</p></div>`;
+    } finally {
+        clearInterval(pollTimer);
+        btn.disabled = false;
+        btn.innerHTML = '筛选';
+    }
 }
 
 function showQueryResults(data) {

@@ -76,10 +76,44 @@ NON_DIAGNOSIS_KEYWORDS = {
     "用药", "药物", "医嘱", "检验", "化验", "指标", "检查",
 }
 
-LAB_QUERY_RE = re.compile(
-    r"(检验|化验|指标|结果|参考范围|偏高|偏低|升高|降低|增高|减少|异常|正常|阳性|阴性|计数|"
-    r"血常规|生化|肝功|肾功|电解质|细胞|蛋白|胆固醇|血糖|肌酐|尿素|CRP|WBC|HGB|Hb)",
+LAB_OBSERVATION_RE = re.compile(
+    r"(检验|化验|指标|结果|参考范围|偏高|偏低|升高|降低|增高|异常|正常|阳性|阴性|"
+    r"计数|数值|水平|浓度|大于|小于|高于|低于|不低于|不高于|[<>≤≥=＞＜])",
     re.I,
+)
+
+LAB_EXPLICIT_INTENT_RE = re.compile(
+    r'(检验|化验|检验指标|化验指标|指标|参考范围|检验结果|化验结果|血常规|生化|肝功|肾功|电解质)',
+    re.I,
+)
+
+LAB_MEASUREMENT_UNIT_RE = re.compile(
+    r'(?:[x×*]\s*10(?:\^)?[³⁶⁹369]?\s*/\s*[Ll]|'
+    r'(?:mmol|μmol|umol|mol|g|mg|μg|ug|ng|pg|U|IU)\s*/\s*(?:[Ll]|d[Ll]))',
+    re.I,
+)
+
+AGE_COMPARISON_RE = re.compile(
+    r'(?:^|[^一-龥])(?:年龄\s*)?(?:\d+(?:\.\d+)?|[零〇一二两三四五六七八九十百]+)\s*岁\s*'
+    r'(?:以上|以下|及以上|及以下|[<>≤≥=＞＜])|'
+    r'年龄\s*(?:大于|小于|高于|低于|超过|不少于|不低于|不超过|至少|至多|[<>≤≥=＞＜])',
+    re.I,
+)
+
+LAB_GENERIC_TRIGGERS = {
+    '检验', '化验', '检验指标', '化验指标', '指标', '结果', '异常', '正常',
+    '偏高', '偏低', '升高', '降低', '增高', '减少', '高于', '低于', '大于', '小于',
+    '不低于', '不高于', '参考范围', '阳性', '阴性', '计数', '数值', '水平', '浓度',
+}
+
+EXPLICIT_DIAGNOSIS_INTENT_RE = re.compile(
+    r"(诊断为|确诊为|患有|疾病|病症|综合征|(?:^|[，,；;\s]).+症(?:的患者)?$)"
+)
+
+EXPLICIT_MEDICATION_ACTION_RE = re.compile(
+    r"(?:开药|开立(?:过)?|开具(?:过)?|下达(?:过)?医嘱|下过医嘱|"
+    r"开(?:过|了)(?![^，,。；;]{0,4}(?:手术|刀))|"
+    r"服用|服过|吃过|吃了|使用过|用过|给药|注射|输注|停药|停用)"
 )
 
 OUTCOME_PATTERNS = [
@@ -184,9 +218,54 @@ def is_lab_result_condition(condition: str, cond: dict | None = None) -> bool:
     text = str(condition or "")
     if not text:
         return False
-    if any(svc in ((cond or {}).get("target_skills") or []) for svc in ("drug-interaction", "diagnosis-query")):
+
+    cond = cond or {}
+    skills = set(cond.get("target_skills") or [])
+    entity_type = str(cond.get("entity_type") or "").lower()
+    domain = str(cond.get("domain") or "").lower()
+    semantic_class = str(cond.get("semantic_class") or "")
+
+    if has_explicit_medication_action(text):
         return False
-    return bool(LAB_QUERY_RE.search(text))
+
+    # Numeric syntax is shared by demographics, encounter duration, laboratory
+    # results and many other domains. These established structural conditions
+    # must win even when a small model labels them as laboratory conditions.
+    if is_duration_comparison(text) or AGE_COMPARISON_RE.search(text):
+        return False
+    if entity_type in {"age", "demographic", "encounter"} or domain in {"demographic", "encounter"}:
+        return False
+
+    trusted_lab_route = (
+        "lab-results" in skills
+        or entity_type in {"lab", "laboratory"}
+        or domain == "laboratory"
+        or "检验" in semantic_class
+    )
+
+    observation_intent = bool(LAB_OBSERVATION_RE.search(text))
+    explicit_lab_intent = bool(LAB_EXPLICIT_INTENT_RE.search(text))
+    explicit_diagnosis_intent = bool(EXPLICIT_DIAGNOSIS_INTENT_RE.search(text))
+    lab_concept_match = _service_concept_trigger_match("lab-results", text)
+    measurement_value = bool(is_numeric_comparison(text) and LAB_MEASUREMENT_UNIT_RE.search(text))
+
+    # A diagnosis name may contain a laboratory concept, for example a
+    # disease ending in “症”. Keep explicit disease-existence queries on the
+    # diagnosis service unless the user also supplied an observation/value
+    # predicate. A wrong diagnosis-query emitted by the LLM alone must not
+    # block deterministic laboratory repair.
+    if explicit_diagnosis_intent and not explicit_lab_intent and not measurement_value:
+        return False
+    if "drug-interaction" in skills and not explicit_lab_intent and not measurement_value:
+        return False
+
+    if trusted_lab_route:
+        return True
+    return bool(
+        explicit_lab_intent
+        or measurement_value
+        or (lab_concept_match and observation_intent)
+    )
 
 
 def _service_metadata(service_id: str) -> dict:
@@ -205,10 +284,30 @@ def _service_trigger_match(service_id: str, text: str) -> bool:
     return any(str(token) and str(token) in str(text or "") for token in triggers)
 
 
+def _service_concept_trigger_match(service_id: str, text: str) -> bool:
+    """Match entity-like service triggers, excluding generic predicates."""
+    metadata = _service_metadata(service_id)
+    triggers = metadata.get("triggers") or []
+    normalized = str(text or "").lower()
+    return any(
+        str(token)
+        and str(token) not in LAB_GENERIC_TRIGGERS
+        and str(token).lower() in normalized
+        for token in triggers
+    )
+
+
+def has_explicit_medication_action(condition: str) -> bool:
+    """Return whether the text explicitly describes a medication action."""
+    return bool(EXPLICIT_MEDICATION_ACTION_RE.search(str(condition or "")))
+
+
 def is_drug_use_condition(condition: str, cond: dict | None = None) -> bool:
     text = str(condition or "")
     if not text:
         return False
+    if has_explicit_medication_action(text):
+        return True
     if any(svc in ((cond or {}).get("target_skills") or []) for svc in ("lab-results", "diagnosis-query")):
         return False
     if (cond or {}).get("entity_type") == "drug":
@@ -447,11 +546,19 @@ def augment_analysis_routes(analysis: dict, original_condition: str, fallback_ke
     for cond in analysis.get("conditions", []) or []:
         sq = cond.get("text") or original_condition
         if is_duration_comparison(sq):
+            cond["target_skills"] = [
+                service_id
+                for service_id in (cond.get("target_skills") or [])
+                if service_id not in {"lab-results", "drug-interaction", "diagnosis-query"}
+            ]
             cond["target_docs"] = append_unique(cond.get("target_docs", []), DURATION_CLASS.docs)
             cond["target_sections"] = append_unique(cond.get("target_sections", []), DURATION_CLASS.sections)
             cond["target_skills"] = append_unique(cond.get("target_skills", []), DURATION_CLASS.services)
             cond["keyword"] = DURATION_CLASS.keyword
             cond["is_numeric"] = True
+            cond["entity_type"] = "encounter"
+            cond["domain"] = "encounter"
+            cond["predicate"] = "compare"
             cond["semantic_class"] = DURATION_CLASS.name
 
         if is_outcome_state_condition(sq, original_condition):
@@ -483,7 +590,10 @@ def augment_analysis_routes(analysis: dict, original_condition: str, fallback_ke
             cond["predicate"] = cond.get("predicate") or "history"
             cond["semantic_class"] = PRE_ADMISSION_CLASS.name
 
-        if should_route_to_diagnosis_service(sq, cond):
+        explicit_medication_action = has_explicit_medication_action(sq)
+        lab_result_condition = is_lab_result_condition(sq, cond)
+
+        if not explicit_medication_action and not lab_result_condition and should_route_to_diagnosis_service(sq, cond):
             cond["target_docs"] = append_unique(cond.get("target_docs", []), DIAGNOSIS_EXISTENCE_CLASS.docs)
             cond["target_sections"] = append_unique(cond.get("target_sections", []), DIAGNOSIS_EXISTENCE_CLASS.sections)
             cond["target_skills"] = append_unique(cond.get("target_skills", []), DIAGNOSIS_EXISTENCE_CLASS.services)
@@ -498,19 +608,51 @@ def augment_analysis_routes(analysis: dict, original_condition: str, fallback_ke
                 cond["semantic_class"] = DIAGNOSIS_EXISTENCE_CLASS.name
 
         if is_drug_use_condition(sq, cond):
+            from .medication_rules import infer_medication_predicate
+
             drug_semantic = _service_metadata("drug-interaction").get("semantic") or {}
+            if explicit_medication_action:
+                cond["target_skills"] = [
+                    service_id
+                    for service_id in (cond.get("target_skills") or [])
+                    if service_id not in {"diagnosis-query", "lab-results"}
+                ]
+                cond["target_docs"] = [
+                    doc
+                    for doc in (cond.get("target_docs") or [])
+                    if doc not in DIAGNOSIS_EXISTENCE_CLASS.docs or doc in str(sq)
+                ]
+                cond["target_sections"] = [
+                    section
+                    for section in (cond.get("target_sections") or [])
+                    if section not in DIAGNOSIS_LIKE_SECTIONS or section in str(sq)
+                ]
             cond["target_skills"] = append_unique(cond.get("target_skills", []), DRUG_USE_CLASS.services)
             if fallback_keyword_fn:
                 kw = fallback_keyword_fn(sq)
                 if kw:
                     cond["keyword"] = kw
                     cond["entity"] = cond.get("entity") or kw
-            cond["entity_type"] = cond.get("entity_type") or drug_semantic.get("entity_type") or "drug"
-            cond["predicate"] = cond.get("predicate") or drug_semantic.get("predicate") or "used"
-            if not cond.get("semantic_class"):
-                cond["semantic_class"] = drug_semantic.get("semantic_class") or DRUG_USE_CLASS.name
+            cond["entity_type"] = drug_semantic.get("entity_type") or "drug"
+            cond["predicate"] = infer_medication_predicate(sq, cond.get("predicate") or drug_semantic.get("predicate"))
+            cond["semantic_class"] = drug_semantic.get("semantic_class") or DRUG_USE_CLASS.name
 
-        if is_lab_result_condition(sq, cond):
+        if lab_result_condition:
+            cond["target_skills"] = [
+                service_id
+                for service_id in (cond.get("target_skills") or [])
+                if service_id not in {"diagnosis-query", "drug-interaction"}
+            ]
+            cond["target_docs"] = [
+                doc
+                for doc in (cond.get("target_docs") or [])
+                if doc not in DIAGNOSIS_EXISTENCE_CLASS.docs or doc in str(sq)
+            ]
+            cond["target_sections"] = [
+                section
+                for section in (cond.get("target_sections") or [])
+                if section not in DIAGNOSIS_LIKE_SECTIONS or section in str(sq)
+            ]
             cond["target_skills"] = append_unique(cond.get("target_skills", []), LAB_RESULT_CLASS.services)
             if "住院" in str(sq) or "入院" in str(sq) or "出院" in str(sq):
                 cond["target_skills"] = append_unique(cond.get("target_skills", []), ["encounter-info"])
@@ -518,21 +660,22 @@ def augment_analysis_routes(analysis: dict, original_condition: str, fallback_ke
                 kw = fallback_keyword_fn(sq)
                 if kw:
                     cond["keyword"] = kw
-                    cond["entity"] = cond.get("entity") or kw
-            cond["entity_type"] = cond.get("entity_type") or "lab"
-            if not cond.get("predicate"):
-                if any(token in str(sq) for token in ("偏低", "降低", "低于")):
-                    cond["predicate"] = "low"
-                elif any(token in str(sq) for token in ("偏高", "升高", "增高", "高于")):
-                    cond["predicate"] = "high"
-                elif any(token in str(sq) for token in ("异常", "不正常")):
-                    cond["predicate"] = "abnormal"
-                elif "正常" in str(sq):
-                    cond["predicate"] = "normal"
-                else:
-                    cond["predicate"] = "unknown"
-            if not cond.get("semantic_class"):
-                cond["semantic_class"] = LAB_RESULT_CLASS.name
+                    cond["entity"] = kw
+            cond["entity_type"] = "lab"
+            cond["domain"] = "laboratory"
+            if any(token in str(sq) for token in ("偏低", "降低", "低于")):
+                cond["predicate"] = "low"
+            elif any(token in str(sq) for token in ("偏高", "升高", "增高", "高于")):
+                cond["predicate"] = "high"
+            elif any(token in str(sq) for token in ("异常", "不正常")):
+                cond["predicate"] = "abnormal"
+            elif "正常" in str(sq):
+                cond["predicate"] = "normal"
+            elif is_numeric_comparison(str(sq)):
+                cond["predicate"] = "compare"
+            else:
+                cond["predicate"] = "unknown"
+            cond["semantic_class"] = LAB_RESULT_CLASS.name
     return analysis
 
 

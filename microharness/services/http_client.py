@@ -31,6 +31,84 @@ def _api_log(message: str, debug: bool = False) -> None:
     print(message, flush=True)
 
 
+def _response_preview(value, limit: int = 800) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        text = repr(value)
+    return _clean_log_text(text, limit=limit)
+
+
+def _normalize_response_records(data, skill_id: str) -> list:
+    """Extract record rows and make unsupported response shapes observable."""
+    if not isinstance(data, list):
+        _api_log(
+            f"[外部API][解析异常] {skill_id} 根节点应为list，实际={type(data).__name__} "
+            f"| 响应摘要={_response_preview(data)}"
+        )
+        return []
+    if len(data) != 1 or not isinstance(data[0], dict):
+        return data
+
+    wrapper = data[0]
+    if "data" not in wrapper:
+        return data
+
+    inner = wrapper.get("data")
+    if isinstance(inner, list):
+        _api_log(f"[外部API] {skill_id} 解析记录数={len(inner)} | 路径=data")
+        return inner
+
+    if isinstance(inner, dict):
+        for key in ("records", "rows", "items", "list", "content", "result"):
+            nested = inner.get(key)
+            if isinstance(nested, list):
+                _api_log(
+                    f"[外部API] {skill_id} 解析记录数={len(nested)} "
+                    f"| 路径=data.{key}"
+                )
+                return nested
+
+        envelope_keys = {"success", "code", "message", "msg", "otherMsg", "total", "pages", "pageSize"}
+        if inner and not (set(inner) & envelope_keys):
+            _api_log(f"[外部API] {skill_id} 解析记录数=1 | 路径=data(单对象)")
+            return [inner]
+
+    outer_keys = list(wrapper.keys())
+    inner_keys = list(inner.keys()) if isinstance(inner, dict) else []
+    _api_log(
+        f"[外部API][解析异常] {skill_id} 无法提取记录列表 "
+        f"| 期望路径=data或data.records/rows/items/list/content/result "
+        f"| 实际data类型={type(inner).__name__} "
+        f"| 外层keys={outer_keys} | 内层keys={inner_keys} "
+        f"| 响应摘要={_response_preview(wrapper)}"
+    )
+    return []
+
+
+def _business_error(data) -> str:
+    """Return a business-level error carried inside an HTTP 200 response."""
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+        return ""
+    payload = data[0]
+    message = next(
+        (str(payload.get(key) or "").strip() for key in ("error", "message", "msg", "otherMsg") if payload.get(key)),
+        "",
+    )
+    code = payload.get("code")
+    try:
+        numeric_code = int(str(code).strip()) if code is not None else None
+    except (TypeError, ValueError):
+        numeric_code = None
+    if numeric_code is not None and numeric_code >= 400:
+        return message or f"外部接口返回业务失败(code={numeric_code})"
+    if payload.get("success") is False:
+        return message or "外部接口返回业务失败"
+    if "data" in payload and payload.get("data") is None and message:
+        return message
+    return ""
+
+
 def call_service(url: str, method: str = "GET", params: dict = None,
                  timeout: int = DEFAULT_SERVICE_TIMEOUT_SECONDS, as_form: bool = False) -> dict:
     """
@@ -145,16 +223,49 @@ def call_service_as_binding(svc: dict, params: dict, register_no: str = "",
         "condition": params.get("condition", ""),
     }
 
+    skill_id = svc.get("id", svc.get("name", "external"))
+    skill_label = svc.get("label", svc.get("name", skill_id))
     req_map = svc.get("request_map", {})
     wrapper = svc.get("request_wrapper", "")
     method = svc.get("method", "POST").upper()
     url = svc["url"]
-    skill_id = svc.get("id", svc.get("name", "external"))
-    skill_label = svc.get("label", svc.get("name", skill_id))
     service_timeout = int(svc.get("timeout", DEFAULT_SERVICE_TIMEOUT_SECONDS))
 
+    if not isinstance(req_map, dict) or not req_map:
+        config_fields = sorted(str(key) for key in svc.keys())
+        _api_log(
+            f"[外部API][配置异常] {skill_id} request_map为空 "
+            f"| request_wrapper={wrapper or '(空)'} "
+            f"| 服务配置字段={config_fields} "
+            f"| 已阻止无患者范围的外部接口调用"
+        )
+        user_message = (
+            f"{skill_label}服务缺少请求参数映射，未向外部接口发送请求，"
+            "当前无法用该结构化数据源判断"
+        )
+        return [{
+            "file": f"{skill_label} (配置异常)",
+            "template": skill_label,
+            "bindings": [
+                {"html_field": "接口状态", "value": "配置异常", "xml_path": "external/service_status"},
+                {"html_field": "说明", "value": user_message, "xml_path": "external/service_message"},
+            ],
+            "visit_no": visit_no or "",
+            "keep_fields": svc.get("keep_fields"),
+            "rec_prefix": svc.get("rec_prefix", "记录"),
+            "field_labels": svc.get("field_labels", {}),
+            "merge": svc.get("merge", []),
+            "temporal_semantics": svc.get("temporal_semantics", {}),
+            "semantic": svc.get("semantic", {}),
+            "service_error": True,
+            "service_id": skill_id,
+            "error": user_message,
+            "debug_error": "service request_map is empty",
+        }]
+
     # Build request body
-    body = _build_params(req_map, id_values) if req_map else {}
+    business_params = _build_params(req_map, id_values)
+    body = dict(business_params)
     if wrapper:
         body = {wrapper: json.dumps(body)}
 
@@ -168,15 +279,33 @@ def call_service_as_binding(svc: dict, params: dict, register_no: str = "",
         url += "&page=1&rows=200"  # fetch all records, not just one page
         import urllib.parse
         _api_log(f"[外部API] {skill_id} GET {url.split('?')[0]} rows=200 timeout={service_timeout}s")
+        _api_log(
+            f"[外部API][完整入参] {skill_id} GET "
+            f"| 业务参数={json.dumps(business_params, ensure_ascii=False, default=str)} "
+            f"| 实际URL={urllib.parse.unquote(url)}"
+        )
         _api_log(f"[外部API][debug] {skill_id} url={urllib.parse.unquote(url)[:500]}", debug=True)
         result = call_service(url, "GET", timeout=service_timeout)
     else:
         # POST: same params as GET, but in POST body (form-encoded)
+        import urllib.parse
+
         body["page"] = 1
         body["rows"] = 200
+        encoded_form_body = urllib.parse.urlencode(body)
         _api_log(f"[外部API] {skill_id} POST {url} rows=200 timeout={service_timeout}s")
+        _api_log(
+            f"[外部API][完整入参] {skill_id} POST "
+            f"| 业务参数={json.dumps(business_params, ensure_ascii=False, default=str)} "
+            f"| 实际提交={json.dumps(body, ensure_ascii=False, default=str)} "
+            f"| Content-Type=application/x-www-form-urlencoded "
+            f"| FormBody={encoded_form_body}"
+        )
         _api_log(f"[外部API][debug] {skill_id} body={json.dumps(body, ensure_ascii=False)[:500]}", debug=True)
         result = call_service(url, "POST", body, timeout=service_timeout, as_form=True)
+    business_error = _business_error(result.get("data")) if result.get("ok") else ""
+    if business_error:
+        result = {"ok": False, "data": [], "error": business_error}
     if result["ok"]:
         _api_log(f"[外部API] {skill_id} 返回成功 raw={len(result.get('data', []))}")
     else:
@@ -198,6 +327,7 @@ def call_service_as_binding(svc: dict, params: dict, register_no: str = "",
             "field_labels": svc.get("field_labels", {}),
             "merge": svc.get("merge", []),
             "temporal_semantics": svc.get("temporal_semantics", {}),
+            "semantic": svc.get("semantic", {}),
             "service_error": True,
             "service_id": skill_id,
             "error": user_message,
@@ -208,13 +338,7 @@ def call_service_as_binding(svc: dict, params: dict, register_no: str = "",
     _api_log(f"[外部API][debug] {skill_id} 原始返回类型: {type(data).__name__}, 长度: {len(data) if isinstance(data, list) else 'N/A'}", debug=True)
     if isinstance(data, list) and len(data) > 0:
         _api_log(f"[外部API][debug] {skill_id} 第一条keys: {list(data[0].keys()) if isinstance(data[0], dict) else type(data[0]).__name__}", debug=True)
-    # Normalize: API may return {"data": [...]} or directly a list
-    if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict):
-        inner = data[0].get("data")
-        _api_log(f"[外部API] {skill_id} 解析记录数={len(inner) if isinstance(inner, list) else 'N/A'}")
-        _api_log(f"[外部API][debug] {skill_id} 内层data字段: type={type(inner).__name__}, len={len(inner) if isinstance(inner, list) else 'N/A'}", debug=True)
-        if isinstance(inner, list):
-            data = inner
+    data = _normalize_response_records(data, skill_id)
 
     bindings_list = []
     for item in data:
@@ -235,6 +359,7 @@ def call_service_as_binding(svc: dict, params: dict, register_no: str = "",
         bindings_list.append({
             "file": skill_label,
             "template": skill_label,
+            "service_id": skill_id,
             "bindings": bindings,
             "visit_no": visit_no or "",
             "keep_fields": svc.get("keep_fields"),
@@ -242,6 +367,7 @@ def call_service_as_binding(svc: dict, params: dict, register_no: str = "",
             "field_labels": svc.get("field_labels", {}),
             "merge": svc.get("merge", []),  # field merge rules from SKILL.md
             "temporal_semantics": svc.get("temporal_semantics", {}),
+            "semantic": svc.get("semantic", {}),
         })
 
     # External API results: always merge multiple records into one before sending to LLM
@@ -392,6 +518,7 @@ def _merge_external_results(bindings_list: list) -> dict:
     return {
         "file": f"{bindings_list[0].get('file','')} ({len(bindings_list)}条)",
         "template": bindings_list[0].get("template", "external"),
+        "service_id": bindings_list[0].get("service_id", ""),
         "bindings": lines,
         "visit_no": "",
         "keep_fields": keep_fields,
@@ -399,4 +526,5 @@ def _merge_external_results(bindings_list: list) -> dict:
         "field_labels": field_labels,
         "field_mapping_degraded": fallback_used,
         "temporal_semantics": bindings_list[0].get("temporal_semantics", {}),
+        "semantic": bindings_list[0].get("semantic", {}),
     }

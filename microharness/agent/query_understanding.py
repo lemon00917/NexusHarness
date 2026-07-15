@@ -27,7 +27,8 @@ def _understanding_debug(message: str) -> None:
 
 
 def understand_query(condition: str, model: str = "qwen2.5:3b",
-                     timeout: int = 60, document_catalog: dict | None = None) -> dict:
+                     timeout: int = 60, document_catalog: dict | None = None,
+                     retry_feedback: str = "") -> dict:
     """Analyze a medical query in a single LLM call.
 
     Uses the provided model (default qwen2.5:3b for best Chinese instruction following).
@@ -43,6 +44,12 @@ def understand_query(condition: str, model: str = "qwen2.5:3b",
             {
                 "text": "sub-condition text",
                 "keyword": "core medical concept",
+                "domain": "diagnosis/medication/laboratory/...",
+                "temporal": {"scope": "event_window", "event": "surgery", "relation": "before", "duration": 24, "unit": "小时"},
+                "assertion": {"present": true, "certainty": "confirmed", "subject": "patient", "temporal_context": "current"},
+                "quantifier": {"mode": "at_least", "count": 2, "unit": "次"},
+                "depends_on": ["event:surgery"],
+                "attributes": {},
                 "modifiers": ["modifier1"],   # status/negation words
                 "is_numeric": bool,
                 "target_docs": ["文档名"],     # routing: which documents
@@ -71,7 +78,13 @@ def understand_query(condition: str, model: str = "qwen2.5:3b",
         from microharness.medical.query_router import parse_llm_json
 
         profile = get_profile(model)
-        prompt = build_query_understanding_prompt(profile, condition, doc_catalog, skills_menu)
+        prompt = build_query_understanding_prompt(
+            profile,
+            condition,
+            doc_catalog,
+            skills_menu,
+            retry_feedback=retry_feedback,
+        )
 
         # Always use format_json for understand_query — guarantees valid JSON output
         # regardless of model (deepseek-r1, qwen3.5:4b, qwen2.5:3b all support it)
@@ -95,7 +108,7 @@ def understand_query(condition: str, model: str = "qwen2.5:3b",
         # ═══════════════════════════════════════════════════════════
         result = _validate_and_normalize(result, condition, doc_catalog)
 
-        result["source"] = "understand_query"
+        result["source"] = "understand_query_retry" if retry_feedback else "understand_query"
         _understanding_debug(f"[understand_query] {condition[:40]} → type={result['type']} "
               f"negated={result['negated']} conds={len(result['conditions'])}")
         for i, c in enumerate(result["conditions"], 1):
@@ -170,7 +183,10 @@ def _validate_and_normalize(result: dict, condition: str, doc_catalog: dict) -> 
     result.setdefault("connector", None)
     result.setdefault("conditions", [])
 
-    # If no conditions, wrap the original condition
+    raw_conditions = result["conditions"] if isinstance(result["conditions"], list) else []
+    result["conditions"] = [item for item in raw_conditions if isinstance(item, dict)]
+
+    # If no valid conditions, wrap the original condition.
     if not result["conditions"]:
         result["conditions"] = [{
             "text": condition,
@@ -192,7 +208,13 @@ def _validate_and_normalize(result: dict, condition: str, doc_catalog: dict) -> 
         cond.setdefault("keyword", cond["text"])
         cond.setdefault("entity", cond.get("keyword", cond["text"]))
         cond.setdefault("entity_type", "unknown")
+        cond.setdefault("domain", "")
         cond.setdefault("predicate", "unknown")
+        cond.setdefault("temporal", None)
+        cond.setdefault("assertion", None)
+        cond.setdefault("quantifier", None)
+        cond.setdefault("depends_on", [])
+        cond.setdefault("attributes", {})
         cond.setdefault("modifiers", [])
         cond.setdefault("is_numeric", False)
         cond.setdefault("target_docs", [])
@@ -206,7 +228,7 @@ def _validate_and_normalize(result: dict, condition: str, doc_catalog: dict) -> 
         elif not isinstance(kw, str):
             cond["keyword"] = str(kw) if kw else cond["text"]
 
-        for key in ("entity", "entity_type", "predicate"):
+        for key in ("entity", "entity_type", "domain", "predicate"):
             if not isinstance(cond.get(key), str):
                 cond[key] = str(cond.get(key) or "")
         if cond.get("entity") and (
@@ -216,14 +238,17 @@ def _validate_and_normalize(result: dict, condition: str, doc_catalog: dict) -> 
         ):
             cond["keyword"] = cond["entity"]
 
-        # Filter invalid document names. LLMs sometimes return placeholders like
-        # "文档名"; those must not reach DB routing.
+        # Preserve unknown document names for EvidencePlan diagnostics. The
+        # executor resolves catalog/table availability before issuing DB queries.
         if cond["target_docs"]:
-            valid_docs = [d for d in cond["target_docs"] if d in doc_catalog]
-            invalid_docs = [d for d in cond["target_docs"] if d not in doc_catalog]
+            normalized_docs = list(dict.fromkeys(
+                str(d).strip() for d in cond["target_docs"] if str(d).strip()
+            ))
+            invalid_docs = [d for d in normalized_docs if d not in doc_catalog]
             if invalid_docs:
-                print(f"[understand_query] 过滤无效文档: {invalid_docs}", flush=True)
-            cond["target_docs"] = valid_docs
+                print(f"[understand_query] 保留未解析文档供证据诊断: {invalid_docs}", flush=True)
+            cond["target_docs"] = normalized_docs
+            cond["unresolved_target_docs"] = invalid_docs
 
         # Filter invalid section names
         if cond["target_sections"]:
@@ -236,6 +261,13 @@ def _validate_and_normalize(result: dict, condition: str, doc_catalog: dict) -> 
         # Ensure modifiers is a list
         if not isinstance(cond["modifiers"], list):
             cond["modifiers"] = []
+        if not isinstance(cond["depends_on"], list):
+            cond["depends_on"] = []
+        if not isinstance(cond["attributes"], dict):
+            cond["attributes"] = {}
+        for key in ("temporal", "assertion", "quantifier"):
+            if cond[key] is not None and not isinstance(cond[key], dict):
+                cond[key] = None
         # Filter out numeric/generic modifiers
         import re
         cond["modifiers"] = [m for m in cond["modifiers"]

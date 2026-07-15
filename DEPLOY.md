@@ -1,245 +1,143 @@
-# NexusHarness 部署指南
+# NexusHarness 简单打包部署
 
-## 环境说明
+整个更新流程只有三步：
 
-- **外网打包机**：Windows（当前开发机，可联网，需安装 Docker Desktop）
-- **内网部署机**：Linux 服务器（完全离线，无外网，已安装 Docker）
-- **Ollama**：已在 Linux 上独立部署
+```text
+Windows 打包 -> 上传 nexusharness.tar -> Linux 重新创建容器
+```
 
----
+## 1. Windows 打包
 
-## 一、准备工作（Windows）
-
-### 1. 预下载 pkuseg 源码
-
-Docker 内网速极慢（~17KB/s），`pkuseg` 的 48.8MB 源码包需提前下载：
+在项目根目录打开 PowerShell：
 
 ```powershell
 cd D:\work\develop\AI\NexusHarness
-curl -L -o pkuseg-0.0.25.tar.gz https://files.pythonhosted.org/packages/source/p/pkuseg/pkuseg-0.0.25.tar.gz
+
+docker build --no-cache -t nexusharness:latest .
+docker save -o nexusharness.tar nexusharness:latest
 ```
 
-> 此文件已加入 `.dockerignore` 例外，会被 COPY 进镜像后从本地编译。
+生成文件：
 
-### 2. 构建 Docker 镜像
+```text
+D:\work\develop\AI\NexusHarness\nexusharness.tar
+```
+
+## 2. 上传到 Linux
+
+使用 WinSCP 将 `nexusharness.tar` 上传到：
+
+```text
+/imedical/cdr/ai/nexusharness.tar
+```
+
+也可以执行：
 
 ```powershell
-cd D:\work\develop\AI\NexusHarness
-docker build -t nexusharness:latest .
+scp .\nexusharness.tar root@服务器IP:/imedical/cdr/ai/
 ```
 
-> **已知问题与处理**：
-> - `python:3.12-slim` 不带 gcc/g++，改用 `python:3.12` 完整镜像
-> - Docker 网络 HTTP 80 端口被封，apt-get 不可用，完整镜像自带编译工具绕过
-> - pkuseg 的 Cython `.cpp` 引用 `longintrepr.h`（Python 3.12 已删除），Dockerfile 内用新版 Cython 重新生成
-> - pkuseg 的 `setup.py` 依赖 numpy 但未在 `pyproject.toml` 声明，需手动先装 numpy
-> - `sentence-transformers` 含 ~700MB PyTorch，已排除（默认走 Ollama embedding，不需要）
-> - `html-to-markdown` 不在 requirements.txt，Dockerfile 单独安装
+## 3. Linux 更新并启动
 
-### 3. 导出镜像
-
-```powershell
-mkdir D:\work\develop\AI\nexus-deploy -Force
-docker save -o D:\work\develop\AI\nexus-deploy\nexusharness.tar nexusharness:latest
-# 可选：用 7-Zip 压缩为 .tar.gz，体积减半
-```
-
----
-
-## 二、内网 Linux 部署
-
-### 1. 传输文件
-
-将 `nexusharness.tar`（及压缩包）通过 U 盘 / 内网共享传到 Linux 服务器。
-
-### 2. 加载镜像
+登录 Linux 服务器，一次执行下面整段命令：
 
 ```bash
-# 压缩包先解压
-gunzip nexusharness.tar.gz
+cd /imedical/cdr/ai
 
 docker load -i nexusharness.tar
-docker images | grep nexusharness
-```
 
-### 3. 创建数据目录
+mkdir -p \
+  /imedical/cdr/ai/nexus/data \
+  /imedical/cdr/ai/nexus/configs \
+  /imedical/cdr/ai/nexus/logs \
+  /imedical/cdr/ai/nexus/web/rag_index
 
-```bash
-mkdir -p /imedical/cdr/ai/nexus/{data,configs,logs,sessions,conversations,cache,results,web/rag_index,data/patients}
-```
+docker rm -f nexusharness 2>/dev/null || true
 
-### 4. 启动容器
-
-```bash
 docker run -d \
   --name nexusharness \
   --network host \
   --restart unless-stopped \
   -e OLLAMA_HOST=http://localhost:11434 \
+  -e MEDICAL_QUERY_DEBUG=1 \
+  -e MEDICAL_QUERY_MAX_CONCURRENCY=4 \
+  -e MEDICAL_QUERY_MAX_QUEUE=20 \
+  -e MEDICAL_QUERY_QUEUE_TIMEOUT_SECONDS=300 \
+  -e PYTHONUNBUFFERED=1 \
+  -e PYTHONIOENCODING=utf-8 \
   -v /imedical/cdr/ai/nexus/data:/app/data \
   -v /imedical/cdr/ai/nexus/configs:/app/configs \
   -v /imedical/cdr/ai/nexus/logs:/app/logs \
-  -v /imedical/cdr/ai/nexus/sessions:/app/sessions \
-  -v /imedical/cdr/ai/nexus/conversations:/app/conversations \
-  -v /imedical/cdr/ai/nexus/cache:/app/cache \
-  -v /imedical/cdr/ai/nexus/results:/app/results \
   -v /imedical/cdr/ai/nexus/web/rag_index:/app/web/rag_index \
   nexusharness:latest
+
+docker logs -f --tail 200 nexusharness
 ```
 
-### 5. 验证
+看到服务正常启动后，按 `Ctrl+C` 退出日志查看，不会停止容器。
+
+访问地址：
+
+```text
+http://服务器IP:8000/templates/medical_filter.html
+```
+
+## 以后更新
+
+代码修改后，重复上面的三步即可：
+
+```text
+重新 docker build 和 docker save
+覆盖上传 nexusharness.tar
+重新执行 Linux 更新命令
+```
+
+不要只执行：
 
 ```bash
-docker logs -f nexusharness
-curl http://localhost:8000/api/rag/config
-curl http://localhost:11434/api/tags
-```
-
----
-
-## 三、常见问题
-
-### 1. ChromaDB 向量维度不匹配
-
-```
-Collection expecting embedding with dimension of 1024, got 2560
-```
-
-**原因**：旧索引用 1024 维模型建的，新模型（qwen3-embedding:4b）输出 2560 维。
-
-```bash
-# 清除旧索引，重新导入文档
-docker stop nexusharness
-rm -rf /imedical/cdr/ai/nexus/web/rag_index/chroma_db/*
-docker start nexusharness
-```
-
-### 2. BM25 除零错误
-
-```
-ZeroDivisionError: float division by zero (rag.py:491)
-```
-
-已修复：BM25 全零匹配时 `max_bm25` 默认设为 1.0，避免除零。
-
-### 3. Ollama 上下文超限
-
-```
-request (5225 tokens) exceeds the available context size (4096 tokens)
-```
-
-**原因**：`qwen2:7b-instruct` 默认上下文窗口仅 4096。
-
-```bash
-# 导出 Modelfile 并增大上下文
-ollama show qwen2:7b-instruct --modelfile > /tmp/Modelfile
-echo 'PARAMETER num_ctx 32768' >> /tmp/Modelfile
-ollama create qwen2:7b-instruct -f /tmp/Modelfile
-
 docker restart nexusharness
 ```
 
-### 4. 权限错误
+`docker restart` 仍然使用旧容器中的旧代码，必须先 `docker rm -f nexusharness`，再执行 `docker run`。
 
-```
-PermissionError: [Errno 13] Permission denied: '/app/logs/web.log'
-```
+## 数据和配置
 
-已修复：去掉了 Dockerfile 中的 `USER appuser`，容器以 root 运行，挂载目录无权限问题。
+更新镜像不会删除以下宿主机目录：
 
----
-
-## 四、新增 Ollama 模型
-
-内网 Ollama 无法直接 `ollama pull`，需从外网下载后传输。
-
-### 1. Windows 上拉取
-
-```powershell
-ollama pull qwen2.5:3b
-
-# 查看模型文件
-ollama show qwen2.5:3b --modelfile > D:\work\develop\AI\nexus-deploy\qwen2.5-3b.Modelfile
+```text
+/imedical/cdr/ai/nexus/data
+/imedical/cdr/ai/nexus/configs
+/imedical/cdr/ai/nexus/logs
+/imedical/cdr/ai/nexus/web/rag_index
 ```
 
-### 2. 导出模型文件
+外部服务配置：
 
-Ollama 数据目录（Windows）：`%USERPROFILE%\.ollama\`
-
-```
-.ollama/
-├── models/
-│   └── blobs/          # 模型权重（sha256 命名）
-├── manifests/
-│   └── registry.ollama.ai/
-│       └── library/
-│           └── qwen2.5/
-│               └── 3b   # manifest 文件
+```text
+/imedical/cdr/ai/nexus/configs/external_services.json
 ```
 
-把对应模型的 blob 和 manifest 复制到 Linux 相同路径下。
+病历元数据来源配置：
 
-### 3. Linux 上导入
-
-```bash
-# 放到 Ollama 数据目录（通常 /usr/share/ollama/.ollama/ 或 ~/.ollama/）
-# 验证
-ollama list
+```text
+/imedical/cdr/ai/nexus/configs/medical_catalog_source.json
 ```
 
----
+正常更新时不要删除 `/imedical/cdr/ai/nexus`。
 
-## 五、常用操作
+## 病历筛选并发
 
-```bash
-# 查看日志
-docker logs -f nexusharness
+上面的启动命令默认配置为：
 
-# 重启
-docker restart nexusharness
-
-# 停止
-docker stop nexusharness
-
-# 升级镜像
-docker stop nexusharness && docker rm nexusharness
-docker rmi nexusharness:latest
-docker load -i nexusharness-v2.tar
-# 然后重新 docker run ...
+```text
+同时执行病历筛选：4 个
+最多排队：20 个
+排队最长等待：300 秒
 ```
 
----
+第 5 个请求开始进入队列，网页会显示前方排队数量。队列满时接口返回
+`429`，排队超时时返回 `503`，不会继续向线程池无限堆积任务。
 
-## 六、架构总结
-
-```
-┌──────────────────────────────────────────────────────────┐
-│  Linux 宿主机                                            │
-│                                                          │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  Ollama（独立部署，宿主机进程）                     │   │
-│  │  - qwen2.5:7b-instruct（num_ctx=32768）           │   │
-│  │  - qwen2.5:3b                                     │   │
-│  │  - qwen3-embedding:4b                             │   │
-│  │  localhost:11434                                   │   │
-│  └──────────────────────────────────────────────────┘   │
-│                         ↑                                │
-│                         │ --network host                 │
-│                         ↓                                │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  NexusHarness 容器                                │   │
-│  │  - Python 3.12 + 所有依赖（已内置）               │   │
-│  │  - FastAPI :8000                                  │   │
-│  │  - Volume 挂载：data/ configs/ logs/ ...          │   │
-│  └──────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────┘
-```
-
----
-
-## 七、文件清单（部署包）
-
-```
-nexusharness.tar       # Docker 镜像
-*.Modelfile            # 新增模型的 Modelfile（可选）
-```
+这三个值可以直接在 `docker run` 的环境变量中调整。当前容器使用一个
+Uvicorn worker，因此队列在该容器内统一生效；不要擅自增加
+`uvicorn --workers`，多 worker 会形成多个互相独立的进程内队列。

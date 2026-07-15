@@ -161,13 +161,44 @@ def load_services() -> dict:
 
 
 def _merge_config_services(services: dict, cfg: dict) -> dict:
-    """Merge explicitly configured services over skill metadata services."""
+    """Merge runtime overrides without discarding skill request metadata.
+
+    The configuration page only persists editable fields such as URL, label,
+    and triggers. Replacing the complete skill entry with that partial object
+    would remove request_map and make patient-scoped calls send only page/rows.
+    """
     configured = cfg.get("services", {})
     if not isinstance(configured, dict):
         return services
+
+    structural_keys = {
+        "field_labels",
+        "keep_fields",
+        "merge",
+        "method",
+        "rec_prefix",
+        "request_map",
+        "request_wrapper",
+        "returns",
+        "semantic",
+        "temporal_semantics",
+    }
+
     for sid, svc in configured.items():
         if isinstance(sid, str) and isinstance(svc, dict) and svc.get("url"):
-            services[sid] = svc
+            skill_service = services.get(sid)
+            if not isinstance(skill_service, dict):
+                services[sid] = dict(svc)
+                continue
+
+            merged = dict(skill_service)
+            for key, value in svc.items():
+                # Partial configuration objects must not erase non-empty
+                # request/response metadata loaded from SKILL.md.
+                if key in structural_keys and not value and skill_service.get(key):
+                    continue
+                merged[key] = value
+            services[sid] = merged
     return services
 
 

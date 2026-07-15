@@ -12,11 +12,21 @@ from copy import deepcopy
 from typing import Callable, Optional
 
 from microharness.medical.semantic_rules import split_compound_clauses
-from microharness.medical.temporal_parser import parse_numeric_comparison
+from microharness.medical.temporal_parser import (
+    normalize_time_unit,
+    parse_cn_number,
+    parse_numeric_comparison,
+)
 
 
 _VALUE_PREDICATE_RE = re.compile(
     r"(>|<|>=|<=|=|≥|≤|＞|＜|大于|小于|高于|低于|超过|不少于|不低于|不超过|至多|至少|等于|偏高|偏低|异常|正常)"
+)
+_TIME_UNITS = {"分钟", "小时", "天", "日", "周", "月", "年"}
+_DURATION_MEASURE_RE = re.compile(r"(?:时长|天数|日数|小时数|分钟数|周数|月数|年数|住院日|病程)$")
+_TIME_QUANTITY_RE = re.compile(
+    r"(\d+(?:\.\d+)?|[零〇一二两三四五六七八九十百千万亿半]+)\s*"
+    r"(分钟|小时|天|日|周|星期|个月|月|年)"
 )
 
 
@@ -25,9 +35,54 @@ def has_explicit_value_predicate(condition: str) -> bool:
     return bool(_VALUE_PREDICATE_RE.search(condition or ""))
 
 
+def _is_temporal_window_comparison(condition: str, comparison: object) -> bool:
+    """Return whether a parsed comparison actually represents a time window."""
+    unit = str(getattr(comparison, "unit", "") or "")
+    operator = str(getattr(comparison, "operator", "") or "")
+    subject = str(getattr(comparison, "subject", "") or "").strip()
+    if unit not in _TIME_UNITS or operator not in {"内", "以内", "以下"}:
+        return False
+    if not re.search(r"(?:分钟|小时|天|日|周|月|年)\s*(?:内|之内)", condition or ""):
+        return False
+    if _DURATION_MEASURE_RE.search(subject):
+        return False
+    return not subject or subject == "最近" or subject in {
+        "手术",
+        "术",
+        "入院",
+        "出院",
+        "术前",
+        "术后",
+        "手术前",
+        "手术后",
+        "入院前",
+        "入院后",
+        "出院前",
+        "出院后",
+    } or subject.endswith(("前", "后"))
+
+
+def parse_executable_numeric_comparison(condition: str):
+    """Parse a value comparison while excluding temporal-window durations."""
+    comparison = parse_numeric_comparison(condition)
+    if comparison and _is_temporal_window_comparison(condition, comparison):
+        return None
+    return comparison
+
+
 def is_executable_numeric_condition(condition: str) -> bool:
     """Whether the condition should be executed as a numeric comparison."""
-    return bool(parse_numeric_comparison(condition) and has_explicit_value_predicate(condition))
+    return bool(parse_executable_numeric_comparison(condition) and has_explicit_value_predicate(condition))
+
+
+def temporal_quantity_signatures(text: str) -> list[tuple[float, str]]:
+    """Extract time quantities whose values and units must survive LLM rewrites."""
+    signatures: list[tuple[float, str]] = []
+    for match in _TIME_QUANTITY_RE.finditer(text or ""):
+        value = parse_cn_number(match.group(1))
+        if value is not None:
+            signatures.append((float(value), normalize_time_unit(match.group(2))))
+    return signatures
 
 
 def _constraint_issues(source: str, candidate: str) -> list[dict]:
@@ -36,8 +91,8 @@ def _constraint_issues(source: str, candidate: str) -> list[dict]:
     source = source or ""
     candidate = candidate or ""
 
-    src_cmp = parse_numeric_comparison(source)
-    cand_cmp = parse_numeric_comparison(candidate)
+    src_cmp = parse_executable_numeric_comparison(source)
+    cand_cmp = parse_executable_numeric_comparison(candidate)
     if src_cmp and not cand_cmp:
         issues.append({"code": "numeric_comparison_missing", "message": "原句包含数值比较，IR子条件未保留"})
     elif src_cmp and cand_cmp:
@@ -49,6 +104,9 @@ def _constraint_issues(source: str, candidate: str) -> list[dict]:
 
     if _has_time_expression(source) and not _has_time_expression(candidate):
         issues.append({"code": "temporal_expression_missing", "message": "原句包含时间表达，IR子条件未保留"})
+
+    if temporal_quantity_signatures(source) != temporal_quantity_signatures(candidate):
+        issues.append({"code": "temporal_quantity_changed", "message": "时间时长的数值或单位被改写"})
 
     src_units = _unit_tokens(source)
     cand_units = _unit_tokens(candidate)

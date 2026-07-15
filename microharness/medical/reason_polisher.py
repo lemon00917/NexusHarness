@@ -95,15 +95,65 @@ def _overall_fallback_explanation(result: dict[str, Any], first: dict[str, Any])
 
 
 def _condition_fallback_explanation(info: dict[str, Any]) -> str:
-    files = info.get("files") or []
-    main_files = [f for f in files if isinstance(f, dict) and f.get("证据角色") == "主证据"]
-    source_files = main_files or [f for f in files if isinstance(f, dict)]
+    files = [f for f in (info.get("files") or []) if isinstance(f, dict)]
+    status = info.get("判断状态") or ("符合" if info.get("matched") else "不符合")
+    if status == "符合":
+        preferred_files = [f for f in files if f.get("matched") is True]
+    elif status == "不符合":
+        preferred_files = [f for f in files if f.get("matched") is False and not _source_unavailable_file(f)]
+    else:
+        preferred_files = [f for f in files if _source_unavailable_file(f)]
+    preferred_files = preferred_files or files
+    main_files = [f for f in preferred_files if f.get("证据角色") == "主证据"]
+    source_files = main_files or preferred_files
     details = [_file_fallback_explanation(file_info, info) for file_info in source_files[:2]]
     details = [d for d in details if d]
-    status = info.get("判断状态") or ("符合" if info.get("matched") else "不符合")
     if details:
         return _clip(f"该条件判定为{status}。" + "；".join(details), 1000)
     return _clip(info.get("reason"), 900)
+
+
+_SOURCE_UNAVAILABLE_TOKENS = ("未取得", "接口调用失败", "数据源调用失败", "数据源不可用", "服务不可用")
+
+
+def _source_unavailable_file(file_info: dict[str, Any]) -> bool:
+    reason = str(file_info.get("reason", "") or "")
+    condition_result = file_info.get("condition_result") if isinstance(file_info.get("condition_result"), dict) else {}
+    return (
+        condition_result.get("reason_code") == "SOURCE_UNAVAILABLE"
+        or any(token in reason for token in _SOURCE_UNAVAILABLE_TOKENS)
+    )
+
+
+def _condition_explanation_matches_status(text: str, info: dict[str, Any]) -> bool:
+    """Reject explanations that replace a supported match with source-failure text."""
+    status = info.get("判断状态") or ("符合" if info.get("matched") else "不符合")
+    if status != "符合":
+        return True
+    has_support = any(
+        isinstance(file_info, dict) and file_info.get("matched") is True
+        for file_info in (info.get("files") or [])
+    )
+    if not has_support:
+        return True
+    explanation = _clip(text, 1000)
+    return not any(token in explanation for token in _SOURCE_UNAVAILABLE_TOKENS + ("当前无法", "无法用该",))
+
+
+def _overall_explanation_matches_status(text: str, first: dict[str, Any]) -> bool:
+    status = first.get('判断状态') or ('符合' if first.get('matched') else '不符合')
+    if status != '符合':
+        return True
+    has_support = any(
+        isinstance(file_info, dict) and file_info.get('matched') is True
+        for info in (first.get('per_condition') or {}).values()
+        if isinstance(info, dict)
+        for file_info in (info.get('files') or [])
+    )
+    if not has_support:
+        return True
+    explanation = _clip(text, 1200)
+    return not any(token in explanation for token in _SOURCE_UNAVAILABLE_TOKENS + ('当前无法', '无法用该'))
 
 
 def _file_fallback_explanation(file_info: dict[str, Any], condition_info: dict[str, Any] | None = None) -> str:
@@ -372,6 +422,22 @@ def _contains_any_token(text: str, tokens: tuple[str, ...]) -> bool:
     return any(token and token in text for token in tokens)
 
 
+_SUBTRACTION_EXPRESSION_RE = re.compile(
+    r'([A-Za-z\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]{1,19})'
+    r'\s*[-\u2212\uff0d]\s*'
+    r'([A-Za-z\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]{1,19})'
+)
+
+
+def _subtraction_operand_pairs(text: str) -> set[tuple[str, str]]:
+    normalized = re.sub(r'(?:约等于|等于)', '≈', text or '')
+    return {
+        (match.group(1), match.group(2))
+        for match in _SUBTRACTION_EXPRESSION_RE.finditer(normalized)
+        if match.group(1) != match.group(2)
+    }
+
+
 def _explanation_preserves_critical_facts(explanation: str, condition: str, basis: str) -> bool:
     """Reject display text that states facts not supported by evidence.
 
@@ -387,6 +453,14 @@ def _explanation_preserves_critical_facts(explanation: str, condition: str, basi
         opposite_tokens = _opposite_comparison_tokens(cmp_info.operator)
         if _contains_any_token(text, opposite_tokens) and not _contains_any_token(evidence, opposite_tokens):
             return False
+
+    evidence_subtractions = _subtraction_operand_pairs(evidence)
+    explanation_subtractions = _subtraction_operand_pairs(text)
+    if any(
+        (right_operand, left_operand) in explanation_subtractions
+        for left_operand, right_operand in evidence_subtractions
+    ):
+        return False
 
     absolute_absence = (
         "没有使用过", "未使用过", "没有用过", "未用过", "没有服用过", "未服用过",
@@ -458,6 +532,8 @@ def polish_response_explanations(
         file_map = data.get("证据解释") if isinstance(data.get("证据解释"), dict) else {}
         first = (result.get("results") or [{}])[0]
         overall_basis = _combined_basis(first)
+        if overall and not _overall_explanation_matches_status(overall, first):
+            overall = ''
         if (
             overall
             and _useful_explanation(overall, overall_basis, result.get("condition", ""))
@@ -476,6 +552,7 @@ def polish_response_explanations(
                 and _useful_explanation(cond_text, info.get("reason", ""), current_condition)
                 and _explanation_matches_condition(cond_text, current_condition, info.get("reason", ""), siblings)
                 and _explanation_preserves_critical_facts(cond_text, current_condition, info.get("reason", ""))
+                and _condition_explanation_matches_status(cond_text, info)
             ):
                 info["用户解释"] = cond_text
             best_file_text = ""

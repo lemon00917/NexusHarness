@@ -26,7 +26,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, Form
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
@@ -1988,6 +1988,24 @@ _VALID_HTML_FILES = ["入院记录.html", "出院记录.html", "门急诊病历.
 # from the asyncio default executor so other endpoints stay responsive.
 # Ollama concurrency is governed globally by OllamaClient._OLLAMA_SEMAPHORE (max 2).
 _MEDICAL_QUERY_POOL = None
+_MEDICAL_QUERY_COORDINATOR = None
+
+
+def _get_medical_query_coordinator():
+    global _MEDICAL_QUERY_COORDINATOR
+    if _MEDICAL_QUERY_COORDINATOR is None:
+        from microharness.medical.query_concurrency import MedicalQueryCoordinator
+
+        _MEDICAL_QUERY_COORDINATOR = MedicalQueryCoordinator.from_env()
+        limits = _MEDICAL_QUERY_COORDINATOR.snapshot()
+        print(
+            "[medical_query] concurrency initialized | "
+            f"max_concurrency={limits['max_concurrency']} | "
+            f"max_queue={limits['max_queue']} | "
+            f"queue_timeout={limits['queue_timeout_seconds']}s",
+            flush=True,
+        )
+    return _MEDICAL_QUERY_COORDINATOR
 
 # Accept any HTML/HTM file for upload (template matching happens during binding)
 def _is_html_file(filename: str) -> bool:
@@ -2470,9 +2488,15 @@ async def get_binding_result(register_no: str, filename: str, visit_no: str = ""
     return {"error": "Binding not found"}, 404
 
 
+@app.get("/api/medical/query/status")
+async def medical_query_status(request_id: str = ""):
+    """Return process-local medical-query capacity or one request's state."""
+    return _get_medical_query_coordinator().snapshot(request_id or None)
+
+
 @app.post("/api/medical/query")
 async def medical_query(request: Request):
-    """Execute a filter query against patient binding data."""
+    """Execute a filter query with bounded, observable concurrency."""
     # Robust body parsing with encoding fallback
     try:
         data = await request.json()
@@ -2501,28 +2525,100 @@ async def medical_query(request: Request):
     if not register_no and not global_patient_id:
         return {"error": "register_no or global_patient_id is required"}, 400
 
-    import asyncio
+    import uuid
+    from microharness.medical.query_concurrency import (
+        MedicalQueryDuplicateId,
+        MedicalQueryQueueFull,
+        MedicalQueryQueueTimeout,
+    )
+
+    supplied_request_id = str(data.get("request_id", "")).strip()
+    request_id = supplied_request_id[:128] or str(uuid.uuid4())
+    coordinator = _get_medical_query_coordinator()
+    try:
+        admission = await coordinator.acquire(request_id)
+        print(
+            "[medical_query] admitted | "
+            f"request_id={request_id} | active={admission['active_count']}/"
+            f"{admission['max_concurrency']} | waiting={admission['queue_length']}",
+            flush=True,
+        )
+    except MedicalQueryQueueFull:
+        return JSONResponse(
+            status_code=429,
+            headers={"Retry-After": "10"},
+            content={
+                "error": "当前病历筛选任务较多，等待队列已满，请稍后重试",
+                "request_id": request_id,
+                "queue": coordinator.snapshot(request_id),
+            },
+        )
+    except MedicalQueryQueueTimeout:
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "10"},
+            content={
+                "error": "病历筛选排队等待超时，请稍后重试",
+                "request_id": request_id,
+                "queue": coordinator.snapshot(request_id),
+            },
+        )
+    except MedicalQueryDuplicateId:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "request_id 对应的病历筛选任务仍在执行",
+                "request_id": request_id,
+                "queue": coordinator.snapshot(request_id),
+            },
+        )
 
     global _MEDICAL_QUERY_POOL
     if _MEDICAL_QUERY_POOL is None:
         from concurrent.futures import ThreadPoolExecutor
         _MEDICAL_QUERY_POOL = ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="medquery-"
+            max_workers=coordinator.max_concurrency,
+            thread_name_prefix="medquery-",
         )
 
+    loop = asyncio.get_running_loop()
+    work_future = None
     try:
-        result = await asyncio.get_running_loop().run_in_executor(
+        work_future = loop.run_in_executor(
             _MEDICAL_QUERY_POOL,
             _run_medical_query,
             condition, register_no, visit_no, global_patient_id, global_visit_id,
-            judge_model, router_model, planner_model
+            judge_model, router_model, planner_model,
         )
+        result = await asyncio.shield(work_future)
+        coordinator.release(request_id, "completed", "执行完成")
+        if isinstance(result, dict):
+            result.setdefault("request_id", request_id)
         return result
+    except asyncio.CancelledError:
+        if work_future is None:
+            coordinator.release(request_id, "cancelled", "请求已取消")
+            raise
+        coordinator.mark_disconnected(request_id)
+
+        def _release_after_disconnect(future):
+            try:
+                future.result()
+                coordinator.release(request_id, "completed", "后台执行完成")
+            except asyncio.CancelledError:
+                coordinator.release(request_id, "cancelled", "后台任务已取消")
+            except Exception:
+                coordinator.release(request_id, "failed", "后台执行失败")
+
+        work_future.add_done_callback(_release_after_disconnect)
+        raise
     except Exception as exc:
+        coordinator.release(request_id, "failed", "执行失败")
         import traceback
         tb = traceback.format_exc()
         print(f"[medical_query] 未处理异常: {exc}\n{tb}", flush=True)
         error_response = {
+            "request_id": request_id,
             "condition": condition,
             "register_no": register_no,
             "matched_count": 0,
@@ -2592,16 +2688,21 @@ def _precompute_hints(fields_text: str) -> str:
             try:
                 dt1 = datetime.strptime(d1, '%Y-%m-%d %H:%M:%S')
                 dt2 = datetime.strptime(d2, '%Y-%m-%d %H:%M:%S')
-                delta_seconds = abs((dt2 - dt1).total_seconds())
+                if dt2 >= dt1:
+                    later_name, earlier_name = n2, n1
+                    delta_seconds = (dt2 - dt1).total_seconds()
+                else:
+                    later_name, earlier_name = n1, n2
+                    delta_seconds = (dt1 - dt2).total_seconds()
                 diff = int(delta_seconds // 86400)
                 hours = round(delta_seconds / 3600, 2)
-                if 0 < diff < 365 * 10 and (n1, n2, "天") not in seen:
-                    seen.add((n1, n2, "天"))
-                    hints.append(f'[预计算] {n2} - {n1}(天) = {diff}天')
-                if 0 < hours < 24 * 365 * 10 and (n1, n2, "小时") not in seen:
+                if 0 < diff < 365 * 10 and (later_name, earlier_name, "天") not in seen:
+                    seen.add((later_name, earlier_name, "天"))
+                    hints.append(f'[预计算] {later_name} - {earlier_name}(天) = {diff}天')
+                if 0 < hours < 24 * 365 * 10 and (later_name, earlier_name, "小时") not in seen:
                     # 保留小时级预计算，支持"小于24小时/大于48小时"等时长条件。
-                    seen.add((n1, n2, "小时"))
-                    hints.append(f'[预计算] {n2} - {n1}(小时) = {hours}小时')
+                    seen.add((later_name, earlier_name, "小时"))
+                    hints.append(f'[预计算] {later_name} - {earlier_name}(小时) = {hours}小时')
             except Exception:
                 pass
 
@@ -2727,6 +2828,55 @@ def _primary_service_for_condition(condition: str, cond: dict | None = None) -> 
     if any(str(token) and str(token) in text for token in triggers):
         return "drug-interaction"
     return ""
+
+
+def _resolve_executable_route_sources(
+    target_docs: list,
+    service_candidates: list,
+    document_catalog: dict,
+    service_catalog: dict,
+    table_map: dict,
+) -> dict:
+    """Resolve IR route candidates that can actually execute in this deployment."""
+    requested_docs = list(dict.fromkeys(
+        str(doc).strip() for doc in (target_docs or []) if str(doc).strip()
+    ))
+    executable_docs = []
+    unresolved_docs = []
+    for doc in requested_docs:
+        document_metadata = (document_catalog or {}).get(doc)
+        table_metadata = (table_map or {}).get(doc)
+        if isinstance(document_metadata, dict) and isinstance(table_metadata, dict) and table_metadata.get("table"):
+            executable_docs.append(doc)
+        else:
+            unresolved_docs.append(doc)
+
+    requested_services = []
+    for candidate in service_candidates or []:
+        if isinstance(candidate, dict):
+            service_id = candidate.get("id") or candidate.get("name")
+        else:
+            service_id = candidate
+        service_id = str(service_id or "").strip()
+        if service_id and service_id not in requested_services:
+            requested_services.append(service_id)
+
+    executable_services = []
+    unresolved_services = []
+    for service_id in requested_services:
+        service_metadata = (service_catalog or {}).get(service_id)
+        if isinstance(service_metadata, dict) and str(service_metadata.get("url") or "").strip():
+            executable_services.append(service_id)
+        else:
+            unresolved_services.append(service_id)
+
+    return {
+        "documents": executable_docs,
+        "services": executable_services,
+        "unresolved_documents": unresolved_docs,
+        "unresolved_services": unresolved_services,
+        "should_fallback": not executable_docs and not executable_services,
+    }
 
 
 def _prejudge(condition: str, hints: str) -> Optional[dict]:
@@ -3131,7 +3281,7 @@ def _decompose_semantic(condition: str, model: str) -> dict:
 
 def _query_db(sq_route: dict, register_no: str, visit_no: str,
               global_patient_id: str, global_visit_id: str,
-              log_fn=None) -> list:
+              log_fn=None, db_health_check=None) -> list:
     """Query DB for tables+columns specified by this route.
 
     Extracted from _run_medical_query so the scheduler's query_db action
@@ -3142,6 +3292,10 @@ def _query_db(sq_route: dict, register_no: str, visit_no: str,
 
     from microharness.database.field_mapper import TABLE_MAP, DOC_FIELDS, COMMON_FIELDS, find_db_column
     from microharness.database.db_client import get_db as get_database
+    from microharness.medical.patient_query import (
+        MissingPatientIdentityError,
+        build_patient_where_clause,
+    )
 
     targets = sq_route.get("targets", {})
     if not targets:
@@ -3176,6 +3330,22 @@ def _query_db(sq_route: dict, register_no: str, visit_no: str,
             "debug_error": str(debug_error or "")[:200],
         }]
 
+    def _missing_patient_identity_result() -> list:
+        user_message = "缺少患者或就诊标识，已停止病历文档查询，避免扩大查询范围"
+        return [{
+            "file": "病历文档查询 (缺少患者身份)",
+            "template": "Database",
+            "bindings": [
+                {"html_field": "数据源状态", "value": "未执行", "xml_path": "db/status"},
+                {"html_field": "目标章节", "value": _target_summary(), "xml_path": "db/target_sections"},
+                {"html_field": "说明", "value": user_message, "xml_path": "db/message"},
+            ],
+            "visit_no": "",
+            "service_error": True,
+            "error": user_message,
+            "error_code": "MISSING_PATIENT_IDENTITY",
+        }]
+
     def _compact_db_error(err) -> str:
         text = re.sub(r"\s+", " ", str(err or "")).strip()
         if not text or text in {"(0, '')", "(0, \"\")"}:
@@ -3193,12 +3363,28 @@ def _query_db(sq_route: dict, register_no: str, visit_no: str,
         "differential_diagnosis","treatment_plan","diagnosis","allergies","note",
         "pre_op_diagnosis","intra_op_diagnosis"}
 
-    # Lazy DB availability check
+    try:
+        patient_where = build_patient_where_clause(
+            register_no=register_no,
+            visit_no=visit_no,
+            global_patient_id=global_patient_id,
+            global_visit_id=global_visit_id,
+        )
+    except MissingPatientIdentityError:
+        log_fn("  [DB] 缺少患者或就诊标识，病历文档查询已停止")
+        return _missing_patient_identity_result()
+
+    # Lazy DB availability check. The main medical-query pipeline supplies a
+    # request-scoped checker so parallel sub-conditions share one test call.
     try:
         db = get_database()
         log_fn(f"  [DB] 当前启用数据库: {str(getattr(db, 'config', {}).get('type', 'iris')).lower()}")
-        if not db.test():
-            return _db_unavailable_result("数据库连通性检测未通过")
+        if db_health_check is None:
+            db_ok, db_error = bool(db.test()), ""
+        else:
+            db_ok, db_error = db_health_check(db)
+        if not db_ok:
+            return _db_unavailable_result(db_error or "数据库连通性检测未通过")
     except Exception as e:
         return _db_unavailable_result(str(e))
 
@@ -3240,26 +3426,20 @@ def _query_db(sq_route: dict, register_no: str, visit_no: str,
             for c in ["registerno","visitnumber","emr_hosdocid","patient_name","papat_relpatientid","paadm_relvisitnumber"]:
                 columns.add(c)
             select_parts = [f"SUBSTRING({c},1,4000) as {c}" if c in _TEXT_COLS else c for c in columns]
-            where_parts = []
-            if register_no:
-                where_parts.append(f"registerno = '{register_no.replace(chr(39), chr(39)+chr(39))}'")
-            if visit_no:
-                where_parts.append(f"visitnumber = '{visit_no.replace(chr(39), chr(39)+chr(39))}'")
-            soft_parts = []
-            if global_patient_id:
-                soft_parts.append(f"papat_relpatientid = '{global_patient_id.replace(chr(39), chr(39)+chr(39))}'")
-            if global_visit_id:
-                soft_parts.append(f"paadm_relvisitnumber = '{global_visit_id.replace(chr(39), chr(39)+chr(39))}'")
-            base_where = " AND ".join(where_parts) if where_parts else "1=1"
-            strict_where = " AND ".join(where_parts + soft_parts) if where_parts or soft_parts else "1=1"
-            sql = f"SELECT {', '.join(select_parts)} FROM {table} WHERE {strict_where}"
+            sql = f"SELECT {', '.join(select_parts)} FROM {table} WHERE {patient_where.strict_where}"
             if str(os.environ.get("MEDICAL_QUERY_DEBUG", "")).lower() in {"1", "true", "yes", "on"}:
                 log_fn(f"  [DB][debug] SQL: {sql[:500]}")
             try:
                 rows = db.client.execute(sql)
-                if not rows and soft_parts and base_where != strict_where:
-                    fallback_sql = f"SELECT {', '.join(select_parts)} FROM {table} WHERE {base_where}"
-                    log_fn(f"  [DB] 严格条件0行 → 使用基础条件重查")
+                if not rows and patient_where.fallback_where:
+                    fallback_sql = (
+                        f"SELECT {', '.join(select_parts)} FROM {table} "
+                        f"WHERE {patient_where.fallback_where}"
+                    )
+                    log_fn(
+                        "  [DB] 严格条件0行 → 使用本地患者/就诊标识重查 "
+                        f"({', '.join(patient_where.fallback_fields)})"
+                    )
                     if str(os.environ.get("MEDICAL_QUERY_DEBUG", "")).lower() in {"1", "true", "yes", "on"}:
                         log_fn(f"  [DB][debug] fallback SQL: {fallback_sql[:500]}")
                     rows = db.client.execute(fallback_sql)
@@ -3298,6 +3478,29 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                        judge_model: str, router_model: str,
                        planner_model: str = None) -> dict:
     """All blocking LLM/DB work runs in thread pool so other endpoints stay responsive."""
+    _full_query_start = time.perf_counter()
+    _stage_timings = {
+        "normalization_ms": 0,
+        "metadata_ms": 0,
+        "understanding_ms": 0,
+        "evidence_plan_ms": 0,
+        "structured_services_ms": 0,
+        "condition_execution_ms": 0,
+        "evidence_enrichment_ms": 0,
+        "explanation_polish_ms": 0,
+    }
+
+    def _record_stage(name: str, started_at: float) -> int:
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        _stage_timings[name] = elapsed_ms
+        return elapsed_ms
+
+    def _finalize_timing_response(response: dict) -> dict:
+        total_ms = int((time.perf_counter() - _full_query_start) * 1000)
+        response["timings"] = {**_stage_timings, "total_ms": total_ms}
+        response["total_ms"] = total_ms
+        return response
+
     import microharness.medical.query_router as medical_query_router
     QueryRouter = medical_query_router.QueryRouter
     from microharness.medical.field_catalog import get_catalog
@@ -3322,6 +3525,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 return f"{m.group(1)}条记录"
         return f"{len(results)}组结果"
     original_condition = condition
+    _stage_started = time.perf_counter()
     try:
         from microharness.agent.query_normalizer import normalize_query
         _normalization = normalize_query(condition, model=router_model)
@@ -3330,27 +3534,38 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
     except Exception as _norm_e:
         _normalization = None
         log(f"[归一化] 跳过: {_norm_e}")
+    _record_stage("normalization_ms", _stage_started)
 
     _field_labels_for_response = {}
+    _service_catalog_for_evidence_plan = {}
     try:
         from microharness.services.service_catalog import load_services as _load_services_for_response
-        for _svc in _load_services_for_response().values():
+        _service_catalog_for_evidence_plan = _load_services_for_response()
+        for _svc in _service_catalog_for_evidence_plan.values():
             if isinstance(_svc, dict):
                 _field_labels_for_response.update(_svc.get("field_labels") or {})
     except Exception:
         pass
 
-    def _sanitize_response(obj):
+    def _sanitize_response(obj, preserve_machine_fields: bool = False):
         """Remove internal routing fields that should not be user-facing."""
         if isinstance(obj, dict):
             return {
-                k: _sanitize_response(v)
+                k: _sanitize_response(
+                    v,
+                    preserve_machine_fields=(
+                        preserve_machine_fields
+                        or k in {"evidence_items", "condition_result", "condition_results"}
+                    ),
+                )
                 for k, v in obj.items()
                 if k not in {"target_skills", "cot_response"}
             }
         if isinstance(obj, list):
-            return [_sanitize_response(v) for v in obj]
+            return [_sanitize_response(v, preserve_machine_fields) for v in obj]
         if isinstance(obj, str):
+            if preserve_machine_fields:
+                return obj
             cleaned = obj
             for eng, label in _field_labels_for_response.items():
                 if eng and label:
@@ -3383,10 +3598,12 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
         )
         if _normalization is not None:
             _scope_result["\u67e5\u8be2\u5f52\u4e00\u5316"] = _normalization.to_dict()
-        return _sanitize_response(_scope_result)
+        return _finalize_timing_response(_sanitize_response(_scope_result))
 
+    _stage_started = time.perf_counter()
     query_document_catalog, source_status = medical_query_router.reload_document_catalog_snapshot()
     log(medical_query_router.format_catalog_source_log("[病历筛选元数据实时刷新]", source_status))
+    _record_stage("metadata_ms", _stage_started)
 
     # ═══════════════════════════════════════════════════════════════════
     # Stage 0: Unified Query Understanding (1 LLM call replaces 4 stages)
@@ -3394,6 +3611,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
     # ═══════════════════════════════════════════════════════════════════
     from microharness.agent.query_understanding import understand_query
     from microharness.medical.query_ir import build_query_ir
+    _stage_started = time.perf_counter()
     analysis = understand_query(
         condition,
         model=router_model,
@@ -3401,6 +3619,79 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
     )
     analysis = _repair_analysis_structure(analysis, condition)
     _query_ir = build_query_ir(analysis, condition)
+    from microharness.medical.query_ir_quality import (
+        assess_query_ir,
+        build_ir_ambiguity_response,
+    )
+    _ir_quality = assess_query_ir(_query_ir, condition, analysis)
+    _ir_retried = False
+    if not _ir_quality.valid:
+        _ir_retried = True
+        retry_feedback = "\n".join(
+            f"- {item.code}: {item.message}"
+            for item in _ir_quality.issues
+        )
+        log(f"[IR质量门禁] 首次IR不完整，执行一次结构化重试: {retry_feedback.replace(chr(10), '；')}")
+        retry_analysis = understand_query(
+            condition,
+            model=router_model,
+            document_catalog=query_document_catalog,
+            retry_feedback=retry_feedback,
+        )
+        retry_analysis = _repair_analysis_structure(retry_analysis, condition)
+        retry_query_ir = build_query_ir(retry_analysis, condition)
+        retry_quality = assess_query_ir(retry_query_ir, condition, retry_analysis)
+        analysis = retry_analysis
+        _query_ir = retry_query_ir
+        _ir_quality = retry_quality
+
+    if not _ir_quality.valid:
+        log(
+            "[IR质量门禁] 重试后仍存在关键歧义，停止执行: "
+            + "；".join(item.code for item in _ir_quality.issues)
+        )
+        ambiguity_result = build_ir_ambiguity_response(
+            condition,
+            _query_ir,
+            _ir_quality,
+            original_condition=original_condition,
+            analysis=analysis,
+            retried=_ir_retried,
+        )
+        if _normalization is not None:
+            ambiguity_result["查询归一化"] = _normalization.to_dict()
+        _record_stage("understanding_ms", _stage_started)
+        return _finalize_timing_response(_sanitize_response(ambiguity_result))
+
+    log(
+        f"[IR质量门禁] 通过 | score={_ir_quality.score:.2f} "
+        f"| warnings={len(_ir_quality.warnings)} | retried={'是' if _ir_retried else '否'}"
+    )
+    _record_stage("understanding_ms", _stage_started)
+    from microharness.medical.evidence_plan import (
+        apply_evidence_plan_to_analysis,
+        build_evidence_plan,
+    )
+    _stage_started = time.perf_counter()
+    _evidence_plan = build_evidence_plan(
+        _query_ir,
+        document_catalog=query_document_catalog,
+        service_catalog=_service_catalog_for_evidence_plan,
+    )
+    _planned_source_count = sum(len(item.sources) for item in _evidence_plan.conditions)
+    log(
+        f"[EvidencePlan] 条件数={len(_evidence_plan.conditions)} "
+        f"| 候选来源={_planned_source_count} "
+        f"| 未解析={_evidence_plan.unresolved_count}"
+    )
+    analysis = apply_evidence_plan_to_analysis(analysis, _evidence_plan)
+    _consumed_source_count = sum(
+        len(item.get("evidence_plan_source_ids") or [])
+        for item in analysis.get("conditions", [])
+        if isinstance(item, dict)
+    )
+    log(f"[EvidencePlan] 已注入现有执行链来源={_consumed_source_count}")
+    _record_stage("evidence_plan_ms", _stage_started)
 
     # Negation
     _negate = analysis.get("negated", False)
@@ -3430,6 +3721,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
         or len(analysis.get("conditions", []) or []) > 1
         or bool(analysis.get("connector"))
     )
+    _scheduler_started = time.perf_counter()
     if _has_time_offset and planner_model and not _is_compound_temporal:
         # ── Scheduler pipeline ──
         try:
@@ -3454,6 +3746,8 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                         log("[Scheduler] 结果缺少per_condition证据 → 走现有管线")
                         raise RuntimeError("scheduler result missing per_condition evidence")
                     result["查询IR"] = _query_ir.to_dict()
+                    result["IR质量"] = _ir_quality.to_dict() | {"retried": _ir_retried}
+                    result["证据计划"] = _evidence_plan.to_dict()
                     if _negate and result.get("results"):
                         # Check internal negation (same logic as main path)
                         _has_int_neg = any(
@@ -3487,7 +3781,12 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                     result["规范条件"] = condition
                     if _normalization is not None:
                         result["查询归一化"] = _normalization.to_dict()
-                    return _sanitize_response(result)
+                    _record_stage("condition_execution_ms", _scheduler_started)
+                    _enrichment_started = time.perf_counter()
+                    from microharness.medical.evidence import enrich_response_with_evidence_model
+                    result = enrich_response_with_evidence_model(result, _query_ir)
+                    _record_stage("evidence_enrichment_ms", _enrichment_started)
+                    return _finalize_timing_response(_sanitize_response(result))
                 log(f"[Scheduler] 执行引擎回退 → 走现有管线")
             else:
                 log(f"[Scheduler] 计划生成失败 → 走现有管线")
@@ -3544,8 +3843,8 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
     log(f"{'='*60}")
 
     if register_no or global_patient_id:
-        _query_start = time.time()
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+        import threading
         from microharness.database.field_mapper import TABLE_MAP, DOC_FIELDS, COMMON_FIELDS
         from microharness.database.db_client import get_db as get_database
 
@@ -3558,39 +3857,79 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
         _sub_svc_map = {}  # sq → list of matched service dicts
         _svc_needed = {}   # unique service_id → svc_dict
         _svc_results = {}  # service_id → list of binding results
+        _svc_by_label = {}
+        _svc_futures = {}
+        _svc_lock = threading.RLock()
+        try:
+            _svc_max_concurrency = max(1, int(os.environ.get("MEDICAL_SERVICE_MAX_CONCURRENCY", "3")))
+        except (TypeError, ValueError):
+            _svc_max_concurrency = 3
+
+        def _register_service(svc: dict):
+            fsid = svc.get("id") or svc.get("name")
+            if not fsid:
+                return "", None
+            svc_url = svc.get("url", "")
+            if _base_url and svc_url and not svc_url.startswith("http"):
+                svc_url = f"{_base_url}/{svc_url.lstrip('/')}"
+            svc_with_id = {**svc, "url": svc_url, "id": fsid}
+            with _svc_lock:
+                registered = _svc_needed.setdefault(fsid, svc_with_id)
+                label = registered.get("label", registered.get("name", fsid))
+                _svc_by_label[label] = {
+                    "id": fsid,
+                    "returns": registered.get("returns", ""),
+                    "description": registered.get("description", ""),
+                }
+            return fsid, registered
+
+        def _call_service_once(fsid: str, svc: dict, query_text: str,
+                               source: str, log_prefix: str):
+            """Execute one patient-wide service once and share its Future."""
+            with _svc_lock:
+                future = _svc_futures.get(fsid)
+                owner = future is None
+                if owner:
+                    future = Future()
+                    _svc_futures[fsid] = future
+            if owner:
+                try:
+                    results = call_service_as_binding(
+                        svc, {"condition": query_text}, register_no=register_no,
+                        global_patient_id=global_patient_id,
+                        visit_no=visit_no, global_visit_id=global_visit_id,
+                    ) or []
+                    with _svc_lock:
+                        _svc_results[fsid] = results
+                    log(f"{log_prefix} {fsid}: {_service_result_summary(results)} (from {source})")
+                    future.set_result(results)
+                except Exception as exc:
+                    with _svc_lock:
+                        _svc_results[fsid] = []
+                    log(f"{log_prefix} {fsid}: 失败 - {exc} (from {source})")
+                    future.set_result([])
+            return future.result()
 
         def _ensure_services_for_query(sq: str, svc_list: list, source: str = "metadata"):
-            """Register and call matched external services for one sub-query."""
+            """Register matched services and reuse their request-scoped result."""
             added = []
             for svc in svc_list or []:
-                fsid = svc.get("id") or svc.get("name")
+                fsid, registered = _register_service(svc)
                 if not fsid:
                     continue
-                if fsid not in _svc_needed:
-                    _fsvc_url = svc.get("url", "")
-                    if _base_url and _fsvc_url and not _fsvc_url.startswith("http"):
-                        _fsvc_url = f"{_base_url}/{_fsvc_url.lstrip('/')}"
-                    _fsvc_with_id = {**svc, "url": _fsvc_url, "id": fsid}
-                    _svc_needed[fsid] = _fsvc_with_id
-                    try:
-                        _fresults = call_service_as_binding(
-                            _fsvc_with_id, {"condition": sq}, register_no=register_no,
-                            global_patient_id=global_patient_id,
-                            visit_no=visit_no, global_visit_id=global_visit_id
-                        )
-                        _svc_results[fsid] = _fresults or []
-                        log(f"  [Step2-服务] {fsid}: {_service_result_summary(_svc_results[fsid])} (from {source})")
-                    except Exception as _e:
-                        log(f"  [Step2-服务] {fsid}: 失败 - {_e}")
-                        _svc_results[fsid] = []
-                if fsid in _svc_needed:
-                    added.append(_svc_needed[fsid])
+                added.append(registered)
             if added:
-                bucket = _sub_svc_map.setdefault(sq, [])
-                seen = {s.get("id") for s in bucket}
+                with _svc_lock:
+                    bucket = _sub_svc_map.setdefault(sq, [])
+                    seen = {s.get("id") for s in bucket}
+                    for svc in added:
+                        if svc.get("id") not in seen:
+                            bucket.append(svc)
                 for svc in added:
-                    if svc.get("id") not in seen:
-                        bucket.append(svc)
+                    _call_service_once(
+                        svc["id"], svc, sq, source=source,
+                        log_prefix="  [Step2-服务]",
+                    )
             return added
 
         # Use analysis results for service matching (no additional LLM call)
@@ -3611,36 +3950,76 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                         svc_url = f"{_base_url}/{svc_url.lstrip('/')}"
                     svc_with_id = {**svc, "url": svc_url, "id": sid}
                     matched.append(svc_with_id)
-                    _svc_needed[sid] = svc_with_id
+                    _register_service(svc_with_id)
             _sub_svc_map[sq] = matched
 
         # Build label→service_meta map for injecting skill guidance into judge prompts
-        _svc_by_label = {}
         for _sid, _svc in _svc_needed.items():
             _label = _svc.get("label", _svc.get("name", _sid))
             _svc_by_label[_label] = {"id": _sid, "returns": _svc.get("returns", ""),
                                        "description": _svc.get("description", "")}
 
-        # ── Call each needed service ONCE (serial, HTTP) ──
-        for sid, svc in _svc_needed.items():
-            try:
-                results = call_service_as_binding(
-                    svc, {"condition": condition}, register_no=register_no,
-                    global_patient_id=global_patient_id,
-                    visit_no=visit_no, global_visit_id=global_visit_id
-                )
-                _svc_results[sid] = results or []
-                log(f"[服务调用] {sid}: {_service_result_summary(_svc_results[sid])}")
-            except Exception as e:
-                log(f"[服务调用] {sid}: 失败 - {e}")
-                _svc_results[sid] = []
+        # ── Call independent structured services once with bounded concurrency ──
+        _stage_started = time.perf_counter()
+        if _svc_needed:
+            service_workers = min(_svc_max_concurrency, len(_svc_needed))
+            log(
+                f"[结构化服务并行] 服务数={len(_svc_needed)} | "
+                f"最大并发={service_workers}"
+            )
+            with ThreadPoolExecutor(max_workers=service_workers) as service_executor:
+                service_futures = [
+                    service_executor.submit(
+                        _call_service_once,
+                        sid,
+                        svc,
+                        condition,
+                        "analysis",
+                        "[服务调用]",
+                    )
+                    for sid, svc in list(_svc_needed.items())
+                ]
+                for service_future in as_completed(service_futures):
+                    service_future.result()
+        _record_stage("structured_services_ms", _stage_started)
 
         from microharness.database.field_mapper import TABLE_MAP as _TM, DOC_FIELDS as _DF, COMMON_FIELDS as _CF, find_db_column
         from microharness.database.db_client import get_db as get_database
 
+        _db_health_lock = threading.Lock()
+        _db_health_state = {"checked": False, "ok": False, "error": ""}
+
+        def _request_db_health_check(db):
+            """Run the database connectivity test at most once per request."""
+            with _db_health_lock:
+                if not _db_health_state["checked"]:
+                    health_started = time.perf_counter()
+                    try:
+                        _db_health_state["ok"] = bool(db.test())
+                        if not _db_health_state["ok"]:
+                            _db_health_state["error"] = "数据库连通性检测未通过"
+                    except Exception as exc:
+                        _db_health_state["ok"] = False
+                        _db_health_state["error"] = str(exc)
+                    _db_health_state["checked"] = True
+                    health_ms = int((time.perf_counter() - health_started) * 1000)
+                    log(
+                        f"  [DB] 请求级连通性检测: "
+                        f"{'通过' if _db_health_state['ok'] else '失败'} | {health_ms}ms"
+                    )
+                return _db_health_state["ok"], _db_health_state["error"]
+
         def query_db_for_route(sq_route):
             """Query DB for tables+columns specified by this route."""
-            return _query_db(sq_route, register_no, visit_no, global_patient_id, global_visit_id, log_fn=log)
+            return _query_db(
+                sq_route,
+                register_no,
+                visit_no,
+                global_patient_id,
+                global_visit_id,
+                log_fn=log,
+                db_health_check=_request_db_health_check,
+            )
 
         # ── For EACH sub-condition, check ALL files in parallel ──
         # Build a map from sub-condition text to its analysis (for routing without 2nd LLM call)
@@ -3666,6 +4045,11 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
             sq_docs = cond_a.get("target_docs", [])
             sq_sections = cond_a.get("target_sections", [])
             sq_targets = cond_a.get("targets", {}) if isinstance(cond_a.get("targets", {}), dict) else {}
+            ir_docs = list(sq_docs or [])
+            ir_sections = list(sq_sections or [])
+            ir_targets = dict(sq_targets or {})
+            ir_services = list(cond_a.get("target_skills") or [])
+            route_source = "ir"
             sq_keyword = cond_a.get("keyword", sq)
             _clean_sq_keyword = _extract_core_keyword(str(sq_keyword))
             if _clean_sq_keyword and len(_clean_sq_keyword) < len(str(sq_keyword)):
@@ -3674,8 +4058,35 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
             sq_is_numeric = cond_a.get("is_numeric", False)
             sq_semantic_class = cond_a.get("semantic_class", "")
 
-            # Fallback: if analysis had no routing (e.g. fallback source), use keyword router
-            if not sq_docs:
+            route_availability = _resolve_executable_route_sources(
+                sq_docs,
+                _sub_svc_map.get(sq, []),
+                query_document_catalog,
+                services,
+                _TM,
+            )
+            sq_docs = route_availability["documents"]
+            executable_service_ids = set(route_availability["services"])
+            _sub_svc_map[sq] = [
+                svc for svc in _sub_svc_map.get(sq, [])
+                if isinstance(svc, dict)
+                and (svc.get("id") or svc.get("name")) in executable_service_ids
+            ]
+            if route_availability["unresolved_documents"]:
+                log(
+                    "  [Step2-路由]   → 未解析文档（保留诊断，不用于查库）: "
+                    f"{route_availability['unresolved_documents']}"
+                )
+            if route_availability["unresolved_services"]:
+                log(
+                    "  [Step2-路由]   → 不可执行服务（保留诊断）: "
+                    f"{route_availability['unresolved_services']}"
+                )
+
+            # Fallback is only needed when the IR has no executable evidence source.
+            if route_availability["should_fallback"]:
+                route_source = "fallback"
+                log("  [Step2-路由]   → 无有效文档或结构化服务，执行fallback路由")
                 router = QueryRouter(
                     model=router_model,
                     document_catalog=query_document_catalog,
@@ -3705,6 +4116,28 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 log(f"  [Step2-理解]   → 文档: {sq_docs}")
                 log(f"  [Step2-理解]   → 章节: {sq_sections[:6]}")
                 log(f"  [Step2-理解]   → 关键词: {sq_keyword} 修饰词: {sq_modifiers}")
+                if sq_docs and executable_service_ids:
+                    log("  [Step2-路由]   → 文档与结构化服务联合取证，跳过fallback")
+                elif sq_docs:
+                    log("  [Step2-路由]   → 纯文档路由，跳过fallback")
+                else:
+                    log("  [Step2-路由]   → 纯结构化服务路由，跳过fallback")
+
+            # A fallback router can still return catalog entries that are not
+            # mapped to a local table. Keep those diagnostics out of DB execution.
+            fallback_availability = _resolve_executable_route_sources(
+                sq_docs,
+                _sub_svc_map.get(sq, []),
+                query_document_catalog,
+                services,
+                _TM,
+            )
+            sq_docs = fallback_availability["documents"]
+            if fallback_availability["unresolved_documents"]:
+                log(
+                    "  [Step2-路由]   → fallback未解析文档（未用于查库）: "
+                    f"{fallback_availability['unresolved_documents']}"
+                )
 
             route_services = [
                 svc.get("id") or svc.get("name", "")
@@ -3782,6 +4215,41 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
             sq_xml = sq_route.get("target_xml_paths", [])
             cond_no = _sub_index.get(sq, "?")
             log(
+                "[完整路由][执行前] "
+                + json.dumps(
+                    {
+                        "条件序号": cond_no,
+                        "条件": sq,
+                        "路由来源": route_source,
+                        "IR": {
+                            "keyword": cond_a.get("keyword", ""),
+                            "entity": cond_a.get("entity", ""),
+                            "entity_type": cond_a.get("entity_type", ""),
+                            "predicate": cond_a.get("predicate", ""),
+                            "semantic_class": cond_a.get("semantic_class", ""),
+                            "target_docs": ir_docs,
+                            "target_sections": ir_sections,
+                            "targets": ir_targets,
+                            "target_skills": ir_services,
+                            "evidence_plan_source_ids": cond_a.get("evidence_plan_source_ids", []),
+                        },
+                        "主证据服务": primary_service or "",
+                        "事件锚点": {
+                            "文档": anchor_docs,
+                            "章节": anchor_sections,
+                        },
+                        "最终路由": {
+                            "文档": sq_docs,
+                            "章节": sq_sections,
+                            "文档章节映射": targets,
+                            "服务": route_services,
+                        },
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
+            log(
                 f"  [Step2-执行] 条件{cond_no}: 文档={sq_docs or ['无']} | "
                 f"章节={sq_sections[:4] or ['无']} | 服务={route_services or ['无']}"
             )
@@ -3807,7 +4275,32 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
             elif time_window and route_services and time_window.required:
                 log(f"  [Step2-时间窗] {time_window.scope}: 未解析 ({time_window.reason})")
 
-            log(f"  [Step2-路由]   → 匹配文件: {[ab['file'] for ab in relevant_files]}")
+            matched_file_names = [ab.get("file", "") for ab in relevant_files if isinstance(ab, dict)]
+            log(f"  [Step2-路由]   → 匹配文件: {matched_file_names}")
+            log(
+                "[完整路由][执行后] "
+                + json.dumps(
+                    {
+                        "条件序号": cond_no,
+                        "条件": sq,
+                        "实际证据文件": matched_file_names,
+                        "服务结果": {
+                            sid: _service_result_summary(_svc_results.get(sid) or [])
+                            for sid in route_services
+                        },
+                        "时间窗": {
+                            "required": bool(time_window and time_window.required),
+                            "resolved": bool(time_window and time_window.resolved),
+                            "scope": getattr(time_window, "scope", "") if time_window else "",
+                            "description": time_window.describe() if time_window and time_window.resolved else "",
+                            "source": getattr(time_window, "source", "") if time_window else "",
+                            "reason": getattr(time_window, "reason", "") if time_window else "",
+                        },
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
 
             # Check each relevant file in parallel
             def check_one_file(ab):
@@ -3820,6 +4313,9 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                     return {
                         "file": ab["file"],
                         "matched": False,
+                        "status": "UNKNOWN",
+                        "reason_code": "SOURCE_UNAVAILABLE",
+                        "data_quality": "SOURCE_ERROR",
                         "reason": message,
                         "fields": fields,
                         "cot_response": "",
@@ -3924,6 +4420,36 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                             f"    [Step4-检验规则] {ab['file']}: "
                             f"{'✓ 符合' if result['matched'] else '✗ 不符合'} — {result['reason'][:80]}"
                         )
+                        return result
+                    try:
+                        from microharness.medical.medication_rules import judge_medication_condition
+                        medication_judge = judge_medication_condition(
+                            sq,
+                            ab.get("bindings", []),
+                            entity=(sq_route.get("_decomposed_keyword") or _extract_core_keyword(sq)),
+                            time_window=time_window,
+                            semantic=ab.get("semantic", {}),
+                        )
+                    except Exception as _medication_e:
+                        medication_judge = {"applicable": False, "error": str(_medication_e)}
+                    if medication_judge.get("applicable"):
+                        result = {
+                            "file": ab["file"],
+                            "matched": bool(medication_judge.get("matched")),
+                            "status": medication_judge.get("status"),
+                            "reason_code": medication_judge.get("reason_code"),
+                            "reason": medication_judge.get("reason", "用药结构化判断完成"),
+                            "fields": medication_judge.get("fields", sub_summary)[:4000],
+                            "cot_response": "",
+                        }
+                        if medication_judge.get("candidate_records"):
+                            result["候选记录"] = medication_judge.get("candidate_records")
+                            result["候选记录数"] = medication_judge.get(
+                                "candidate_count",
+                                len(medication_judge.get("candidate_records") or []),
+                            )
+                        med_status = result.get("status") or ("MATCHED" if result["matched"] else "NOT_MATCHED")
+                        log(f"    [Step4-用药规则] {ab['file']}: {med_status} — {result['reason'][:80]}")
                         return result
                     if time_window and time_window.required and not time_window.resolved:
                         try:
@@ -4277,6 +4803,16 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 futures = {ex.submit(check_one_file, ab): ab for ab in relevant_files}
                 for f in as_completed(futures):
                     r = f.result()
+                    from microharness.medical.evidence import attach_native_evidence_records
+                    attach_native_evidence_records(
+                        r,
+                        futures[f],
+                        condition=sq,
+                        entity=(sq_route.get("_decomposed_keyword") or _extract_core_keyword(sq)),
+                        target_sections=sq_sections,
+                        target_xml=sq_xml,
+                        is_numeric=bool(sq_route.get("is_numeric")),
+                    )
                     sq_files.append(r)
                     if r["matched"]:
                         sq_matched = True
@@ -4447,6 +4983,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
 
         # Run sub-conditions in PARALLEL
         per_condition_results = {}
+        _condition_execution_started = time.perf_counter()
         with ThreadPoolExecutor(max_workers=min(3, len(sub_queries))) as cex:
             futures = {cex.submit(check_one_condition, sq): sq for sq in sub_queries}
             for f in as_completed(futures):
@@ -4454,6 +4991,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 sq = futures[f]
                 per_condition_results[sq] = r
                 log(f"  [Step4-小结] {'✓' if r['matched'] else '✗'} 子条件「{sq[:30]}」 {r['reason'][:100]}")
+        _record_stage("condition_execution_ms", _condition_execution_started)
 
         # ── Meta-judge: 组合多个子条件的判断结果 ──
         # 这里不用 LLM，因为 AND/OR 是布尔运算，不是语义判断。
@@ -4498,7 +5036,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
             matched = only["matched"]
             reason = only["reason"]
 
-        total_ms = int((time.time() - _query_start) * 1000)
+        execution_elapsed_ms = int((time.perf_counter() - _full_query_start) * 1000)
         # ── Negation flip ──
         # Only flip when negation is EXTERNAL (e.g. "不存在烧伤" = flip the result)
         # Do NOT flip when negation is INTERNAL and already handled by judge
@@ -4581,8 +5119,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
         else:
             summary_label = "? 无法判断"
         log(f"  [Step5-整合] {summary_label} | {reason[:120]}")
-        log(f"  [总耗时] {total_ms}ms ({total_ms/1000:.1f}s)")
-        log(f"{'='*60}\n")
+        log(f"  [执行阶段耗时] {execution_elapsed_ms}ms ({execution_elapsed_ms/1000:.1f}s)")
 
         results = [{
             "register_no": register_no,
@@ -4604,6 +5141,8 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
             "register_no": register_no,
             "route": analysis,
             "查询IR": _query_ir.to_dict(),
+            "IR质量": _ir_quality.to_dict() | {"retried": _ir_retried},
+            "证据计划": _evidence_plan.to_dict(),
             "results": results,
             "matched_count": 1 if matched else 0,
             "判断状态": status,
@@ -4611,27 +5150,43 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
             "置信度": patient_confidence["置信度"],
             "置信等级": patient_confidence["置信等级"],
             "依据等级": patient_confidence["依据等级"],
-            "total_ms": int((time.time() - _query_start) * 1000),
+            "total_ms": execution_elapsed_ms,
         }
+        _enrichment_started = time.perf_counter()
+        from microharness.medical.evidence import enrich_response_with_evidence_model
+        response_obj = enrich_response_with_evidence_model(response_obj, _query_ir)
+        _record_stage("evidence_enrichment_ms", _enrichment_started)
+        _polish_started = time.perf_counter()
         try:
             from microharness.medical.reason_polisher import polish_response_explanations
             response_obj = polish_response_explanations(
                 response_obj,
                 model=router_model or judge_model or planner_model,
             )
-        except Exception:
-            pass
-        return _sanitize_response(response_obj)
+        except Exception as exc:
+            debug_log(f"[解释润色] 跳过: {exc}")
+        finally:
+            _record_stage("explanation_polish_ms", _polish_started)
+        response_obj = _sanitize_response(response_obj)
+        response_obj = _finalize_timing_response(response_obj)
+        log(
+            f"  [全链路总耗时] {response_obj['total_ms']}ms "
+            f"({response_obj['total_ms']/1000:.1f}s) | 阶段={response_obj['timings']}"
+        )
+        log(f"{'='*60}\n")
+        return response_obj
 
     # No patient specified — just return the analysis
-    return _sanitize_response({
+    return _finalize_timing_response(_sanitize_response({
         "condition": condition,
         "原始条件": original_condition,
         "规范条件": condition,
         "查询归一化": _normalization.to_dict() if _normalization is not None else {},
         "route": analysis,
         "查询IR": _query_ir.to_dict(),
-    })
+        "IR质量": _ir_quality.to_dict() | {"retried": _ir_retried},
+        "证据计划": _evidence_plan.to_dict(),
+    }))
 
 
 @app.get("/templates/database_config.html")
