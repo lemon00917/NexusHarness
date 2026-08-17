@@ -12,6 +12,152 @@ Each prompt has 3 variants:
 from microharness.ollama.model_profile import ModelProfile
 
 
+def build_semantic_candidate_prompt(sq: str, query_entity: str,
+                                    judge_summary: str) -> str:
+    """Ask the model to extract one verbatim medical entity candidate."""
+    return f"""查询条件：{sq}
+查询实体：{query_entity}
+病历原文：
+{judge_summary[:1500]}
+
+你只做医学实体原文抽取，不判断同义关系，也不判断患者是否符合。
+从病历原文中逐字复制与查询实体可能相关的最短完整医学实体短语，最多返回5个不同候选。
+
+要求：
+1. matched_entity 必须是病历原文中的连续子串。
+2. matched_entity 只保留疾病、症状、体征、检验异常、药物或操作名称；不要包含章节名、患者、日期、时长、标点或完整句子。
+3. 不得把原文中不存在的查询词填入 matched_entity。
+4. evidence_span 必须是包含 matched_entity 的连续原文短句。
+5. 本阶段只负责召回候选；相关但不等价的表达也可以抽取，后续会独立审核。
+6. 原文即使是否定、疑似、既往或家属情况，只要存在相关医学实体，也要抽取实体；但 matched_entity 不得包含“否认、无、未见、考虑、疑似、既往、患者”等断言词或主体词，这些词必须保留在 evidence_span 中供后续程序判断。
+7. 对体征、测量或检验结果，必须保留会改变医学含义的结果状态词，例如“偏高、偏低、升高、降低、阳性、阴性、异常、正常”；不得只抽取项目名称。患者是否符合仍由后续阶段判断。
+8. 尽量覆盖原文中所有不同表达；同一实体若分别出现在肯定、否定、疑似、既往或不同时间语境中，应分别保留对应 evidence_span。
+9. candidates 按原文出现顺序排列，完全相同的 matched_entity 与 evidence_span 不要重复。
+
+示例：查询“腹痛”，原文“主诉: 患者上腹部疼痛3天。”，matched_entity 应为“上腹部疼痛”。
+否定示例：查询“咳嗽”，原文“现病史: 患者否认咳嗽。”，matched_entity 应为“咳嗽”，evidence_span 应保留“患者否认咳嗽”。
+
+只输出一个 JSON 对象。新格式必须包含 search_complete 和 candidates；同时保留首个候选的旧字段以兼容旧调用方：
+- search_complete: 是否已经完整扫描给定原文，JSON 布尔值 true 或 false
+- candidates: JSON 数组，最多5项；每项包含 matched_entity 和 evidence_span；未找到时为空数组
+- candidates 中每个 matched_entity 与 evidence_span 都必须满足上述逐字原文约束
+- 顶层 matched_entity 和 evidence_span 复制 candidates 第一项；没有候选时为空字符串
+
+字段约束如下，不要复制类型占位符：
+- candidate_found: JSON 布尔值 true 或 false
+- matched_entity: 原文医学实体字符串，未找到时为空字符串
+- evidence_span: 连续原文短句，未找到时为空字符串"""
+
+
+def build_semantic_candidate_retry_prompt(
+    sq: str,
+    query_entity: str,
+    judge_summary: str,
+    previous_reason: str = "",
+) -> str:
+    """Retry candidate extraction when the first response omitted completeness."""
+    return f"""查询条件：{sq}
+查询实体：{query_entity}
+完整病历原文：
+{judge_summary[:1500]}
+
+首次抽取未通过完整性校验：{previous_reason or '未明确确认搜索完整'}。
+请重新逐字扫描上面给出的全部原文。你只抽取原文候选，不判断患者是否符合，不判断同义关系。
+
+严格要求：
+1. 只输出一个 JSON 对象，不要输出解释、Markdown 或代码块。
+2. 程序已经确认“完整病历原文”全部传入且没有被截断；你必须逐字扫描它，并将 search_complete 返回为 JSON 布尔值 true。即使没有任何候选，也必须返回 true，不能因为 candidates 为空而返回 false。
+3. 必须包含 candidate_found 和 candidates。candidates 最多5项；未找到候选时返回空数组并将 candidate_found 设为 false。
+4. 每项只包含 matched_entity 和 evidence_span。两者必须是原文中的连续子串，严禁补写原文不存在的实体。
+5. matched_entity 只保留最短完整医学实体；evidence_span 保留否定、疑似、既往和主体等上下文。
+6. 顶层 matched_entity 和 evidence_span 复制第一项；无候选时都返回空字符串。
+
+返回结构：
+{{"search_complete":true,"candidate_found":false,"candidates":[],"matched_entity":"","evidence_span":""}}"""
+
+
+def build_semantic_equivalence_prompt(query_entity: str, matched_entity: str,
+                                      entity_type: str = "") -> str:
+    """Ask the model to audit one-way clinical entailment only."""
+    return f"""你是医学筛选的严格单向语义蕴含审核器。只比较两个医学短语，不判断患者，不补充病历外事实。
+
+查询概念：{query_entity}
+原文概念：{matched_entity}
+
+审核目标：假设病历肯定描述“原文概念”，判断这是否足以证明“查询概念”存在。只要求原文到查询的单向蕴含，不要求查询反向证明原文。
+
+方向定义：
+- 前提 PREMISE：患者存在“原文概念”。
+- 假设 HYPOTHESIS：患者存在“查询概念”。
+- relation 只描述“前提到假设”的关系，禁止检查或解释“假设到前提”的反向关系。
+- 方向示例仅用于理解方向：前提“左膝疼痛”可以推出假设“膝部疼痛”；反向是否成立与本题无关。
+
+先分别标注两个短语的断言层级，只能使用以下枚举：
+- DIAGNOSIS：疾病名称或明确诊断
+- SYMPTOM_OR_SIGN：患者症状或临床体征
+- OBSERVATION_OR_MEASUREMENT：测量值或描述性发现，单独不能作为疾病诊断
+- MEDICATION：药物
+- LAB_TEST：检验项目或检验结果
+- PROCEDURE：操作、手术或治疗程序
+- OTHER：无法归入以上类别
+
+然后只选择一个 relation 枚举：
+- SAME_CONCEPT：两个短语是同一临床概念的同义、简称、口语或规范表达。
+- SOURCE_MORE_SPECIFIC：原文概念是查询概念的更具体部位、诱因、程度、时间、亚型或表现形式；患者存在原文概念时，必然也存在查询概念。
+- RELATED_ONLY：两个概念相关、伴随或可能互相提示，但原文概念不能单独证明查询概念。
+- SOURCE_BROADER：原文概念比查询概念更宽，不能证明更具体的查询概念。
+- UNRELATED：无关。
+- UNCERTAIN：无法可靠分类。
+
+判断约束：
+- 医学口语、书面语、简称和规范名称的差异，本身不代表抽象层级不同。
+- 不要因为症状名称采用规范医学术语就把它标为疾病诊断；只有疾病名称或明确诊断才是 DIAGNOSIS。
+- 疾病诊断不能由症状、一次观察、测量值、体征、检验异常或治疗行为直接推出。
+- 部位、诱因、程度、时间或亚型等限定可以让原文更具体；只要原文仍直接证明查询概念，不应因为反向替换不成立而拒绝。
+- 不得因为两个短语都属于症状或都与同一种疾病相关，就判为蕴含。
+- 否定、疑似、既往、家属主体和时间范围不在本阶段判断，由后续程序结合完整原文确定。
+- 上游的 entity_type 只是粗粒度路由分类，可能把疾病和症状放在同一类；不得用该分类强行区分两个短语。
+
+relation 必须严格返回上述枚举之一，不能返回布尔值或自创标签。
+
+只输出一个 JSON 对象，字段约束如下，不要复制类型占位符：
+- query_kind: 查询概念的断言层级枚举
+- source_kind: 原文概念的断言层级枚举
+- relation: 单向关系枚举
+- reason: 一句话说明选择该关系的医学语义依据"""
+
+
+def build_semantic_symptom_relation_prompt(query_entity: str,
+                                            matched_entity: str) -> str:
+    """Ask the model to distinguish one symptom from a related symptom."""
+    return f"""你是医学筛选的严格症状同一性审核器。只比较两个已经被识别为症状或体征的短语，不判断患者，不输出患者是否符合。
+
+查询症状：{query_entity}
+原文症状：{matched_entity}
+
+审核目标：判断“原文症状”究竟是“查询症状”的同一表达或带限定表达，还是一个可以单独记录的不同症状。
+
+relation 只能选择以下一个枚举：
+- SAME_SYMPTOM：同一症状的同义、口语、书面语、简称或规范表达。
+- SOURCE_QUALIFIED_SAME_SYMPTOM：原文仍是查询症状本身，只增加了部位、诱因、程度、时间或活动状态等限定。
+- DISTINCT_SYMPTOMS：两个短语是不同的症状现象；即使经常伴随、存在因果关系、属于同一系统或同一种疾病，也不能互相证明。
+- UNCERTAIN：无法可靠确定。
+
+严格约束：
+- 只判断症状本身是否相同，不要因为医学相关、常同时发生或一个可能导致另一个就判为同一症状。
+- 如果临床记录中可以把两者作为两个独立症状分别询问、分别肯定或分别否定，应选择 DISTINCT_SYMPTOMS。
+- 如果原文只是给同一症状增加位置、诱因、程度、时间或活动状态，应选择 SOURCE_QUALIFIED_SAME_SYMPTOM。
+- 不得返回布尔值，不得自创标签，reason 与 relation 必须一致。
+
+方向示例仅用于理解规则：
+- 查询“腹痛”，原文“右下腹疼痛”属于 SOURCE_QUALIFIED_SAME_SYMPTOM。
+- 查询“头晕”，原文“头痛”属于 DISTINCT_SYMPTOMS，不能因为二者可能同时出现就互相证明。
+
+只输出一个 JSON 对象：
+- relation: 症状关系枚举
+- reason: 一句话说明依据"""
+
+
 def build_query_normalization_prompt(profile: ModelProfile, raw_condition: str,
                                      deterministic_condition: str) -> str:
     """Build a prompt that repairs user wording without judging data."""
@@ -44,13 +190,20 @@ def build_query_normalization_prompt(profile: ModelProfile, raw_condition: str,
 
 def build_judge_prompt(profile: ModelProfile, sq: str, kw_hint: str,
                        judge_summary: str, hints: str,
-                       modifiers: list = None) -> str:
+                       modifiers: list = None,
+                       semantic_recall: bool = False,
+                       query_entity: str = "",
+                       entity_candidates: list | None = None,
+                       entity_type: str = "") -> str:
     """Build the per-file judge prompt adapted to model capabilities.
 
     Args:
         modifiers: Optional list of modifier words (e.g. ["没有输血"], ["治好"]).
                    When provided, modifier verification is merged into this
                    single judge call instead of a separate LLM round.
+        semantic_recall: Ask the model only to locate a strictly equivalent
+                         entity and quote source evidence. The program still
+                         performs the final medical assertion judgment.
     """
 
     # ── Build modifier guidance section ──
@@ -68,6 +221,23 @@ def build_judge_prompt(profile: ModelProfile, sq: str, kw_hint: str,
 - 诊断接口只说明诊断名称和诊断类型，不能单独证明"好转/没有好转"等转归；除非查询明确问"出院诊断/仍诊断为"，且记录类型是出院诊断
 - 修饰词不满足时 matched=false
 """
+
+    evidence_semantics_section = """
+证据语义边界（必须遵守）：
+- 只有患者本人、肯定性且与条件时间语境一致的记录才能作为匹配证据
+- “否认/无/未见/不存在/已排除”属于否定证据，不能因为关键词出现就判定匹配
+- 家属、父母、子女、配偶等非患者主体的情况不能证明患者本人存在该情况
+- “考虑/疑似/可能/待排/不除外”等不确定表述不能证明确定存在；除非条件本身明确查询疑似或待排状态
+- 既往或历史记录不能自动证明当前仍存在；条件明确查询既往史时除外
+- 字符分散或部分字符重叠只能用于发现候选文本，不能单独作为最终匹配依据
+"""
+
+    if semantic_recall:
+        return build_semantic_candidate_prompt(
+            sq,
+            query_entity or str(next(iter(entity_candidates or []), "")),
+            judge_summary,
+        )
 
     if profile.thinking == "native":
         # ── Native thinking (deepseek-r1): direct, no hand-holding ──
@@ -88,6 +258,7 @@ def build_judge_prompt(profile: ModelProfile, sq: str, kw_hint: str,
 {hints}
 """
         prompt += mod_section
+        prompt += evidence_semantics_section
         prompt += """
 输出JSON格式（必须同时包含reasoning和reason两个字段）：
 {{"reasoning":"简述推理过程","matched":true或false,"reason":"用户可读的一句话理由"}}"""
@@ -108,10 +279,11 @@ def build_judge_prompt(profile: ModelProfile, sq: str, kw_hint: str,
 {hints}
 """
         prompt += mod_section
+        prompt += evidence_semantics_section
         prompt += """
 推理步骤：
 1. 确认核心关键词
-2. 扫描字段值是否包含关键词（连续匹配或字符分散均算匹配）
+2. 扫描字段值中的候选关键词，并核对患者主体、否定、确定性和时间语境
 3. 数值条件使用预计算值
 4. 如有修饰词，验证修饰词是否满足
 5. 综合关键词和修饰词给出结论
@@ -135,6 +307,7 @@ def build_judge_prompt(profile: ModelProfile, sq: str, kw_hint: str,
 {hints}
 """
         prompt += mod_section
+        prompt += evidence_semantics_section
         prompt += """
 ## 推理步骤（必须按顺序执行）
 
@@ -143,7 +316,7 @@ def build_judge_prompt(profile: ModelProfile, sq: str, kw_hint: str,
 第2步 扫描字段值：优先看orderName(药名)、diagnoseName(诊断名)等名称字段，这些是判断的主要依据。
    - 优先匹配：先检查orderName/diagnoseName字段，名称匹配即可判定
    - 连续匹配：关键词作为子串出现在字段值中 → 匹配
-   - 字符分散：关键词拆开的字都在字段值中出现 → 也算匹配（如"背痛"→"背部疼痛"）
+   - 字符分散：关键词拆开的字只用于定位候选片段；必须在同一局部语境中形成目标概念，并通过主体、否定和确定性检查后才能匹配
    - 数值条件：只能用预计算值或日期字段做计算，禁止从文本描述推断数值
    - 严禁推测：不要从剂型(颗粒剂/注射剂等)、用法、剂量等字段推测是否包含某药物，只看名称字段
 
@@ -419,23 +592,28 @@ def build_query_understanding_prompt(profile: ModelProfile, condition: str,
 2. negated: 是否含否定语义(false/true)
 3. connector: compound时"and"或"or"，否则null
 4. entity: 医学实体本体，必须去除"有/存在/患有/诊断为/诊断有/有诊断有/的患者"等功能词。例如"有诊断有胃息肉"→"胃息肉"
-5. entity_type: diagnosis/drug/lab/imaging/procedure/demographic/duration/outcome/unknown 之一
-6. predicate: exists/diagnosed/used/performed/high/low/abnormal/normal/compare/outcome/unknown 之一
-7. keyword: 等于entity；如果是年龄/住院天数等结构条件，填"年龄"/"住院天数"
-8. modifiers: 否定短语或状态变化词，无则空数组[]
-9. is_numeric: 是否为数值比较(false/true)
-10. target_docs: 阅读上方各文档的"用途"和章节说明，选择最相关的文档名列表
-11. target_sections: 在选定文档的章节中选择相关章节，章节名必须逐字复制
-12. target_skills: 阅读上方各服务的"描述"和"触发词"，选择相关服务id列表，无则[]
-13. 语义归一规则："有X/患有X/存在X/诊断为X/诊断有X/有诊断有X"都是诊断存在类，entity=X，entity_type=diagnosis，target_skills必须包含diagnosis-query
-14. domain: 条件所属通用领域，如demographic/encounter/diagnosis/symptom/clinical_sign/medication/laboratory/procedure/document_semantic/clinical_concept
-15. temporal: 时间约束对象；无则null。有则输出scope、event、relation、duration、unit、selection、raw。event使用通用事件语义，不得填文档名
-16. assertion: 断言对象，输出present、certainty(confirmed/suspected)、subject(patient/family)、temporal_context(current/history)
-17. quantifier: 次数或序列约束；无则null。有则输出mode(at_least/more_than/exact/consecutive/first/last/any)、count、unit
-18. depends_on: 依赖的事件写成["event:事件名"]，无依赖为[]；attributes保存剂量、途径、部位、程度等未被固定字段表达的属性
+5. canonical_entity: entity对应的规范医学名称；无法可靠规范化时与entity相同
+6. aliases: 只填写与canonical_entity严格等价的别名、缩写、全称或常见书写变体；禁止填写相关疾病、上下位概念、并发症、症状联想或检查组合，无可靠别名时[]
+7. entity_confidence: 本次实体归一化置信度0到1；normalization_source固定填写"llm"
+8. entity_type: diagnosis/drug/lab/imaging/procedure/demographic/duration/outcome/unknown 之一
+9. predicate: exists/diagnosed/used/performed/high/low/abnormal/normal/compare/outcome/unknown 之一
+10. keyword: 等于entity；如果是年龄/住院天数等结构条件，填"年龄"/"住院天数"
+11. modifiers: 否定短语或状态变化词，无则空数组[]
+12. is_numeric: 是否为数值比较(false/true)
+13. numeric_comparison: is_numeric=true时必须输出subject、operator、threshold、unit；operator只能是>/</>=/<=/=或等价中文，非数值条件填null
+14. target_docs: 阅读上方各文档的"用途"和章节说明，选择最相关的文档名列表
+15. target_sections: 在选定文档的章节中选择相关章节，章节名必须逐字复制
+16. target_skills: 阅读上方各服务的"描述"和"触发词"，选择相关服务id列表，无则[]
+17. 语义归一规则："有X/患有X/存在X/诊断为X/诊断有X/有诊断有X"都是诊断存在类，entity=X，entity_type=diagnosis，target_skills必须包含diagnosis-query
+18. domain: 条件所属通用领域，如demographic/encounter/diagnosis/symptom/clinical_sign/medication/laboratory/procedure/document_semantic/clinical_concept
+19. temporal: 时间约束对象；无则null。有则输出scope、event、relation、duration、unit、selection、raw。event使用通用事件语义，不得填文档名
+20. assertion: 断言对象，输出present、certainty(confirmed/suspected)、subject(patient/family)、temporal_context(current/history)
+21. quantifier: 次数或序列约束；无则null。有则输出mode(any/all/at_least/more_than/exact/at_most/less_than/earliest/latest/consecutive)、count、unit
+22. depends_on: 依赖的事件写成["event:事件名"]，无依赖为[]；attributes保存剂量、途径、部位、程度等未被固定字段表达的属性
+23. 转归/状态条件必须在attributes中输出通用字段：outcome_state取improved/resolved/not_improved/persistent/worsened/recurred之一；outcome_phase取admission/hospitalization/discharge/post_discharge/post_treatment/postoperative/follow_up之一；只有条件明确要求“出院诊断/仍诊断”时outcome_evidence才填diagnosis，否则填state。非转归条件不要填写这些字段
 
 输出JSON：
-{{"reasoning":"简述推理","type":"simple","negated":false,"connector":null,"conditions":[{{"text":"子条件原文","entity":"医学实体","entity_type":"diagnosis","domain":"diagnosis","predicate":"exists","keyword":"核心概念","temporal":null,"assertion":{{"present":true,"certainty":"confirmed","subject":"patient","temporal_context":"current"}},"quantifier":null,"depends_on":[],"attributes":{{}},"modifiers":[],"is_numeric":false,"target_docs":["文档名"],"target_sections":["章节名"],"target_skills":["skill-id"]}}]}}"""
+{{"reasoning":"简述推理","type":"simple","negated":false,"connector":null,"conditions":[{{"text":"子条件原文","entity":"医学实体","canonical_entity":"规范医学名称","aliases":["严格等价别名"],"entity_confidence":0.95,"normalization_source":"llm","entity_type":"diagnosis","domain":"diagnosis","predicate":"exists","keyword":"核心概念","temporal":null,"assertion":{{"present":true,"certainty":"confirmed","subject":"patient","temporal_context":"current"}},"quantifier":null,"depends_on":[],"attributes":{{}},"modifiers":[],"is_numeric":false,"numeric_comparison":null,"target_docs":["文档名"],"target_sections":["章节名"],"target_skills":["skill-id"]}}]}}"""
     else:
         return f"""分析医学查询。阅读下方的病历文档目录和外部服务菜单，判断类型并选择路由。
 
@@ -453,20 +631,25 @@ def build_query_understanding_prompt(profile: ModelProfile, condition: str,
 2. negated: 含否定语义为true
 3. connector: compound时and/or，其他null
 4. entity: 医学实体本体，去除"有/存在/患有/诊断为/诊断有/有诊断有/的患者"等功能词。例："有诊断有胃息肉"→"胃息肉"
-5. entity_type: diagnosis/drug/lab/imaging/procedure/demographic/duration/outcome/unknown 之一
-6. predicate: exists/diagnosed/used/performed/high/low/abnormal/normal/compare/outcome/unknown 之一
-7. keyword: 等于entity；结构条件填"年龄"/"住院天数"等主体
-8. modifiers: 否定/状态词数组，无则[]
-9. is_numeric: 数值比较为true
-10. target_docs: 阅读上方文档用途选择，文档名逐字复制
-11. target_sections: 阅读章节说明选择，章节名逐字复制
-12. target_skills: 阅读服务描述和触发词选择服务id，无则[]
-13. "有X/患有X/存在X/诊断为X/诊断有X/有诊断有X"都是诊断存在类，entity=X，entity_type=diagnosis，target_skills包含diagnosis-query
-14. domain: 通用领域，如demographic/encounter/diagnosis/symptom/clinical_sign/medication/laboratory/procedure/document_semantic/clinical_concept
-15. temporal: 无时间约束为null；否则输出scope/event/relation/duration/unit/selection/raw，event不得填文档名
-16. assertion: 输出present/certainty/subject/temporal_context
-17. quantifier: 无次数约束为null；否则输出mode/count/unit
-18. depends_on: 事件依赖格式为["event:事件名"]，无则[]；attributes保存剂量、途径、部位、程度等扩展属性
-19. ⚠️ simple类型conditions数组只有1个元素
+5. canonical_entity: entity对应的规范医学名称；无法可靠规范化时与entity相同
+6. aliases: 仅限严格等价别名、缩写、全称或书写变体，禁止相关疾病、上下位概念、并发症和联想词；无可靠别名时[]
+7. entity_confidence: 归一化置信度0到1；normalization_source固定为"llm"
+8. entity_type: diagnosis/drug/lab/imaging/procedure/demographic/duration/outcome/unknown 之一
+9. predicate: exists/diagnosed/used/performed/high/low/abnormal/normal/compare/outcome/unknown 之一
+10. keyword: 等于entity；结构条件填"年龄"/"住院天数"等主体
+11. modifiers: 否定/状态词数组，无则[]
+12. is_numeric: 数值比较为true
+13. numeric_comparison: is_numeric=true时输出subject/operator/threshold/unit，非数值条件为null
+14. target_docs: 阅读上方文档用途选择，文档名逐字复制
+15. target_sections: 阅读章节说明选择，章节名逐字复制
+16. target_skills: 阅读服务描述和触发词选择服务id，无则[]
+17. "有X/患有X/存在X/诊断为X/诊断有X/有诊断有X"都是诊断存在类，entity=X，entity_type=diagnosis，target_skills包含diagnosis-query
+18. domain: 通用领域，如demographic/encounter/diagnosis/symptom/clinical_sign/medication/laboratory/procedure/document_semantic/clinical_concept
+19. temporal: 无时间约束为null；否则输出scope/event/relation/duration/unit/selection/raw，event不得填文档名
+20. assertion: 输出present/certainty/subject/temporal_context
+21. quantifier: 无次数约束为null；否则输出mode(any/all/at_least/more_than/exact/at_most/less_than/earliest/latest/consecutive)、count、unit
+22. depends_on: 事件依赖格式为["event:事件名"]，无则[]；attributes保存剂量、途径、部位、程度等扩展属性
+23. 转归/状态条件在attributes中输出outcome_state(improved/resolved/not_improved/persistent/worsened/recurred)、outcome_phase(admission/hospitalization/discharge/post_discharge/post_treatment/postoperative/follow_up)和outcome_evidence(diagnosis/state)；非转归条件不要填写
+24. ⚠️ simple类型conditions数组只有1个元素
 
-只输出JSON，conditions每项必须包含domain、temporal、assertion、quantifier、depends_on、attributes："""
+只输出JSON，conditions每项必须包含canonical_entity、aliases、entity_confidence、normalization_source、domain、numeric_comparison、temporal、assertion、quantifier、depends_on、attributes："""

@@ -1,0 +1,69 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-07-27",
+  "description": "人工复核的自由文本语义召回与四态聚合案例，不包含患者真实病历标识。",
+  "cases": [
+    {
+      "id": "negative_then_positive_synonyms",
+      "query_entity": "发烧",
+      "source_text": "现病史: 患者早期否认发热。入院后出现持续高热。",
+      "candidates": [
+        {"matched_entity": "发热", "evidence_span": "患者早期否认发热。", "equivalence": {"query_kind": "SYMPTOM_OR_SIGN", "source_kind": "SYMPTOM_OR_SIGN", "relation": "SAME_CONCEPT"}, "symptom_relation": {"relation": "SAME_SYMPTOM"}},
+        {"matched_entity": "高热", "evidence_span": "入院后出现持续高热。", "equivalence": {"query_kind": "SYMPTOM_OR_SIGN", "source_kind": "SYMPTOM_OR_SIGN", "relation": "SOURCE_MORE_SPECIFIC"}, "symptom_relation": {"relation": "SOURCE_QUALIFIED_SAME_SYMPTOM"}}
+      ],
+      "expected_status": "MATCHED"
+    },
+    {
+      "id": "explicit_negative_synonym",
+      "query_entity": "发烧",
+      "source_text": "现病史: 患者否认发热。",
+      "candidates": [
+        {"matched_entity": "发热", "evidence_span": "患者否认发热。", "equivalence": {"query_kind": "SYMPTOM_OR_SIGN", "source_kind": "SYMPTOM_OR_SIGN", "relation": "SAME_CONCEPT"}, "symptom_relation": {"relation": "SAME_SYMPTOM"}}
+      ],
+      "expected_status": "NOT_MATCHED"
+    },
+    {
+      "id": "observation_does_not_prove_diagnosis",
+      "query_entity": "高血压",
+      "source_text": "查体: 本次测量血压偏高。",
+      "candidates": [
+        {"matched_entity": "血压偏高", "evidence_span": "本次测量血压偏高。", "equivalence": {"query_kind": "DIAGNOSIS", "source_kind": "OBSERVATION_OR_MEASUREMENT", "relation": "RELATED_ONLY"}}
+      ],
+      "expected_status": "NOT_MENTIONED"
+    },
+    {
+      "id": "distinct_associated_symptoms",
+      "query_entity": "恶心",
+      "source_text": "现病史: 患者呕吐两次。",
+      "candidates": [
+        {"matched_entity": "呕吐", "evidence_span": "患者呕吐两次。", "equivalence": {"query_kind": "SYMPTOM_OR_SIGN", "source_kind": "SYMPTOM_OR_SIGN", "relation": "SAME_CONCEPT"}, "symptom_relation": {"relation": "DISTINCT_SYMPTOMS"}}
+      ],
+      "expected_status": "NOT_MENTIONED"
+    },
+    {
+      "id": "uncertain_semantic_relation",
+      "query_entity": "呼吸困难",
+      "source_text": "现病史: 患者自觉胸闷不适。",
+      "candidates": [
+        {"matched_entity": "胸闷不适", "evidence_span": "患者自觉胸闷不适。", "equivalence": {"query_kind": "SYMPTOM_OR_SIGN", "source_kind": "SYMPTOM_OR_SIGN", "relation": "UNCERTAIN"}}
+      ],
+      "expected_status": "UNKNOWN"
+    },
+    {
+      "id": "non_patient_subject",
+      "query_entity": "高血压",
+      "source_text": "家族史: 患者父亲患有高血压。",
+      "candidates": [
+        {"matched_entity": "高血压", "evidence_span": "患者父亲患有高血压。"}
+      ],
+      "expected_status": "NOT_MATCHED"
+    },
+    {
+      "id": "complete_document_without_candidate",
+      "query_entity": "发烧",
+      "source_text": "现病史: 患者无胸痛及腹痛。",
+      "candidates": [],
+      "expected_status": "NOT_MENTIONED"
+    }
+  ]
+}

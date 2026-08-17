@@ -12,7 +12,11 @@ from dataclasses import asdict, dataclass, field
 import re
 from typing import Any, Optional
 
-from .temporal_parser import parse_cn_number, parse_numeric_comparison
+from .temporal_parser import (
+    normalize_time_unit,
+    parse_cn_number,
+    parse_numeric_comparison,
+)
 
 
 @dataclass
@@ -63,6 +67,20 @@ class QuantifierIR:
         return {"模式": self.mode, "次数": self.count, "单位": self.unit}
 
 
+_QUANTIFIER_MODE_ALIASES = {
+    "exists": "any",
+    "first": "earliest",
+    "last": "latest",
+    "minimum": "at_least",
+    "maximum": "at_most",
+}
+
+
+def _normalize_quantifier_mode(value: object) -> str:
+    mode = str(value or "").strip().lower()
+    return _QUANTIFIER_MODE_ALIASES.get(mode, mode)
+
+
 @dataclass
 class ConditionIR:
     text: str
@@ -70,6 +88,11 @@ class ConditionIR:
     domain: str = ""
     keyword: str = ""
     entity: str = ""
+    canonical_entity: str = ""
+    aliases: list[str] = field(default_factory=list)
+    entity_candidates: list[str] = field(default_factory=list)
+    entity_confidence: Optional[float] = None
+    normalization_source: str = ""
     entity_type: str = ""
     predicate: str = ""
     modifiers: list[str] = field(default_factory=list)
@@ -92,6 +115,11 @@ class ConditionIR:
             "领域": self.domain,
             "核心词": self.keyword,
             "实体": self.entity,
+            "标准实体": self.canonical_entity,
+            "实体别名": self.aliases,
+            "实体候选": self.entity_candidates,
+            "实体置信度": self.entity_confidence,
+            "实体归一来源": self.normalization_source,
             "实体类型": self.entity_type,
             "谓词": self.predicate,
             "修饰词": self.modifiers,
@@ -220,6 +248,25 @@ def _optional_bool(value: object) -> Optional[bool]:
     return None
 
 
+def _parse_numeric_comparison_ir(value: object) -> Optional[dict[str, Any]]:
+    """Normalize an upstream numeric comparison without reading display text."""
+    data = _coerce_mapping(value)
+    if not data:
+        return None
+    subject = str(data.get("subject") or data.get("keyword") or "").strip()
+    operator = str(data.get("operator") or data.get("op") or "").strip()
+    threshold = _optional_number(data.get("threshold"))
+    unit = normalize_time_unit(str(data.get("unit") or "").strip())
+    if not subject or not operator or threshold is None:
+        return None
+    return {
+        "subject": subject,
+        "operator": operator,
+        "threshold": threshold,
+        "unit": unit,
+    }
+
+
 def _parse_temporal_ir(text: str, supplied: object = None) -> Optional[TemporalIR]:
     data = _coerce_mapping(supplied)
     if data:
@@ -325,7 +372,12 @@ def _event_selection(text: str) -> str:
     return "unspecified"
 
 
-def _parse_assertion_ir(text: str, supplied: object = None) -> AssertionIR:
+def _parse_assertion_ir(
+    text: str,
+    supplied: object = None,
+    *,
+    allow_text_fallback: bool = True,
+) -> AssertionIR:
     data = _coerce_mapping(supplied)
     if data:
         return AssertionIR(
@@ -334,6 +386,9 @@ def _parse_assertion_ir(text: str, supplied: object = None) -> AssertionIR:
             subject=str(data.get("subject") or "patient"),
             temporal_context=str(data.get("temporal_context") or ""),
         )
+
+    if not allow_text_fallback:
+        return AssertionIR()
 
     negated = bool(re.search(r"否认|未见|不存在|无明显|排除", text))
     certainty = "suspected" if re.search(r"疑似|考虑|可能|待排", text) else "confirmed"
@@ -351,28 +406,51 @@ def _parse_quantifier_ir(text: str, supplied: object = None) -> Optional[Quantif
     data = _coerce_mapping(supplied)
     if data:
         return QuantifierIR(
-            mode=str(data.get("mode") or ""),
+            mode=_normalize_quantifier_mode(data.get("mode")),
             count=_optional_number(data.get("count")),
             unit=str(data.get("unit") or "次"),
         )
 
-    count_match = re.search(r"(至少|不低于|超过|多于|恰好)?\s*([0-9]+|[一二两三四五六七八九十百]+)\s*次", text)
-    if count_match:
-        prefix = count_match.group(1) or ""
-        mode = "at_least" if prefix in {"至少", "不低于"} else "more_than" if prefix in {"超过", "多于"} else "exact"
-        return QuantifierIR(mode=mode, count=_duration_value(count_match.group(2)), unit="次")
-    if "连续" in text:
-        return QuantifierIR(mode="consecutive", unit="次")
-    if re.search(r"首次|第一次", text):
-        return QuantifierIR(mode="first", count=1, unit="次")
-    if re.search(r"末次|最后一次", text):
-        return QuantifierIR(mode="last", count=1, unit="次")
+    if re.search(r"全部|所有|每次|每一条|均需|均要|均为", text):
+        return QuantifierIR(mode="all", unit="条")
+    consecutive_match = re.search(
+        r"连续\s*([0-9]+|[一二两三四五六七八九十百]+)?\s*次?",
+        text,
+    )
+    if consecutive_match:
+        count = (
+            _duration_value(consecutive_match.group(1))
+            if consecutive_match.group(1)
+            else None
+        )
+        return QuantifierIR(mode="consecutive", count=count, unit="次")
+    if re.search(r"首次|第一次|最早(?:一次|一条|记录)?", text):
+        return QuantifierIR(mode="earliest", count=1, unit="次")
+    if re.search(r"末次|最后一次|最新|最近一次|最近一条", text):
+        return QuantifierIR(mode="latest", count=1, unit="次")
     if re.search(r"任意一次|任何一次", text):
         return QuantifierIR(mode="any", count=1, unit="次")
+
+    count_match = re.search(r"(至少|不低于|超过|多于|恰好|至多|不超过|少于|低于)?\s*([0-9]+|[一二两三四五六七八九十百]+)\s*次", text)
+    if count_match:
+        prefix = count_match.group(1) or ""
+        if prefix in {"至少", "不低于"}:
+            mode = "at_least"
+        elif prefix in {"超过", "多于"}:
+            mode = "more_than"
+        elif prefix in {"至多", "不超过"}:
+            mode = "at_most"
+        elif prefix in {"少于", "低于"}:
+            mode = "less_than"
+        else:
+            mode = "exact"
+        return QuantifierIR(mode=mode, count=_duration_value(count_match.group(2)), unit="次")
     return None
 
 
 def build_query_ir(analysis: dict, original_condition: str) -> QueryIR:
+    source = str(analysis.get("source") or "")
+    allow_assertion_text_fallback = not source or "fallback" in source.lower()
     conditions = []
     for index, cond in enumerate(analysis.get("conditions", []) or []):
         if not isinstance(cond, dict):
@@ -382,7 +460,10 @@ def build_query_ir(analysis: dict, original_condition: str) -> QueryIR:
             r"(>=|<=|>|<|=|\u2265|\u2264|\uff1e|\uff1c|\u5927\u4e8e|\u5c0f\u4e8e|\u9ad8\u4e8e|\u4f4e\u4e8e|\u8d85\u8fc7|\u4e0d\u5c11\u4e8e|\u4e0d\u4f4e\u4e8e|\u4e0d\u8d85\u8fc7|\u81f3\u591a|\u81f3\u5c11|\u7b49\u4e8e|\u4ee5\u4e0a|\u4ee5\u4e0b)",
             text or "",
         ))
-        cmp_info = (
+        supplied_cmp = _parse_numeric_comparison_ir(
+            cond.get("numeric_comparison") or cond.get("comparison")
+        )
+        parsed_cmp = (
             parse_numeric_comparison(text)
             if has_explicit_numeric_predicate
             else None
@@ -413,17 +494,34 @@ def build_query_ir(analysis: dict, original_condition: str) -> QueryIR:
                 domain=_infer_domain(cond, text),
                 keyword=cond.get("keyword", "") or text,
                 entity=cond.get("entity", "") or cond.get("keyword", "") or text,
+                canonical_entity=cond.get("canonical_entity", "") or cond.get("entity", "") or cond.get("keyword", "") or text,
+                aliases=list(cond.get("aliases") or cond.get("entity_aliases") or []),
+                entity_candidates=list(cond.get("entity_candidates") or []),
+                entity_confidence=cond.get("entity_confidence"),
+                normalization_source=str(cond.get("normalization_source") or ""),
                 entity_type=cond.get("entity_type", ""),
                 predicate=cond.get("predicate", ""),
                 modifiers=list(cond.get("modifiers", []) or []),
                 target_docs=list(cond.get("target_docs", []) or []),
                 target_sections=list(cond.get("target_sections", []) or []),
                 target_services=list(cond.get("target_skills") or cond.get("target_services") or []),
-                is_numeric=bool(cmp_info and has_explicit_numeric_predicate),
+                is_numeric=bool(
+                    cond.get("is_numeric")
+                    or supplied_cmp
+                    or (parsed_cmp and has_explicit_numeric_predicate)
+                ),
                 semantic_class=cond.get("semantic_class", ""),
-                numeric_comparison=cmp_info.to_dict() if (cmp_info and has_explicit_predicate) else None,
+                numeric_comparison=(
+                    parsed_cmp.to_dict()
+                    if (parsed_cmp and has_explicit_predicate)
+                    else supplied_cmp
+                ),
                 temporal=temporal,
-                assertion=_parse_assertion_ir(text, cond.get("assertion")),
+                assertion=_parse_assertion_ir(
+                    text,
+                    cond.get("assertion"),
+                    allow_text_fallback=allow_assertion_text_fallback,
+                ),
                 quantifier=_parse_quantifier_ir(text, cond.get("quantifier")),
                 depends_on=depends_on,
                 attributes=attributes,

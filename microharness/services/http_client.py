@@ -10,6 +10,8 @@ import re
 import requests
 from typing import Dict, Optional
 
+from microharness.medical.record_identity import resolve_record_identity
+
 
 DEFAULT_SERVICE_TIMEOUT_SECONDS = int(os.environ.get("EXTERNAL_SERVICE_TIMEOUT_SECONDS", "180"))
 
@@ -205,6 +207,23 @@ def _normalize_global_patient_id(register_no: str, global_patient_id: str, globa
     return gpid
 
 
+def _normalize_global_visit_id(global_patient_id: str, visit_no: str, global_visit_id: str) -> str:
+    """Derive a platform encounter id from the patient-id prefix when possible."""
+    gvid = str(global_visit_id or "").strip()
+    if gvid:
+        return gvid
+    visit = str(visit_no or "").strip()
+    if not visit:
+        return ""
+    if "_" in visit:
+        return visit
+    gpid = str(global_patient_id or "").strip()
+    if "_" not in gpid:
+        return ""
+    prefix = gpid.split("_", 1)[0]
+    return f"{prefix}_{visit}"
+
+
 def call_service_as_binding(svc: dict, params: dict, register_no: str = "",
                              global_patient_id: str = "", visit_no: str = "",
                              global_visit_id: str = "") -> Optional[list]:
@@ -212,12 +231,15 @@ def call_service_as_binding(svc: dict, params: dict, register_no: str = "",
     Call a service and convert results to binding-like format.
     Supports GET with query params and POST with JSON body.
     """
+    normalized_global_visit_id = _normalize_global_visit_id(
+        global_patient_id, visit_no, global_visit_id
+    )
     normalized_global_patient_id = _normalize_global_patient_id(
-        register_no, global_patient_id, global_visit_id
+        register_no, global_patient_id, normalized_global_visit_id
     )
     id_values = {
         "global_patient_id": normalized_global_patient_id,
-        "global_visit_id": global_visit_id,
+        "global_visit_id": normalized_global_visit_id,
         "register_no": register_no,
         "visit_no": visit_no,
         "condition": params.get("condition", ""),
@@ -419,6 +441,7 @@ def _merge_external_results(bindings_list: list) -> dict:
     rec_prefix = bindings_list[0].get("rec_prefix", "记录")
     keep_fields = bindings_list[0].get("keep_fields", None)  # whitelist from SKILL.md
     field_labels = bindings_list[0].get("field_labels", {})   # eng→chn field name map
+    semantic = bindings_list[0].get("semantic", {})
 
     multi = len(bindings_list) > 1  # whether to show record-number prefix
 
@@ -437,6 +460,11 @@ def _merge_external_results(bindings_list: list) -> dict:
     all_api_fields = []
     for i, rec in enumerate(bindings_list):
         prefix = f"[{rec_prefix}{i+1}] " if multi else ""
+        raw_fields = {
+            str(binding.get("html_field") or ""): binding.get("value")
+            for binding in rec.get("bindings", [])
+        }
+        record_identity = resolve_record_identity(raw_fields, semantic)
         # ── Build per-record eng_field→value dict ──
         rec_fields: dict = {}
         for b in rec.get("bindings", []):
@@ -504,6 +532,7 @@ def _merge_external_results(bindings_list: list) -> dict:
                 "value": val,
                 "xml_path": f"external/{field}",
                 "eng_field": field,
+                **record_identity,
             })
 
     skill_id = bindings_list[0].get("template", "external") if bindings_list else "external"
@@ -526,5 +555,5 @@ def _merge_external_results(bindings_list: list) -> dict:
         "field_labels": field_labels,
         "field_mapping_degraded": fallback_used,
         "temporal_semantics": bindings_list[0].get("temporal_semantics", {}),
-        "semantic": bindings_list[0].get("semantic", {}),
+        "semantic": semantic,
     }

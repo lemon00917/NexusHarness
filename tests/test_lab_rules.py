@@ -54,3 +54,67 @@ def test_lab_explicit_numeric_condition_keeps_value_threshold_after_time_scope()
     assert result["keyword"] == "中性粒细胞数"
     assert result["candidate_count"] == 1
     assert "结果满足：4×10^9 > 1.5×10^9" in result["reason"]
+
+
+def test_discharge_window_duration_is_not_used_as_lab_value_threshold():
+    window = TimeWindow(
+        scope="事件后时间窗",
+        start=datetime(2026, 6, 1, 0, 0),
+        end=datetime(2026, 6, 21, 0, 0),
+        required=True,
+    )
+    result = judge_lab_condition(
+        "出院20天内中性粒细胞数异常",
+        _neutrophil_bindings(),
+        window,
+    )
+
+    assert result["applicable"] is True
+    assert result["matched"] is False
+    assert result["keyword"] == "中性粒细胞数"
+    assert "20" not in result["candidate_records"][0]["数值判断"]
+    assert result["candidate_records"][0]["数值判断"] == "异常状态：参考范围内"
+
+
+def test_no_matching_lab_item_is_not_mentioned():
+    result = judge_lab_condition(
+        "术前48小时内血小板计数>100x10^9/L",
+        _neutrophil_bindings(),
+        _pre_surgery_48h_window(),
+    )
+
+    assert result["applicable"] is True
+    assert result["status"] == "NOT_MENTIONED"
+    assert result["reason_code"] == "NO_MATCHING_RECORD"
+    assert result["candidate_count"] == 0
+
+
+def test_matching_lab_item_outside_window_is_not_matched():
+    window = TimeWindow(
+        scope="事件前时间窗",
+        start=datetime(2026, 6, 1, 0, 0),
+        end=datetime(2026, 6, 2, 0, 0),
+        required=True,
+    )
+
+    result = judge_lab_condition(
+        "术前48小时内中性粒细胞数>1.5x10^9/L",
+        _neutrophil_bindings(),
+        window,
+    )
+
+    assert result["status"] == "NOT_MATCHED"
+    assert result["reason_code"] == "TIME_OUTSIDE_WINDOW"
+    assert result["candidate_count"] == 1
+
+
+def test_matching_lab_item_without_required_anchor_is_unknown():
+    result = judge_lab_condition(
+        "术前48小时内中性粒细胞数>1.5x10^9/L",
+        _neutrophil_bindings(),
+        TimeWindow(scope="事件前时间窗", required=True, reason="缺少手术时间"),
+    )
+
+    assert result["status"] == "UNKNOWN"
+    assert result["reason_code"] == "MISSING_EVENT_TIME"
+    assert result["candidate_count"] == 1

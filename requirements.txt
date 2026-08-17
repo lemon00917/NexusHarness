@@ -34,6 +34,7 @@ pyyaml>=6.0
 
 # 数据库连接
 pymysql>=1.0.0
+psycopg2-binary>=2.9.0
 
 # 开发/测试
 pytest>=7.0.0

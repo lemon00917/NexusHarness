@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>模板绑定工作台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        * { box-sizing: border-box; }
+        body { overflow: auto; background: var(--bg-primary); }
+        .tb-shell { min-height: 100vh; display: flex; flex-direction: column; }
+        .tb-header { height: 58px; padding: 0 20px; display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--border-color); background: var(--bg-secondary); position: sticky; top: 0; z-index: 10; }
+        .tb-header h1 { font-size: 16px; font-weight: 600; margin: 0; }
+        .tb-header .state { font-size: 11px; color: var(--text-dim); }
+        .tb-header-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+        .tb-toggle { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
+        .tb-toggle input { accent-color: var(--accent); }
+        .tb-command { min-height: 32px; padding: 7px 12px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; font-size: 12px; cursor: pointer; }
+        .tb-command:disabled { cursor: not-allowed; opacity: 0.45; }
+        .tb-header nav { display: flex; gap: 8px; }
+        .tb-header a { color: var(--text-secondary); text-decoration: none; font-size: 12px; padding: 7px 10px; border: 1px solid var(--border-color); border-radius: 6px; }
+        .tb-main { min-width: 0; padding: 16px; display: grid; gap: 14px; }
+        .tb-model-config { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: minmax(240px, 1fr) minmax(240px, 1fr) auto; gap: 10px; align-items: center; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); }
+        .tb-model-stage { min-width: 0; display: grid; grid-template-columns: auto minmax(90px, auto) minmax(150px, 1fr); align-items: center; gap: 8px; }
+        .tb-stage-badge { padding: 2px 6px; border-radius: 4px; color: #fff; background: var(--accent); font-size: 10px; font-weight: 600; white-space: nowrap; }
+        .tb-stage-badge.node { background: var(--accent-green, #2f855a); }
+        .tb-model-label { color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
+        .tb-model-select { width: 100%; min-width: 0; padding: 7px 9px; color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; font-size: 11px; }
+        .tb-model-select:disabled { opacity: 0.45; cursor: not-allowed; }
+        .tb-model-status { color: var(--text-dim); font-size: 10px; white-space: nowrap; }
+        .tb-pickers { height: clamp(360px, 44vh, 480px); display: grid; grid-template-columns: minmax(300px, 1fr) minmax(300px, 1fr); gap: 14px; }
+        .tb-detail { height: clamp(380px, 50vh, 540px); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+        .tb-pane { min-width: 0; min-height: 0; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); overflow: hidden; display: flex; flex-direction: column; }
+        .tb-pane-head { min-height: 48px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border-color); }
+        .tb-pane-head h2 { font-size: 13px; margin: 0; white-space: nowrap; }
+        .tb-count { color: var(--text-dim); font-size: 11px; }
+        .tb-search { margin-left: auto; width: min(260px, 55%); padding: 7px 9px; color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; font-size: 12px; }
+        .tb-list { min-height: 0; flex: 1; overflow: auto; padding: 6px; }
+        .tb-item { width: 100%; text-align: left; color: var(--text-primary); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 9px 10px; cursor: pointer; display: grid; gap: 4px; }
+        .tb-item:hover { background: var(--bg-primary); border-color: var(--border-color); }
+        .tb-item.active { background: var(--bg-elevated); border-color: var(--accent); }
+        .tb-item-title { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+        .tb-item-meta { font-size: 10px; color: var(--text-dim); overflow-wrap: anywhere; }
+        .tb-item-meta-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .tb-binding-badge { padding: 2px 5px; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent); font-size: 10px; white-space: nowrap; }
+        .tb-item.mapped { border-left-color: var(--accent); }
+        .tb-empty { padding: 28px 16px; text-align: center; color: var(--text-dim); font-size: 12px; }
+        .tb-summary { padding: 10px 12px; border-bottom: 1px solid var(--border-color); font-size: 11px; color: var(--text-secondary); line-height: 1.7; min-height: 46px; }
+        .tb-node-list { min-height: 0; flex: 1; overflow: auto; padding: 7px; }
+        .tb-pane-actions { margin-left: auto; display: flex; gap: 6px; }
+        .tb-mini-btn { color: var(--text-secondary); background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 5px; padding: 4px 7px; font-size: 11px; cursor: pointer; }
+        .tb-mini-btn:hover { color: var(--text-primary); border-color: var(--accent); }
+        .tb-node-group { border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-primary); margin-bottom: 7px; overflow: hidden; }
+        .tb-node-group summary { min-height: 34px; padding: 8px 10px; cursor: pointer; color: var(--text-primary); font-size: 12px; display: flex; align-items: center; gap: 8px; }
+        .tb-node-group summary::marker { color: var(--text-dim); }
+        .tb-node-group-title { font-weight: 500; overflow-wrap: anywhere; }
+        .tb-node-group-count { margin-left: auto; color: var(--text-dim); font-size: 10px; white-space: nowrap; }
+        .tb-node-group-body { border-top: 1px solid var(--border-color); background: var(--bg-secondary); }
+        .tb-node { padding: 7px 8px; border-bottom: 1px solid var(--border-color); display: grid; grid-template-columns: minmax(120px, 0.8fr) minmax(160px, 1.2fr); gap: 10px; align-items: start; }
+        .tb-node:last-child { border-bottom: 0; }
+        .tb-node-name { font-size: 11px; color: var(--text-primary); overflow-wrap: anywhere; }
+        .tb-node-path { font-size: 10px; color: var(--text-dim); overflow-wrap: anywhere; }
+        .tb-mappings { border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); overflow: hidden; }
+        .tb-analysis { border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); overflow: hidden; }
+        .tb-analysis-grid { display: grid; grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.8fr); border-top: 1px solid var(--border-color); }
+        .tb-analysis-block { min-width: 0; overflow: hidden; }
+        .tb-analysis-block + .tb-analysis-block { border-left: 1px solid var(--border-color); }
+        .tb-analysis-title { min-height: 36px; padding: 9px 10px; color: var(--text-secondary); font-size: 11px; background: var(--bg-primary); border-bottom: 1px solid var(--border-color); }
+        .tb-analysis .tb-table-wrap { max-height: 340px; }
+        .tb-analysis td { vertical-align: top; }
+        .tb-analysis td:last-child { min-width: 220px; white-space: normal; line-height: 1.5; }
+        .tb-score { font-variant-numeric: tabular-nums; color: var(--text-primary); }
+        .tb-result-state { display: inline-block; padding: 2px 5px; border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-secondary); font-size: 10px; }
+        .tb-result-state.auto, .tb-result-state.existing { border-color: var(--accent); color: var(--accent); }
+        .tb-candidate-row { cursor: pointer; }
+        .tb-candidate-row:hover td { background: var(--bg-elevated); }
+        .tb-warning-list { margin: 0; padding: 8px 12px 8px 28px; color: var(--accent-red); font-size: 11px; line-height: 1.6; border-top: 1px solid var(--border-color); }
+        .tb-table-wrap { overflow: auto; max-height: 300px; }
+        table { width: 100%; border-collapse: collapse; font-size: 11px; }
+        th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-color); white-space: nowrap; }
+        th { color: var(--text-dim); font-weight: 500; background: var(--bg-primary); position: sticky; top: 0; }
+        td { color: var(--text-secondary); }
+        tr.current-mapping td { background: var(--bg-elevated); color: var(--text-primary); }
+        .tb-status { padding: 9px 12px; min-height: 34px; color: var(--text-secondary); font-size: 11px; border-top: 1px solid var(--border-color); }
+        .tb-status.error { color: var(--accent-red); }
+        .tb-review-actions { padding: 9px 12px; display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--border-color); }
+        .tb-review-actions .tb-count { margin-right: auto; }
+        .tb-check { width: 15px; height: 15px; accent-color: var(--accent); }
+        @media (max-width: 900px) {
+            .tb-pickers, .tb-detail { height: auto; grid-template-columns: 1fr; }
+            .tb-analysis-grid { grid-template-columns: 1fr; }
+            .tb-analysis-block + .tb-analysis-block { border-left: 0; border-top: 1px solid var(--border-color); }
+            .tb-pane { min-height: 330px; }
+            .tb-header { height: auto; min-height: 58px; flex-wrap: wrap; padding: 10px 14px; }
+            .tb-header-actions { margin-left: 0; }
+            .tb-header nav { width: 100%; margin-left: 0; }
+            .tb-model-config { grid-template-columns: 1fr; }
+            .tb-model-stage { grid-template-columns: auto minmax(90px, auto) minmax(0, 1fr); }
+            .tb-model-status { white-space: normal; }
+        }
+    </style>
+</head>
+<body>
+<div class="tb-shell">
+    <header class="tb-header">
+        <h1>HTML / 临床文档模板绑定</h1>
+        <span class="state">Stage 4 · 自动推荐 · 人工确认后保存</span>
+        <div class="tb-header-actions">
+            <label class="tb-toggle"><input id="useLlm" type="checkbox" checked> AI 语义匹配</label>
+            <button id="analyzeButton" type="button" class="tb-command" disabled>自动分析</button>
+        </div>
+        <nav>
+            <a href="/templates/database_config.html">DMP 数据源</a>
+            <a href="/">返回首页</a>
+        </nav>
+    </header>
+    <main class="tb-main">
+        <section class="tb-model-config" aria-label="AI 模型配置">
+            <div class="tb-model-stage">
+                <span class="tb-stage-badge">Stage1</span>
+                <span class="tb-model-label">模板匹配模型</span>
+                <select id="templateMatchModel" class="tb-model-select" title="用于标准临床文档模板候选重排"><option value="">正在加载模型</option></select>
+            </div>
+            <div class="tb-model-stage">
+                <span class="tb-stage-badge node">Stage4</span>
+                <span class="tb-model-label">节点绑定模型</span>
+                <select id="nodeMatchModel" class="tb-model-select" title="用于标准节点与 HTML 节点候选重排"><option value="">正在加载模型</option></select>
+            </div>
+            <span id="modelLoadStatus" class="tb-model-status">正在连接 Ollama</span>
+        </section>
+        <section class="tb-pickers">
+            <div class="tb-pane">
+                <div class="tb-pane-head">
+                    <h2>HTML 模板</h2>
+                    <span id="htmlCount" class="tb-count"></span>
+                    <input id="htmlSearch" class="tb-search" placeholder="名称或模板 ID" autocomplete="off">
+                </div>
+                <div id="htmlTemplates" class="tb-list"><div class="tb-empty">正在加载</div></div>
+                <div id="htmlStatus" class="tb-status"></div>
+            </div>
+            <div class="tb-pane">
+                <div class="tb-pane-head">
+                    <h2>标准临床文档模板</h2>
+                    <span id="standardCount" class="tb-count"></span>
+                    <input id="standardSearch" class="tb-search" placeholder="名称、分类或模板 ID" autocomplete="off">
+                </div>
+                <div id="standardTemplates" class="tb-list"><div class="tb-empty">正在加载</div></div>
+                <div id="standardStatus" class="tb-status"></div>
+            </div>
+        </section>
+
+        <section class="tb-detail">
+            <div class="tb-pane">
+                <div class="tb-pane-head"><h2>HTML 节点</h2><span id="htmlNodeCount" class="tb-count"></span><div class="tb-pane-actions"><button type="button" class="tb-mini-btn" onclick="toggleNodeGroups('htmlNodes', true)">展开</button><button type="button" class="tb-mini-btn" onclick="toggleNodeGroups('htmlNodes', false)">收起</button></div></div>
+                <div id="htmlSummary" class="tb-summary">请选择 HTML 模板</div>
+                <div id="htmlNodes" class="tb-node-list"><div class="tb-empty">暂无节点</div></div>
+            </div>
+            <div class="tb-pane">
+                <div class="tb-pane-head"><h2>标准节点树</h2><span id="standardNodeCount" class="tb-count"></span><div class="tb-pane-actions"><button type="button" class="tb-mini-btn" onclick="toggleNodeGroups('standardNodes', true)">展开</button><button type="button" class="tb-mini-btn" onclick="toggleNodeGroups('standardNodes', false)">收起</button></div></div>
+                <div id="standardSummary" class="tb-summary">请选择标准临床文档模板</div>
+                <div id="standardNodes" class="tb-node-list"><div class="tb-empty">暂无节点</div></div>
+            </div>
+        </section>
+
+        <section class="tb-analysis">
+            <div class="tb-pane-head"><h2>自动推荐</h2><span id="analysisCount" class="tb-count"></span></div>
+            <div id="analysisStatus" class="tb-summary">请选择 HTML 模板后执行自动分析</div>
+            <div class="tb-analysis-grid">
+                <div class="tb-analysis-block">
+                    <div class="tb-analysis-title">标准模板候选</div>
+                    <div class="tb-table-wrap">
+                        <table>
+                            <thead><tr><th>标准模板</th><th>得分</th><th>来源</th></tr></thead>
+                            <tbody id="templateCandidateRows"><tr><td colspan="3" class="tb-empty">暂无推荐</td></tr></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="tb-analysis-block">
+                    <div class="tb-analysis-title">节点绑定推荐</div>
+                    <div class="tb-table-wrap">
+                        <table>
+                            <thead><tr><th>保存</th><th>标准节点</th><th>HTML 节点</th><th>置信度</th><th>状态</th><th>依据</th></tr></thead>
+                            <tbody id="nodeRecommendationRows"><tr><td colspan="6" class="tb-empty">暂无推荐</td></tr></tbody>
+                        </table>
+                    </div>
+                    <div class="tb-review-actions">
+                        <span id="reviewCount" class="tb-count">0 条待保存</span>
+                        <button id="saveBindingButton" type="button" class="tb-command" disabled>确认并保存绑定</button>
+                    </div>
+                </div>
+            </div>
+            <div id="analysisWarnings"></div>
+        </section>
+
+        <section class="tb-mappings">
+            <div class="tb-pane-head"><h2>已有绑定关系</h2><span id="mappingPolicy" class="tb-count">默认仅供参考</span><span id="mappingCount" class="tb-count"></span></div>
+            <div class="tb-table-wrap">
+                <table>
+                    <thead><tr><th>映射 ID</th><th>HTML 模板</th><th>标准分类</th><th>标准模板</th><th>标准模板名称</th><th>节点映射</th><th>更新时间</th></tr></thead>
+                    <tbody id="mappingRows"><tr><td colspan="7" class="tb-empty">请选择 HTML 模板</td></tr></tbody>
+                </table>
+            </div>
+            <div id="selectionStatus" class="tb-status">尚未选择模板组合</div>
+        </section>
+    </main>
+</div>
+<script>
+const state = {
+    html: null,
+    standard: null,
+    htmlItems: [],
+    standardItems: [],
+    mappingData: null,
+    analysis: null,
+    analyzing: false,
+    saving: false,
+    standardExplicit: false,
+    searchTimers: {}
+};
+
+async function fetchJson(url, options = {}) {
+    const response = await fetch(url, options);
+    const contentType = response.headers.get('content-type') || '';
+    const payload = contentType.includes('application/json') ? await response.json() : null;
+    if (!response.ok) throw new Error(payload?.detail || `请求失败（HTTP ${response.status}）`);
+    if (!payload) throw new Error('接口返回了非 JSON 数据');
+    return payload;
+}
+
+function esc(value) {
+    const node = document.createElement('div');
+    node.textContent = String(value ?? '');
+    return node.innerHTML;
+}
+
+function query(value) { return encodeURIComponent(value || ''); }
+
+function firstText(...values) {
+    for (const value of values) {
+        const text = String(value ?? '').trim();
+        if (text) return text;
+    }
+    return '';
+}
+
+function renderGroupedNodes(nodes, groupResolver, rowRenderer, emptyText) {
+    if (!nodes.length) return `<div class="tb-empty">${esc(emptyText)}</div>`;
+    const groups = [];
+    const indexByName = new Map();
+    nodes.forEach(node => {
+        const groupName = firstText(groupResolver(node), '未分组节点');
+        if (!indexByName.has(groupName)) {
+            indexByName.set(groupName, groups.length);
+            groups.push({name: groupName, rows: []});
+        }
+        groups[indexByName.get(groupName)].rows.push(node);
+    });
+    return groups.map((group, index) => `<details class="tb-node-group" ${index === 0 ? 'open' : ''}>
+        <summary><span class="tb-node-group-title">${esc(group.name)}</span><span class="tb-node-group-count">${group.rows.length} 个</span></summary>
+        <div class="tb-node-group-body">${group.rows.map(rowRenderer).join('')}</div>
+    </details>`).join('');
+}
+
+function toggleNodeGroups(containerId, open) {
+    document.querySelectorAll(`#${containerId} details.tb-node-group`).forEach(item => {
+        item.open = open;
+    });
+}
+
+function debounce(key, fn) {
+    clearTimeout(state.searchTimers[key]);
+    state.searchTimers[key] = setTimeout(fn, 350);
+}
+
+function resetAnalysis(message = '请选择 HTML 模板后执行自动分析') {
+    state.analysis = null;
+    document.getElementById('analysisCount').textContent = '';
+    document.getElementById('analysisStatus').textContent = message;
+    document.getElementById('templateCandidateRows').innerHTML = '<tr><td colspan="3" class="tb-empty">暂无推荐</td></tr>';
+    document.getElementById('nodeRecommendationRows').innerHTML = '<tr><td colspan="6" class="tb-empty">暂无推荐</td></tr>';
+    document.getElementById('analysisWarnings').innerHTML = '';
+    updateReviewSelection();
+}
+
+function sourceLabel(source) {
+    return ({existing: '已有映射', manual: '人工指定', rule: '规则', 'rule+llm': '规则 + AI'})[source] || source || '-';
+}
+
+function recommendationStatus(status) {
+    return ({EXISTING: '已有映射', AUTO: '自动', REVIEW_REQUIRED: '待复核'})[status] || status || '-';
+}
+
+function mappingPolicyLabel(policy) {
+    return policy === 'authoritative' ? '按已有绑定' : '已有绑定仅供参考';
+}
+
+function modelInputValue(id) {
+    return String(document.getElementById(id).value || '').trim();
+}
+
+function updateModelInputsState() {
+    const enabled = document.getElementById('useLlm').checked;
+    document.getElementById('templateMatchModel').disabled = !enabled;
+    document.getElementById('nodeMatchModel').disabled = !enabled;
+}
+
+function persistModelInputs() {
+    localStorage.setItem('templateBinding.templateMatchModel', modelInputValue('templateMatchModel'));
+    localStorage.setItem('templateBinding.nodeMatchModel', modelInputValue('nodeMatchModel'));
+}
+
+function renderModelSelect(selectId, models, preferred) {
+    const select = document.getElementById(selectId);
+    select.innerHTML = models.map(model => `<option value="${esc(model)}">${esc(model)}</option>`).join('');
+    const selected = models.includes(preferred)
+        ? preferred
+        : (models.includes('qwen2.5:3b') ? 'qwen2.5:3b' : models[0]);
+    if (selected) select.value = selected;
+}
+
+async function loadBindingModels() {
+    const templatePreferred = localStorage.getItem('templateBinding.templateMatchModel') || '';
+    const nodePreferred = localStorage.getItem('templateBinding.nodeMatchModel') || '';
+    const status = document.getElementById('modelLoadStatus');
+    try {
+        const data = await fetchJson('/api/ollama/models');
+        const models = Array.from(new Set((data.models || []).map(String).filter(Boolean)));
+        if (!models.length) throw new Error(data.error || '未检测到可用模型');
+        renderModelSelect('templateMatchModel', models, templatePreferred);
+        renderModelSelect('nodeMatchModel', models, nodePreferred);
+        status.textContent = `${models.length} 个可用模型`;
+    } catch (error) {
+        const fallbackModels = Array.from(new Set([
+            templatePreferred,
+            nodePreferred,
+            'qwen2.5:3b'
+        ].filter(Boolean)));
+        renderModelSelect('templateMatchModel', fallbackModels, templatePreferred);
+        renderModelSelect('nodeMatchModel', fallbackModels, nodePreferred);
+        status.textContent = `模型列表加载失败：${error.message}`;
+    }
+    updateModelInputsState();
+}
+
+function renderAnalysis(data) {
+    const templateMatch = data.template_match || {};
+    const nodeMatch = data.node_match || {};
+    const candidates = templateMatch.candidates || [];
+    const mappings = nodeMatch.mappings || [];
+    const policy = data.existing_mapping_policy || 'reference';
+    const models = data.llm_models || {};
+    const llm = nodeMatch.llm || {};
+    document.getElementById('analysisCount').textContent = `${candidates.length} 个模板候选 · ${mappings.length} 个节点推荐`;
+    const identity = data.identity_check?.status || '未校验';
+    const llmStatus = nodeMatch
+        ? `节点AI ${llm.used ? '已参与' : (llm.enabled ? '未调用' : '未启用')} · ${llm.attempted || 0}/${llm.selected || 0}`
+        : '';
+    const modelStatus = models.enabled
+        ? `模型 模板=${models.template_match_model || '默认'} / 节点=${models.node_match_model || '默认'}`
+        : 'AI未启用';
+    document.getElementById('analysisStatus').textContent = `${data.status || 'UNKNOWN'} · ${mappingPolicyLabel(policy)} · HTML 身份 ${identity} · ${modelStatus} · ${llmStatus} · ${data.elapsed_ms || 0} ms · 请审核节点后保存`;
+    document.getElementById('mappingPolicy').textContent = mappingPolicyLabel(policy);
+    document.getElementById('templateCandidateRows').innerHTML = candidates.length ? candidates.map(candidate => `
+        <tr class="tb-candidate-row" data-template-id="${esc(candidate.template_id)}" title="${esc(candidate.reason)}">
+            <td>${esc(candidate.category_name || candidate.category_id)} / ${esc(candidate.template_name || candidate.template_id)}</td>
+            <td class="tb-score">${(Number(candidate.score || 0) * 100).toFixed(1)}%</td>
+            <td>${esc(sourceLabel(candidate.source))}</td>
+        </tr>`).join('') : '<tr><td colspan="3" class="tb-empty">没有可用模板候选</td></tr>';
+    document.querySelectorAll('#templateCandidateRows .tb-candidate-row').forEach(row => {
+        row.addEventListener('click', () => selectStandardTemplate(row.dataset.templateId));
+    });
+    document.getElementById('nodeRecommendationRows').innerHTML = mappings.length ? mappings.map((item, index) => `
+        <tr>
+            <td><input class="tb-check node-review-check" type="checkbox" data-index="${index}" ${item.status === 'AUTO' ? 'checked' : ''} ${item.status === 'EXISTING' ? 'disabled' : ''}></td>
+            <td>${esc(item.standard_path || item.standard_node_name || item.standard_node_id)}</td>
+            <td>${esc(item.html_node_name || (item.html_selectors || []).join(' / ') || (item.html_node_keys || []).join(' / '))}</td>
+            <td class="tb-score">${(Number(item.confidence || 0) * 100).toFixed(1)}%</td>
+            <td><span class="tb-result-state ${esc(String(item.status || '').toLowerCase())}">${esc(recommendationStatus(item.status))}</span></td>
+            <td>${esc(item.reason)}</td>
+        </tr>`).join('') : '<tr><td colspan="6" class="tb-empty">没有达到推荐阈值的节点</td></tr>';
+    document.querySelectorAll('.node-review-check').forEach(input => input.addEventListener('change', updateReviewSelection));
+    updateReviewSelection();
+    const warnings = data.warnings || [];
+    document.getElementById('analysisWarnings').innerHTML = warnings.length
+        ? `<ul class="tb-warning-list">${warnings.map(item => `<li>${esc(item)}</li>`).join('')}</ul>`
+        : '';
+}
+
+function selectedNodeMappings() {
+    const mappings = state.analysis?.node_match?.mappings || [];
+    return Array.from(document.querySelectorAll('.node-review-check:checked:not(:disabled)'))
+        .map(input => mappings[Number(input.dataset.index)])
+        .filter(Boolean)
+        .map(item => ({
+            standard_node_id: String(item.standard_node_id),
+            html_node_keys: (item.html_node_keys || []).map(String)
+        }));
+}
+
+function updateReviewSelection() {
+    const selected = selectedNodeMappings();
+    const button = document.getElementById('saveBindingButton');
+    document.getElementById('reviewCount').textContent = `${selected.length} 条待保存`;
+    button.disabled = state.saving || !state.html || !state.analysis?.template_match?.selected_template_id || !selected.length;
+}
+
+async function saveReviewedBindings() {
+    if (state.saving || !state.html || !state.analysis) return;
+    const nodeMappings = selectedNodeMappings();
+    const standardTemplateId = String(state.analysis.template_match?.selected_template_id || '');
+    if (!standardTemplateId || !nodeMappings.length) return;
+    const existing = (state.mappingData?.template_mappings || [])
+        .find(row => String(row.standard_xml_id) === standardTemplateId);
+    const button = document.getElementById('saveBindingButton');
+    state.saving = true;
+    button.textContent = '保存中';
+    updateReviewSelection();
+    try {
+        const result = await fetchJson('/api/template-binding/commit', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                html_template_id: String(state.html.template_id),
+                html_category_id: String(state.html.print_template_category_id),
+                standard_template_id: standardTemplateId,
+                expected_update_time: existing?.update_time || existing?.create_time || null,
+                node_mappings: nodeMappings
+            })
+        });
+        state.mappingData = await fetchJson(`/api/template-binding/mappings?html_template_id=${query(state.html.template_id)}&html_category_id=${query(state.html.print_template_category_id)}`);
+        renderMappings(state.mappingData);
+        updateSelectionStatus();
+        document.getElementById('analysisStatus').textContent = `保存成功 · 新增 ${result.node_inserted} · 更新 ${result.node_updated} · 未变化 ${result.node_unchanged}`;
+        document.querySelectorAll('.node-review-check').forEach(input => { input.checked = false; input.disabled = true; });
+    } catch (error) {
+        document.getElementById('analysisStatus').textContent = `保存失败：${error.message}`;
+    } finally {
+        state.saving = false;
+        button.textContent = '确认并保存绑定';
+        updateReviewSelection();
+    }
+}
+
+async function analyzeBinding() {
+    if (!state.html || state.analyzing) return;
+    const button = document.getElementById('analyzeButton');
+    state.analyzing = true;
+    button.disabled = true;
+    button.textContent = '分析中';
+    resetAnalysis('正在生成模板与节点推荐');
+    const payload = {
+        html_template_id: String(state.html.template_id),
+        html_category_id: String(state.html.print_template_category_id),
+        use_llm: document.getElementById('useLlm').checked
+    };
+    if (payload.use_llm) {
+        persistModelInputs();
+        const templateModel = modelInputValue('templateMatchModel');
+        const nodeModel = modelInputValue('nodeMatchModel');
+        if (templateModel) payload.template_match_model = templateModel;
+        if (nodeModel) payload.node_match_model = nodeModel;
+    }
+    if (state.standardExplicit && state.standard?.id) payload.standard_template_id = String(state.standard.id);
+    try {
+        const data = await fetchJson('/api/template-binding/analyze', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        state.analysis = data;
+        renderAnalysis(data);
+        const selectedId = data.template_match?.selected_template_id;
+        if (selectedId && (!state.standard || String(state.standard.id) !== String(selectedId))) {
+            await selectStandardTemplate(String(selectedId), 'analysis');
+        }
+    } catch (error) {
+        document.getElementById('analysisStatus').textContent = error.message;
+        document.getElementById('analysisWarnings').innerHTML = `<ul class="tb-warning-list"><li>${esc(error.message)}</li></ul>`;
+    } finally {
+        state.analyzing = false;
+        button.disabled = !state.html;
+        button.textContent = '自动分析';
+    }
+}
+
+async function loadHtmlTemplates() {
+    const list = document.getElementById('htmlTemplates');
+    const status = document.getElementById('htmlStatus');
+    status.className = 'tb-status';
+    status.textContent = '加载中';
+    try {
+        const search = document.getElementById('htmlSearch').value.trim();
+        const data = await fetchJson(`/api/template-binding/html/templates?search=${query(search)}&page_size=100`);
+        state.htmlItems = data.items || [];
+        document.getElementById('htmlCount').textContent = `${data.total || 0} 条`;
+        list.innerHTML = state.htmlItems.length ? state.htmlItems.map(item => {
+            const key = `${item.template_id}@@${item.print_template_category_id}`;
+            const active = state.html && key === `${state.html.template_id}@@${state.html.print_template_category_id}`;
+            const mappingCount = Number(item.template_mapping_count || 0);
+            const nodeMappingCount = Number(item.node_mapping_count || 0);
+            return `<button class="tb-item ${active ? 'active' : ''} ${mappingCount ? 'mapped' : ''}" data-template-id="${esc(item.template_id)}" data-category-id="${esc(item.print_template_category_id)}">
+                <span class="tb-item-title">${esc(item.html_name || item.template_id)}</span>
+                <span class="tb-item-meta-row"><span class="tb-item-meta">${esc(item.category_name || '未分类')} · ${esc(item.template_id)} · ${esc(item.print_template_category_id)}</span>${mappingCount ? `<span class="tb-binding-badge">已绑定 ${mappingCount}${nodeMappingCount ? ` · ${nodeMappingCount} 节点` : ''}</span>` : ''}</span>
+            </button>`;
+        }).join('') : '<div class="tb-empty">没有匹配的 HTML 模板</div>';
+        list.querySelectorAll('.tb-item').forEach(button => button.addEventListener('click', () => {
+            selectHtmlTemplate(button.dataset.templateId, button.dataset.categoryId);
+        }));
+        status.textContent = data.total > state.htmlItems.length ? `显示前 ${state.htmlItems.length} 条，请输入关键词缩小范围` : '加载完成';
+    } catch (error) {
+        list.innerHTML = '<div class="tb-empty">无法加载 HTML 模板</div>';
+        status.className = 'tb-status error';
+        status.textContent = error.message;
+    }
+}
+
+async function loadStandardTemplates() {
+    const list = document.getElementById('standardTemplates');
+    const status = document.getElementById('standardStatus');
+    status.className = 'tb-status';
+    status.textContent = '加载中';
+    try {
+        const search = document.getElementById('standardSearch').value.trim();
+        const data = await fetchJson(`/api/template-binding/standard/templates?search=${query(search)}&page_size=200`);
+        state.standardItems = data.items || [];
+        document.getElementById('standardCount').textContent = `${data.total || 0} 条`;
+        renderStandardTemplateItems();
+        status.textContent = '加载完成';
+    } catch (error) {
+        list.innerHTML = '<div class="tb-empty">无法加载标准模板</div>';
+        status.className = 'tb-status error';
+        status.textContent = error.message;
+    }
+}
+
+function renderStandardTemplateItems() {
+    const list = document.getElementById('standardTemplates');
+    const currentMappingIds = new Set((state.mappingData?.template_mappings || []).map(row => String(row.standard_xml_id)));
+    list.innerHTML = state.standardItems.length ? state.standardItems.map(item => {
+        const id = String(item.id);
+        const active = state.standard && id === String(state.standard.id);
+        const currentMapped = currentMappingIds.has(id);
+        const mappedHtmlCount = Number(item.mapped_html_count || 0);
+        const badge = currentMapped ? '当前 HTML 已绑定' : (mappedHtmlCount ? `已关联 ${mappedHtmlCount} 个 HTML` : '');
+        return `<button class="tb-item ${active ? 'active' : ''} ${currentMapped ? 'mapped' : ''}" data-template-id="${esc(id)}">
+            <span class="tb-item-title">${esc(item.name || id)}</span>
+            <span class="tb-item-meta-row"><span class="tb-item-meta">${esc(item.category_name || '未分类')} · ${esc(id)}</span>${badge ? `<span class="tb-binding-badge">${esc(badge)}</span>` : ''}</span>
+        </button>`;
+    }).join('') : '<div class="tb-empty">没有匹配的标准模板</div>';
+    list.querySelectorAll('.tb-item').forEach(button => button.addEventListener('click', () => {
+        selectStandardTemplate(button.dataset.templateId);
+    }));
+}
+
+async function selectHtmlTemplate(templateId, categoryId) {
+    if (!state.standardExplicit) state.standard = null;
+    state.html = {template_id: templateId, print_template_category_id: categoryId};
+    state.mappingData = null;
+    resetAnalysis('HTML 模板已选择，尚未执行自动分析');
+    document.getElementById('analyzeButton').disabled = true;
+    loadHtmlTemplates();
+    renderStandardTemplateItems();
+    renderMappings({template_mappings: [], node_mapping_count: 0});
+    updateSelectionStatus();
+    document.getElementById('htmlSummary').textContent = '解析中';
+    document.getElementById('htmlNodes').innerHTML = '<div class="tb-empty">正在解析 HTML</div>';
+    try {
+        const [parsed, mappings] = await Promise.all([
+            fetchJson(`/api/template-binding/html/templates/${query(templateId)}/nodes?category_id=${query(categoryId)}`),
+            fetchJson(`/api/template-binding/mappings?html_template_id=${query(templateId)}&html_category_id=${query(categoryId)}`)
+        ]);
+        state.html = parsed.template;
+        state.mappingData = mappings;
+        document.getElementById('htmlNodeCount').textContent = `${parsed.node_count || 0} 个`;
+        document.getElementById('htmlSummary').textContent = `${parsed.template.html_name || parsed.template.template_id} · 分类 ${parsed.template.category_name || parsed.template.print_template_category_id} · SHA-256 ${parsed.html_sha256}`;
+        renderHtmlNodes(parsed.nodes || []);
+        renderMappings(mappings);
+        renderStandardTemplateItems();
+        updateSelectionStatus();
+        document.getElementById('analyzeButton').disabled = false;
+    } catch (error) {
+        document.getElementById('htmlSummary').textContent = error.message;
+        document.getElementById('htmlNodes').innerHTML = '<div class="tb-empty">HTML 解析失败</div>';
+    }
+}
+
+function renderHtmlNodes(nodes) {
+    document.getElementById('htmlNodes').innerHTML = renderGroupedNodes(nodes, node => {
+        return firstText(node.section, node.anchor_name, node.tag ? `<${node.tag}> 节点` : '', 'HTML 节点');
+    }, node => `
+        <div class="tb-node">
+            <div class="tb-node-name">${esc(node.display_text || node.placeholder || node.node_key)}</div>
+            <div class="tb-node-path">${esc([node.section, ...(node.selectors || []), node.anchor_name].filter(Boolean).join(' / ') || node.context_text || node.tag)}</div>
+        </div>`, '未提取到可绑定节点');
+}
+
+async function selectStandardTemplate(templateId, source = 'manual') {
+    state.standardExplicit = source === 'manual';
+    state.standard = {id: templateId};
+    loadStandardTemplates();
+    document.getElementById('standardSummary').textContent = '校验节点树中';
+    document.getElementById('standardNodes').innerHTML = '<div class="tb-empty">正在加载标准节点</div>';
+    try {
+        const data = await fetchJson(`/api/template-binding/standard/templates/${query(templateId)}/nodes`);
+        state.standard = data.template;
+        document.getElementById('standardNodeCount').textContent = `${data.node_count || 0} 个`;
+        document.getElementById('standardSummary').textContent = `${data.template.category_name || data.template.category_id} · ${data.template.name || data.template.id} · ${data.root_count || 0} 个根节点`;
+        const nodes = data.flat_nodes || [];
+        document.getElementById('standardNodes').innerHTML = renderGroupedNodes(nodes, node => {
+            const path = String(node.path_text || '').split('/').filter(Boolean);
+            return firstText(path[0], node.node_cn, node.node_en, node.id, '未分组节点');
+        }, node => `
+            <div class="tb-node">
+                <div class="tb-node-name">${esc(node.node_cn || node.node_en || node.id)}</div>
+                <div class="tb-node-path">${esc(node.path_text || node.id)}</div>
+            </div>`, '该模板没有标准节点');
+        renderMappings(state.mappingData || {template_mappings: [], node_mapping_count: 0});
+        updateSelectionStatus();
+    } catch (error) {
+        document.getElementById('standardSummary').textContent = error.message;
+        document.getElementById('standardNodes').innerHTML = '<div class="tb-empty">标准节点树校验失败</div>';
+    }
+}
+
+function renderMappings(data) {
+    const rows = data.template_mappings || [];
+    document.getElementById('mappingCount').textContent = `${rows.length} 个模板映射 · ${data.node_mapping_count || 0} 个节点映射`;
+    document.getElementById('mappingRows').innerHTML = rows.length ? rows.map(row => {
+        const current = state.standard && String(row.standard_xml_id) === String(state.standard.id);
+        return `<tr class="${current ? 'current-mapping' : ''}">
+        <td>${esc(row.mapping_id)}</td><td>${esc(row.html_id)}</td><td>${esc(row.standard_category_id)}</td>
+        <td>${esc(row.standard_xml_id)}</td><td>${esc(row.standard_xml_name)}</td><td>${esc(row.node_mapping_count || 0)}</td><td>${esc(row.update_time || row.create_time)}</td>
+    </tr>`;
+    }).join('') : '<tr><td colspan="7" class="tb-empty">当前 HTML 模板没有已有模板映射</td></tr>';
+}
+
+function updateSelectionStatus() {
+    const status = document.getElementById('selectionStatus');
+    if (!state.html || !state.standard || !state.standard.category_id) {
+        status.textContent = '请选择 HTML 模板和标准临床文档模板';
+        return;
+    }
+    const existing = (state.mappingData?.template_mappings || []).find(row => String(row.standard_xml_id) === String(state.standard.id));
+    if (existing) {
+        status.textContent = `已有绑定：映射 ${existing.mapping_id} · ${existing.node_mapping_count || 0} 个节点映射`;
+        return;
+    }
+    status.textContent = `待确认组合：HTML (${state.html.template_id}, ${state.html.print_template_category_id}) → 标准模板 ${state.standard.id} / 分类 ${state.standard.category_id}`;
+}
+
+document.getElementById('htmlSearch').addEventListener('input', () => debounce('html', loadHtmlTemplates));
+document.getElementById('standardSearch').addEventListener('input', () => debounce('standard', loadStandardTemplates));
+document.getElementById('analyzeButton').addEventListener('click', analyzeBinding);
+document.getElementById('saveBindingButton').addEventListener('click', saveReviewedBindings);
+document.getElementById('useLlm').addEventListener('change', updateModelInputsState);
+document.getElementById('templateMatchModel').addEventListener('change', persistModelInputs);
+document.getElementById('nodeMatchModel').addEventListener('change', persistModelInputs);
+loadBindingModels();
+loadHtmlTemplates();
+loadStandardTemplates();
+</script>
+</body>
+</html>

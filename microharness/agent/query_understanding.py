@@ -16,6 +16,8 @@ import os
 import sys
 from typing import Optional
 
+from microharness.medical.entity_normalization import normalize_entity_fields
+
 
 def _understanding_debug_enabled() -> bool:
     return str(os.environ.get("MEDICAL_QUERY_DEBUG", "")).lower() in {"1", "true", "yes", "on"}
@@ -52,6 +54,7 @@ def understand_query(condition: str, model: str = "qwen2.5:3b",
                 "attributes": {},
                 "modifiers": ["modifier1"],   # status/negation words
                 "is_numeric": bool,
+                "numeric_comparison": {"subject": "年龄", "operator": ">=", "threshold": 40, "unit": "岁"},
                 "target_docs": ["文档名"],     # routing: which documents
                 "target_sections": ["章节名"],  # routing: which sections
                 "target_skills": ["skill-id"], # routing: which external services
@@ -193,6 +196,7 @@ def _validate_and_normalize(result: dict, condition: str, doc_catalog: dict) -> 
             "keyword": condition,
             "modifiers": [],
             "is_numeric": False,
+            "numeric_comparison": None,
             "target_docs": [],
             "target_sections": [],
             "target_skills": [],
@@ -207,6 +211,11 @@ def _validate_and_normalize(result: dict, condition: str, doc_catalog: dict) -> 
         cond.setdefault("text", condition)
         cond.setdefault("keyword", cond["text"])
         cond.setdefault("entity", cond.get("keyword", cond["text"]))
+        cond.setdefault("canonical_entity", cond.get("entity") or cond.get("keyword") or cond["text"])
+        cond.setdefault("aliases", [])
+        cond.setdefault("entity_candidates", [])
+        cond.setdefault("entity_confidence", None)
+        cond.setdefault("normalization_source", "")
         cond.setdefault("entity_type", "unknown")
         cond.setdefault("domain", "")
         cond.setdefault("predicate", "unknown")
@@ -217,6 +226,7 @@ def _validate_and_normalize(result: dict, condition: str, doc_catalog: dict) -> 
         cond.setdefault("attributes", {})
         cond.setdefault("modifiers", [])
         cond.setdefault("is_numeric", False)
+        cond.setdefault("numeric_comparison", None)
         cond.setdefault("target_docs", [])
         cond.setdefault("target_sections", [])
         cond.setdefault("target_skills", [])
@@ -231,6 +241,21 @@ def _validate_and_normalize(result: dict, condition: str, doc_catalog: dict) -> 
         for key in ("entity", "entity_type", "domain", "predicate"):
             if not isinstance(cond.get(key), str):
                 cond[key] = str(cond.get(key) or "")
+        if not isinstance(cond.get("aliases"), list):
+            cond["aliases"] = [cond["aliases"]] if cond.get("aliases") else []
+        if not isinstance(cond.get("entity_candidates"), list):
+            cond["entity_candidates"] = []
+        if cond.get("numeric_comparison") is not None and not isinstance(
+            cond.get("numeric_comparison"), dict
+        ):
+            cond["numeric_comparison"] = None
+        try:
+            if cond.get("entity_confidence") not in (None, ""):
+                cond["entity_confidence"] = max(0.0, min(1.0, float(cond["entity_confidence"])))
+        except (TypeError, ValueError):
+            cond["entity_confidence"] = None
+
+        normalize_entity_fields(cond)
         if cond.get("entity") and (
             not cond.get("keyword")
             or str(cond.get("keyword")) == str(cond.get("text"))
@@ -297,6 +322,7 @@ def _fallback_understand(condition: str, model: str) -> dict:
             "keyword": cond_text,
             "modifiers": [],
             "is_numeric": False,
+            "numeric_comparison": None,
             "target_docs": [],      # Will be filled by check_one_condition fallback
             "target_sections": [],
             "target_skills": [],

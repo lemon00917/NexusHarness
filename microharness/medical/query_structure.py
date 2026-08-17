@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from typing import Callable, Optional
 
+from microharness.medical.entity_normalization import normalize_entity_fields
 from microharness.medical.query_ir_validator import (
     is_executable_numeric_condition,
     validate_and_repair_analysis,
@@ -98,6 +99,12 @@ def augment_structural_conditions(
             "keyword": "年龄",
             "modifiers": [],
             "is_numeric": True,
+            "numeric_comparison": {
+                "subject": "年龄",
+                "operator": op,
+                "threshold": float(val),
+                "unit": "岁",
+            },
             "entity_type": "age",
             "domain": "demographic",
             "predicate": "compare",
@@ -318,6 +325,18 @@ def normalize_condition_entities(analysis: dict, fallback_keyword_fn: KeywordFn 
         if not old_entity or old_entity == text or len(kw) < len(old_entity):
             cond["entity"] = kw
             changed = True
+        before = (
+            cond.get("canonical_entity"),
+            tuple(cond.get("aliases") or []),
+            tuple(cond.get("entity_candidates") or []),
+        )
+        normalize_entity_fields(cond)
+        after = (
+            cond.get("canonical_entity"),
+            tuple(cond.get("aliases") or []),
+            tuple(cond.get("entity_candidates") or []),
+        )
+        changed = changed or before != after
     if changed:
         source = analysis.get("source", "unknown")
         if "entity_normalize" not in source:

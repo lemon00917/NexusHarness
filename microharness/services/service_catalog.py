@@ -9,13 +9,241 @@ import json
 import re
 import yaml
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 _SKILLS_DIR = Path(__file__).parent.parent.parent / "skills"
 _CONFIG_PATH = Path(__file__).parent.parent.parent / "configs" / "external_services.json"
 
 # Shared base URL for external APIs
 _BASE_URL = "http://43.143.68.242:9090/emviewdoctor/hdc/"
+
+_SERVICE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+_TEMPORAL_FILTER_MODES = {"generic", "domain"}
+
+
+def _contract_message(code: str, field: str, message: str) -> dict:
+    return {"code": code, "field": field, "message": message}
+
+
+def validate_service_contract(
+    service_id: str,
+    service: dict,
+    *,
+    require_semantic: bool = False,
+) -> dict:
+    """Validate one external-service registration without disabling it.
+
+    SKILL.md-backed services use ``require_semantic=True`` and must expose the
+    complete machine contract. Config-only legacy services stay compatible:
+    missing semantic fields are warnings so existing deployments keep running.
+    """
+    errors: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = []
+
+    if not isinstance(service, dict):
+        errors.append(_contract_message(
+            "SERVICE_NOT_OBJECT", "service", "Service registration must be an object."
+        ))
+        return {
+            "valid": False,
+            "level": "invalid",
+            "errors": errors,
+            "warnings": warnings,
+            "normalized": {
+                "source_kind": "service",
+                "temporal_filter_mode": "generic",
+                "record_type": "",
+            },
+        }
+
+    normalized_id = str(service_id or "").strip()
+    if not _SERVICE_ID_PATTERN.fullmatch(normalized_id):
+        errors.append(_contract_message(
+            "INVALID_SERVICE_ID",
+            "service_id",
+            "Service ID must use lowercase letters, digits, dots, underscores, or hyphens.",
+        ))
+
+    if not str(service.get("url") or "").strip():
+        errors.append(_contract_message("MISSING_URL", "url", "Service URL is required."))
+
+    method = str(service.get("method") or "POST").strip().upper()
+    if method not in _HTTP_METHODS:
+        errors.append(_contract_message(
+            "INVALID_HTTP_METHOD", "method", f"Unsupported HTTP method: {method or '<empty>'}."
+        ))
+
+    label = str(service.get("label") or service.get("display_name") or "").strip()
+    if not label:
+        target = errors if require_semantic else warnings
+        target.append(_contract_message(
+            "MISSING_LABEL", "label", "A stable display label is recommended."
+        ))
+
+    triggers = service.get("triggers")
+    if not isinstance(triggers, list) or any(not isinstance(item, str) for item in triggers):
+        target = errors if require_semantic else warnings
+        target.append(_contract_message(
+            "INVALID_TRIGGERS", "triggers", "Triggers must be a list of strings."
+        ))
+
+    request_map = service.get("request_map")
+    if not isinstance(request_map, dict):
+        target = errors if require_semantic else warnings
+        target.append(_contract_message(
+            "INVALID_REQUEST_MAP", "request_map", "Request mapping must be an object."
+        ))
+
+    semantic = service.get("semantic")
+    if not isinstance(semantic, dict) or not semantic:
+        target = errors if require_semantic else warnings
+        target.append(_contract_message(
+            "MISSING_SEMANTIC_CONTRACT",
+            "semantic",
+            "Semantic metadata is required for generic routing and evidence handling.",
+        ))
+        semantic = {}
+
+    for field in ("entity_type", "domain"):
+        if not str(semantic.get(field) or "").strip():
+            target = errors if require_semantic else warnings
+            target.append(_contract_message(
+                f"MISSING_{field.upper()}",
+                f"semantic.{field}",
+                f"semantic.{field} must be a non-empty string.",
+            ))
+
+    evidence_types = semantic.get("evidence_types")
+    valid_evidence_types = (
+        isinstance(evidence_types, list)
+        and bool(evidence_types)
+        and all(isinstance(item, str) and item.strip() for item in evidence_types)
+    )
+    if not valid_evidence_types:
+        target = errors if require_semantic else warnings
+        target.append(_contract_message(
+            "INVALID_EVIDENCE_TYPES",
+            "semantic.evidence_types",
+            "semantic.evidence_types must be a non-empty list of strings.",
+        ))
+
+    temporal_filter_mode = str(
+        semantic.get("temporal_filter_mode") or "generic"
+    ).strip().lower()
+    if temporal_filter_mode not in _TEMPORAL_FILTER_MODES:
+        errors.append(_contract_message(
+            "INVALID_TEMPORAL_FILTER_MODE",
+            "semantic.temporal_filter_mode",
+            "Temporal filter mode must be 'generic' or 'domain'.",
+        ))
+
+    presentation = semantic.get("presentation", {})
+    if presentation is None:
+        presentation = {}
+    if not isinstance(presentation, dict):
+        errors.append(_contract_message(
+            "INVALID_PRESENTATION",
+            "semantic.presentation",
+            "Presentation metadata must be an object.",
+        ))
+        presentation = {}
+    record_type = str(
+        presentation.get("record_type") or semantic.get("record_type") or ""
+    ).strip()
+    if "record_type" in presentation and not record_type:
+        errors.append(_contract_message(
+            "INVALID_RECORD_TYPE",
+            "semantic.presentation.record_type",
+            "Presentation record_type must be a non-empty string.",
+        ))
+
+    record_identity = presentation.get("record_identity")
+    if record_identity is not None and not isinstance(record_identity, dict):
+        errors.append(_contract_message(
+            "INVALID_RECORD_IDENTITY",
+            "semantic.presentation.record_identity",
+            "Record identity metadata must be an object.",
+        ))
+        record_identity = None
+    if isinstance(record_identity, dict):
+        identity_label = str(record_identity.get("label") or "").strip()
+        identity_fields = record_identity.get("fields")
+        valid_fields = isinstance(identity_fields, list) and bool(identity_fields) and all(
+            isinstance(field, str) and field.strip() for field in identity_fields
+        )
+        if not identity_label or not valid_fields:
+            errors.append(_contract_message(
+                "INVALID_RECORD_IDENTITY",
+                "semantic.presentation.record_identity",
+                "Record identity requires a non-empty label and fields list.",
+            ))
+    capabilities = semantic.get("evidence_capabilities")
+    if capabilities is not None and not isinstance(capabilities, dict):
+        errors.append(_contract_message(
+            "INVALID_EVIDENCE_CAPABILITIES",
+            "semantic.evidence_capabilities",
+            "Evidence capabilities must be an object.",
+        ))
+
+    level = "invalid" if errors else ("complete" if not warnings else "compatible")
+    return {
+        "valid": not errors,
+        "level": level,
+        "errors": errors,
+        "warnings": warnings,
+        "normalized": {
+            "source_kind": "service",
+            "temporal_filter_mode": (
+                temporal_filter_mode
+                if temporal_filter_mode in _TEMPORAL_FILTER_MODES
+                else "generic"
+            ),
+            "record_type": record_type,
+            "entity_type": str(semantic.get("entity_type") or "").strip(),
+            "domain": str(semantic.get("domain") or "").strip(),
+            "evidence_types": (
+                [str(item).strip() for item in evidence_types]
+                if valid_evidence_types
+                else []
+            ),
+        },
+    }
+
+
+def validate_service_catalog(
+    services: dict,
+    *,
+    strict_service_ids: set[str] | None = None,
+) -> dict:
+    """Return aggregate registration health for an arbitrary service catalog."""
+    strict_ids = set(strict_service_ids or set())
+    reports = {}
+    for service_id, service in (services or {}).items():
+        if service_id == "base_url":
+            continue
+        reports[str(service_id)] = validate_service_contract(
+            str(service_id),
+            service,
+            require_semantic=str(service_id) in strict_ids,
+        )
+    counts = {level: 0 for level in ("complete", "compatible", "invalid")}
+    for report in reports.values():
+        counts[report["level"]] += 1
+    return {
+        "valid": counts["invalid"] == 0,
+        "counts": counts,
+        "services": reports,
+    }
+
+
+def _attach_service_contracts(services: dict, strict_service_ids: set[str]) -> dict:
+    reports = validate_service_catalog(services, strict_service_ids=strict_service_ids)
+    for service_id, report in reports["services"].items():
+        service = services.get(service_id)
+        if isinstance(service, dict):
+            service["_contract"] = report
+    return services
 
 
 def _load_config() -> dict:
@@ -108,9 +336,11 @@ def load_services() -> dict:
     """Scan skills directory for API-enabled skills."""
     services = {"base_url": _load_base_url()}
     cfg = _load_config()
+    skill_service_ids: set[str] = set()
 
     if not _SKILLS_DIR.exists():
-        return _merge_config_services(services, cfg)
+        merged = _merge_config_services(services, cfg)
+        return _attach_service_contracts(merged, skill_service_ids)
 
     for skill_dir in _SKILLS_DIR.iterdir():
         if not skill_dir.is_dir():
@@ -129,6 +359,7 @@ def load_services() -> dict:
             continue
 
         name = fm.get("name", skill_dir.name)
+        skill_service_ids.add(str(name))
         triggers_raw = metadata.get("triggers", [])
         triggers = triggers_raw if isinstance(triggers_raw, list) else []
 
@@ -157,7 +388,8 @@ def load_services() -> dict:
             "temporal_semantics": api_cfg.get("temporal_semantics", {}),
         }
 
-    return _merge_config_services(services, cfg)
+    merged = _merge_config_services(services, cfg)
+    return _attach_service_contracts(merged, skill_service_ids)
 
 
 def _merge_config_services(services: dict, cfg: dict) -> dict:
@@ -193,6 +425,8 @@ def _merge_config_services(services: dict, cfg: dict) -> dict:
 
             merged = dict(skill_service)
             for key, value in svc.items():
+                if key == "_contract":
+                    continue
                 # Partial configuration objects must not erase non-empty
                 # request/response metadata loaded from SKILL.md.
                 if key in structural_keys and not value and skill_service.get(key):

@@ -17,7 +17,7 @@ import re
 import sys
 import os
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -59,12 +59,14 @@ from microharness.rag.template_binding import TwoStageBinder
 from microharness.observability.logger import rag_logger
 from microharness.rag.template_binding_v2 import ThreeStageBinder
 from microharness.agent.tools import TOOLS as TOOLS
+from web.template_binding_routes import router as template_binding_router
 
 # Ensure utf-8 output
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
 app = FastAPI(title="NexusHarness", version="0.1.0")
+app.include_router(template_binding_router)
 
 # Project root for resolving relative paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -2007,6 +2009,71 @@ def _get_medical_query_coordinator():
         )
     return _MEDICAL_QUERY_COORDINATOR
 
+
+def _read_medical_json(path: Path) -> dict:
+    try:
+        if path.exists() and path.is_file():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+    return {}
+
+
+def _resolve_medical_query_visit_context(
+    register_no: str,
+    visit_no: str,
+    global_patient_id: str,
+    global_visit_id: str,
+) -> tuple[str, str, str]:
+    """Fill missing visit context from local patient metadata when unambiguous."""
+    reg = str(register_no or "").strip()
+    visit = str(visit_no or "").strip()
+    gpid = str(global_patient_id or "").strip()
+    gvid = str(global_visit_id or "").strip()
+    if not reg:
+        return visit, gpid, gvid
+
+    patient_dir = _PATIENTS_DIR / reg
+    patient_meta = _read_medical_json(patient_dir / "_meta.json")
+    if not gpid:
+        gpid = str(patient_meta.get("global_patient_id") or "").strip()
+
+    visit_dirs = [
+        item for item in sorted(patient_dir.iterdir())
+        if item.is_dir() and not item.name.startswith("_")
+    ] if patient_dir.exists() else []
+
+    def apply_visit_meta(visit_dir: Path) -> None:
+        nonlocal visit, gvid
+        meta = _read_medical_json(visit_dir / "_visit.json")
+        if not visit:
+            visit = str(meta.get("visit_no") or visit_dir.name or "").strip()
+        if not gvid:
+            gvid = str(meta.get("global_visit_id") or "").strip()
+
+    if visit:
+        visit_dir = patient_dir / visit
+        if visit_dir.exists():
+            apply_visit_meta(visit_dir)
+        return visit, gpid, gvid
+
+    if gvid:
+        gvid_suffix = gvid.split("_", 1)[1] if "_" in gvid else gvid
+        for visit_dir in visit_dirs:
+            meta = _read_medical_json(visit_dir / "_visit.json")
+            meta_gvid = str(meta.get("global_visit_id") or "").strip()
+            meta_visit = str(meta.get("visit_no") or visit_dir.name or "").strip()
+            if meta_gvid == gvid or meta_visit == gvid_suffix:
+                apply_visit_meta(visit_dir)
+                break
+        return visit, gpid, gvid
+
+    if len(visit_dirs) == 1:
+        apply_visit_meta(visit_dirs[0])
+
+    return visit, gpid, gvid
+
 # Accept any HTML/HTM file for upload (template matching happens during binding)
 def _is_html_file(filename: str) -> bool:
     return filename.lower().endswith(('.html', '.htm'))
@@ -2517,6 +2584,21 @@ async def medical_query(request: Request):
     visit_no = data.get("visit_no", "").strip()
     global_patient_id = data.get("global_patient_id", "").strip()
     global_visit_id = data.get("global_visit_id", "").strip()
+    raw_visit_no = visit_no
+    raw_global_visit_id = global_visit_id
+    visit_no, global_patient_id, global_visit_id = _resolve_medical_query_visit_context(
+        register_no,
+        visit_no,
+        global_patient_id,
+        global_visit_id,
+    )
+    if (visit_no, global_visit_id) != (raw_visit_no, raw_global_visit_id):
+        print(
+            "[medical_query] resolved visit context | "
+            f"register_no={register_no} | visit_no={visit_no or '(empty)'} | "
+            f"global_visit_id={global_visit_id or '(empty)'}",
+            flush=True,
+        )
     judge_model = data.get("judge_model", "qwen2.5:3b")
     router_model = data.get("router_model", "medaibase/medgemma1.5:4b")
     planner_model = data.get("planner_model", "").strip() or "deepseek-r1:1.5b"  # 默认启用
@@ -2535,6 +2617,39 @@ async def medical_query(request: Request):
     supplied_request_id = str(data.get("request_id", "")).strip()
     request_id = supplied_request_id[:128] or str(uuid.uuid4())
     coordinator = _get_medical_query_coordinator()
+    trace_models = {
+        "router": router_model,
+        "judge": judge_model,
+        "planner": planner_model,
+    }
+
+    def _request_trace(
+        response=None,
+        *,
+        lifecycle_status="completed",
+        error="",
+        admission_state=None,
+    ):
+        from microharness.medical.request_trace import build_medical_query_trace
+
+        return build_medical_query_trace(
+            response or {},
+            request_id=request_id,
+            admission=admission_state or coordinator.snapshot(request_id),
+            models=trace_models,
+            lifecycle_status=lifecycle_status,
+            error=error,
+        )
+
+    def _log_request_trace(trace):
+        from microharness.medical.request_trace import medical_query_trace_log
+
+        print(
+            "[medical_query][trace] "
+            + json.dumps(medical_query_trace_log(trace), ensure_ascii=False),
+            flush=True,
+        )
+
     try:
         admission = await coordinator.acquire(request_id)
         print(
@@ -2544,32 +2659,56 @@ async def medical_query(request: Request):
             flush=True,
         )
     except MedicalQueryQueueFull:
+        queue_state = coordinator.snapshot(request_id)
+        trace = _request_trace(
+            lifecycle_status="rejected",
+            error="medical query queue is full",
+            admission_state=queue_state,
+        )
+        _log_request_trace(trace)
         return JSONResponse(
             status_code=429,
             headers={"Retry-After": "10"},
             content={
                 "error": "当前病历筛选任务较多，等待队列已满，请稍后重试",
                 "request_id": request_id,
-                "queue": coordinator.snapshot(request_id),
+                "queue": queue_state,
+                "request_trace": trace,
             },
         )
     except MedicalQueryQueueTimeout:
+        queue_state = coordinator.snapshot(request_id)
+        trace = _request_trace(
+            lifecycle_status="queue_timeout",
+            error="medical query queue wait timed out",
+            admission_state=queue_state,
+        )
+        _log_request_trace(trace)
         return JSONResponse(
             status_code=503,
             headers={"Retry-After": "10"},
             content={
                 "error": "病历筛选排队等待超时，请稍后重试",
                 "request_id": request_id,
-                "queue": coordinator.snapshot(request_id),
+                "queue": queue_state,
+                "request_trace": trace,
             },
         )
     except MedicalQueryDuplicateId:
+        queue_state = coordinator.snapshot(request_id)
+        trace = _request_trace(
+            lifecycle_status="rejected",
+            error="duplicate active medical query request_id",
+            admission_state=queue_state,
+        )
+        _log_request_trace(trace)
         return JSONResponse(
             status_code=409,
             content={
                 "error": "request_id 对应的病历筛选任务仍在执行",
                 "request_id": request_id,
-                "queue": coordinator.snapshot(request_id),
+                "queue": queue_state,
+                "request_trace": trace,
             },
         )
 
@@ -2594,6 +2733,9 @@ async def medical_query(request: Request):
         coordinator.release(request_id, "completed", "执行完成")
         if isinstance(result, dict):
             result.setdefault("request_id", request_id)
+            trace = _request_trace(result, lifecycle_status="completed")
+            result["request_trace"] = trace
+            _log_request_trace(trace)
         return result
     except asyncio.CancelledError:
         if work_future is None:
@@ -2629,6 +2771,13 @@ async def medical_query(request: Request):
         }
         if str(os.environ.get("MEDICAL_QUERY_DEBUG", "")).lower() in {"1", "true", "yes", "on"}:
             error_response["debug_trace"] = tb[-2000:]
+        trace = _request_trace(
+            error_response,
+            lifecycle_status="failed",
+            error=str(exc),
+        )
+        error_response["request_trace"] = trace
+        _log_request_trace(trace)
         return error_response
 
 
@@ -2763,8 +2912,26 @@ def _convert_numeric_unit(value: float, from_unit: str, to_unit: str) -> float:
     return convert_numeric_unit(value, from_unit, to_unit)
 
 
-def _is_time_scope_condition(text: str) -> bool:
+def _is_time_scope_condition(
+    text: str,
+    *,
+    temporal: object = None,
+    allow_text_fallback: bool = True,
+) -> bool:
     """Whether a condition needs admission/discharge dates as auxiliary scope."""
+    if temporal is not None:
+        if isinstance(temporal, dict):
+            values = temporal.values()
+        else:
+            values = (
+                getattr(temporal, "scope", ""),
+                getattr(temporal, "event", ""),
+                getattr(temporal, "relation", ""),
+                getattr(temporal, "duration", None),
+            )
+        return any(value is not None and str(value).strip() for value in values)
+    if not allow_text_fallback:
+        return False
     return bool(re.search(
         r"(住院期间|住院期内|本次住院|入院后|入院前|入院时|出院前|出院后|出院时|"
         r"术前|术后|手术前|手术后|术中|手术中|"
@@ -2773,10 +2940,19 @@ def _is_time_scope_condition(text: str) -> bool:
     ))
 
 
-def _event_anchor_route(text: str) -> tuple[list, list]:
+def _event_anchor_route(
+    text: str,
+    *,
+    temporal: object = None,
+    allow_text_fallback: bool = True,
+) -> tuple[list, list]:
     try:
         from microharness.medical.time_window import get_anchor_route_for_condition
-        return get_anchor_route_for_condition(text or "")
+        return get_anchor_route_for_condition(
+            text or "",
+            temporal=temporal,
+            allow_text_fallback=allow_text_fallback,
+        )
     except Exception:
         return [], []
 
@@ -2786,21 +2962,37 @@ def _prune_primary_service_route(
     docs: list,
     sections: list,
     service_ids: list,
+    *,
+    temporal: object = None,
+    allow_text_fallback: bool = True,
 ) -> tuple[list, list, str]:
     """Reduce noisy document routing when a structured service is the evidence source."""
     service_ids = service_ids or []
     if "lab-results" not in service_ids:
         return list(docs or []), list(sections or []), ""
 
-    anchor_docs, anchor_sections = _event_anchor_route(condition)
+    anchor_docs, anchor_sections = _event_anchor_route(
+        condition,
+        temporal=temporal,
+        allow_text_fallback=allow_text_fallback,
+    )
     if anchor_docs and anchor_sections:
         return anchor_docs, anchor_sections, "检验指标以lab-results为主证据，病历时间锚点作为辅助证据"
-    if _is_time_scope_condition(condition):
+    if _is_time_scope_condition(
+        condition,
+        temporal=temporal,
+        allow_text_fallback=allow_text_fallback,
+    ):
         return [], [], "检验指标以lab-results为主证据，住院范围由就诊ID/就诊信息辅助限定，跳过病历正文检索"
     return [], [], "检验指标以lab-results为主证据，跳过病历正文检索"
 
 
-def _primary_service_for_condition(condition: str, cond: dict | None = None) -> str:
+def _primary_service_for_condition(
+    condition: str,
+    cond: dict | None = None,
+    *,
+    allow_text_fallback: bool = True,
+) -> str:
     """Pick one primary structured evidence service for a sub-condition.
 
     This prevents unrelated services from contributing negative evidence, e.g.
@@ -2818,6 +3010,8 @@ def _primary_service_for_condition(condition: str, cond: dict | None = None) -> 
         return "drug-interaction"
     if entity_type == "diagnosis" or semantic_class in {"疾病/症状存在", "入院前/既往存在"} or "diagnosis-query" in skills:
         return "diagnosis-query"
+    if not allow_text_fallback:
+        return ""
     try:
         from microharness.services.service_catalog import load_services
 
@@ -3057,7 +3251,7 @@ def _extract_core_keyword(condition: str) -> str:
     )
     # 剥离句首动词/助词："开了XX"、"患有XX"、"有诊断有XX" → "XX"。
     # 小模型和用户口语常会叠加功能词，循环剥离避免留下"诊断有XX"。
-    prefix_pat = r'^(既往有|既往患有|既往存在|既往诊断为|既往诊断有|既往|有诊断为|有诊断有|有诊断|诊断为|诊断有|确诊为|确诊有|开了|开过|服用了|服用过|使用了|使用过|注射了|注射过|吃了|吃过|打了|用了|用过|做了|做过|患有|存在|有过|有)'
+    prefix_pat = r'^(该患者|此患者|患者|该病人|此病人|病人|该病例|此病例|病例|患儿|是否|有无|既往有|既往患有|既往存在|既往诊断为|既往诊断有|既往|有诊断为|有诊断有|有诊断|诊断为|诊断有|确诊为|确诊有|开了|开过|服用了|服用过|使用了|使用过|注射了|注射过|吃了|吃过|打了|用了|用过|做了|做过|患有|存在|有过|有)'
     while True:
         stripped = _kre.sub(prefix_pat, '', text)
         if stripped == text:
@@ -3111,44 +3305,6 @@ def _is_duration_comparison_condition(condition: str) -> bool:
     """Generic duration comparison detector, independent of disease/drug terms."""
     from microharness.medical.temporal_parser import is_duration_comparison
     return is_duration_comparison(condition)
-
-
-_OUTCOME_PATTERNS = [
-    r'没有(?:明显)?好转', r'未(?:见)?(?:明显)?好转', r'无(?:明显)?好转', r'不见好',
-    r'没有(?:明显)?缓解', r'未(?:见)?(?:明显)?缓解', r'无(?:明显)?缓解',
-    r'未(?:见)?(?:明显)?改善', r'无(?:明显)?改善', r'没有(?:明显)?改善',
-    r'好转', r'缓解', r'改善', r'治愈', r'痊愈', r'恢复',
-    r'加重', r'恶化', r'进展', r'复发',
-    r'持续(?:存在)?', r'仍(?:然)?(?:存在|有|为)?', r'尚未(?:恢复|缓解|好转)',
-]
-
-
-def _extract_outcome_modifiers(condition: str) -> list:
-    from microharness.medical.semantic_rules import extract_outcome_modifiers
-    return extract_outcome_modifiers(condition)
-
-
-def _is_outcome_state_condition(condition: str) -> bool:
-    """Detect stage + outcome/state queries such as discharge/treatment outcome."""
-    from microharness.medical.semantic_rules import is_outcome_state_condition
-    return is_outcome_state_condition(condition)
-
-
-def _has_outcome_phase(text: str) -> bool:
-    from microharness.medical.semantic_rules import has_outcome_phase
-    return has_outcome_phase(text)
-
-
-def _extract_outcome_keyword(condition: str) -> str:
-    """Remove phase/outcome grammar and keep the medical concept."""
-    from microharness.medical.semantic_rules import extract_outcome_keyword
-    return extract_outcome_keyword(condition, fallback_keyword_fn=_extract_core_keyword)
-
-
-def _judge_outcome_polarity(modifiers: list, text: str) -> Optional[dict]:
-    """Deterministic polarity check for outcome/state modifiers."""
-    from microharness.medical.semantic_rules import judge_outcome_polarity
-    return judge_outcome_polarity(modifiers, text)
 
 
 def _split_compound_clauses(condition: str) -> tuple[list, str]:
@@ -3473,6 +3629,20 @@ def _query_db(sq_route: dict, register_no: str, visit_no: str,
     return results
 
 
+def _source_display_label(source_id: str, service_catalog: dict | None = None) -> str:
+    """Resolve a user-facing source name from the current dynamic catalog."""
+    source_key = str(source_id or "").split(".", 1)[0].strip()
+    metadata = (service_catalog or {}).get(source_key)
+    if isinstance(metadata, dict):
+        return str(
+            metadata.get("label")
+            or metadata.get("display_name")
+            or metadata.get("name")
+            or source_key
+        ).strip()
+    return source_key
+
+
 def _run_medical_query(condition: str, register_no: str, visit_no: str,
                        global_patient_id: str, global_visit_id: str,
                        judge_model: str, router_model: str,
@@ -3550,11 +3720,34 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
     def _sanitize_response(obj, preserve_machine_fields: bool = False):
         """Remove internal routing fields that should not be user-facing."""
         if isinstance(obj, dict):
+            machine_value_keys = {
+                "status",
+                "reason_code",
+                "data_quality",
+                "source_role",
+                "conflict_level",
+                "condition_id",
+                "source_id",
+                "service_id",
+                "source_kind",
+                "source_label",
+                "domain",
+                "entity_type",
+                "evidence_type",
+                "evidence_types",
+                "record_type",
+                "record_id",
+                "record_id_label",
+                "record_id_field",
+                "record_id_fields",
+                "evidence_model_version",
+            }
             return {
                 k: _sanitize_response(
                     v,
                     preserve_machine_fields=(
                         preserve_machine_fields
+                        or k in machine_value_keys
                         or k in {"evidence_items", "condition_result", "condition_results"}
                     ),
                 )
@@ -3578,9 +3771,15 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
             return cleaned
         return obj
 
-    def _judgment_status(matched: bool, reason: str, per_condition: dict = None) -> tuple[str, bool]:
+    def _judgment_status(
+        matched: bool,
+        reason: str,
+        per_condition: dict = None,
+        *,
+        use_and: bool = True,
+    ) -> tuple[str, bool]:
         from microharness.medical.evidence import judgment_status
-        return judgment_status(matched, reason, per_condition)
+        return judgment_status(matched, reason, per_condition, use_and=use_and)
 
     # Reject requests outside the medical-filter capability before loading
     # metadata or invoking the query-understanding model.
@@ -3722,7 +3921,11 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
         or bool(analysis.get("connector"))
     )
     _scheduler_started = time.perf_counter()
-    if _has_time_offset and planner_model and not _is_compound_temporal:
+    from microharness.medical.semantic_rules import uses_deterministic_medication_pipeline
+    _use_unified_medication_pipeline = uses_deterministic_medication_pipeline(analysis)
+    if _has_time_offset and planner_model and _use_unified_medication_pipeline:
+        log('[Scheduler] 时间用药条件 -> 使用统一结构化用药管线')
+    if _has_time_offset and planner_model and not _is_compound_temporal and not _use_unified_medication_pipeline:
         # ── Scheduler pipeline ──
         try:
             from microharness.agent.scheduler.planner import QueryPlanner
@@ -3764,6 +3967,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                         bool(first_result.get("matched")),
                         str(first_result.get("reason", "")),
                         first_result.get("per_condition", {}),
+                        use_and=_use_and,
                     )
                     status = patient_confidence["判断状态"]
                     conclusive = patient_confidence["可判定"]
@@ -3811,9 +4015,16 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
         log(f"[Step1-理解] 过滤非执行子条件: {dropped}")
         analysis["conditions"] = filtered_conditions
     analysis["conditions"] = filtered_conditions or raw_conditions
-    _sub_conditions = [str(c.get("text") or "").strip() for c in analysis.get("conditions", []) if isinstance(c, dict) and str(c.get("text") or "").strip()]
-    if not _sub_conditions:
-        _sub_conditions = [condition]
+    _query_ir = build_query_ir(analysis, condition)
+    from microharness.medical.condition_execution import (
+        build_condition_execution_specs,
+    )
+    _execution_specs = build_condition_execution_specs(
+        _query_ir,
+        analysis,
+        fallback_keyword_fn=_extract_core_keyword,
+    )
+    sub_queries = [spec.text for spec in _execution_specs]
 
     connector = analysis.get("connector")
     _use_and = connector != "or"  # default to AND
@@ -3823,23 +4034,23 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
     log(f"\n{'='*60}")
     log(f"[Step1-理解] 原始问题: {condition}")
     log(f"[Step1-理解] 分析: type={analysis.get('type', 'simple')} connector={analysis.get('connector')} negated={_negate} source={analysis.get('source')}")
-    sub_queries = _sub_conditions
-    _sub_index = {sq: i for i, sq in enumerate(sub_queries, 1)}
     from microharness.medical.condition_summary import summarize_condition_structure
-    for i, sq in enumerate(sub_queries, 1):
-        cond_for_log = next((c for c in analysis.get("conditions", []) if c.get("text") == sq), {})
+    for spec in _execution_specs:
+        sq = spec.text
         structure = summarize_condition_structure(
             sq,
-            cond_for_log,
-            fallback_keyword_fn=_extract_core_keyword,
+            spec.condition_dict(),
+            fallback_keyword_fn=(
+                _extract_core_keyword if spec.legacy_fallback_allowed else None
+            ),
         )
         log(
-            f"[Step1-结构] 条件{i}: 主体={structure['主体']} | "
+            f"[Step1-结构] 条件{spec.position}: 主体={structure['主体']} | "
             f"限定={structure['限定']} | 判断={structure['判断']}"
         )
-    if len(sub_queries) > 1:
-        for i, sq in enumerate(sub_queries, 1):
-            log(f"[Step1-理解]   子问题{i}: {sq}")
+    if len(_execution_specs) > 1:
+        for spec in _execution_specs:
+            log(f"[Step1-理解]   子问题{spec.position}: {spec.text}")
     log(f"{'='*60}")
 
     if register_no or global_patient_id:
@@ -3854,7 +4065,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
 
         services = load_services()
         _base_url = services.get("base_url", "").rstrip("/")
-        _sub_svc_map = {}  # sq → list of matched service dicts
+        _sub_svc_map = {}  # execution_key → list of matched service dicts
         _svc_needed = {}   # unique service_id → svc_dict
         _svc_results = {}  # service_id → list of binding results
         _svc_by_label = {}
@@ -3910,7 +4121,12 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                     future.set_result([])
             return future.result()
 
-        def _ensure_services_for_query(sq: str, svc_list: list, source: str = "metadata"):
+        def _ensure_services_for_query(
+            execution_key: str,
+            query_text: str,
+            svc_list: list,
+            source: str = "metadata",
+        ):
             """Register matched services and reuse their request-scoped result."""
             added = []
             for svc in svc_list or []:
@@ -3920,26 +4136,21 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 added.append(registered)
             if added:
                 with _svc_lock:
-                    bucket = _sub_svc_map.setdefault(sq, [])
+                    bucket = _sub_svc_map.setdefault(execution_key, [])
                     seen = {s.get("id") for s in bucket}
                     for svc in added:
                         if svc.get("id") not in seen:
                             bucket.append(svc)
                 for svc in added:
                     _call_service_once(
-                        svc["id"], svc, sq, source=source,
+                        svc["id"], svc, query_text, source=source,
                         log_prefix="  [Step2-服务]",
                     )
             return added
 
         # Use analysis results for service matching (no additional LLM call)
-        for cond_analysis in analysis.get("conditions", []):
-            if not isinstance(cond_analysis, dict):
-                continue
-            sq = str(cond_analysis.get("text") or "").strip()
-            if not sq:
-                continue
-            skill_ids = cond_analysis.get("target_skills", [])
+        for execution_spec in _execution_specs:
+            skill_ids = execution_spec.target_services
             matched = []
             for sid in skill_ids:
                 svc = services.get(sid)
@@ -3951,7 +4162,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                     svc_with_id = {**svc, "url": svc_url, "id": sid}
                     matched.append(svc_with_id)
                     _register_service(svc_with_id)
-            _sub_svc_map[sq] = matched
+            _sub_svc_map[execution_spec.execution_key] = matched
 
         # Build label→service_meta map for injecting skill guidance into judge prompts
         for _sid, _svc in _svc_needed.items():
@@ -4022,53 +4233,44 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
             )
 
         # ── For EACH sub-condition, check ALL files in parallel ──
-        # Build a map from sub-condition text to its analysis (for routing without 2nd LLM call)
-        _cond_analysis_map = {
-            str(c.get("text") or "").strip(): c
-            for c in analysis.get("conditions", [])
-            if isinstance(c, dict) and str(c.get("text") or "").strip()
-        }
-        # Fix: when sub_queries is replaced by full condition (len<=1 case),
-        # the map key won't match. Add full condition as alias.
-        if len(_cond_analysis_map) == 1 and len(sub_queries) == 1 and sub_queries[0] not in _cond_analysis_map:
-            _only_val = list(_cond_analysis_map.values())[0]
-            _cond_analysis_map[sub_queries[0]] = _only_val
-        if len(_sub_svc_map) == 1 and len(sub_queries) == 1 and sub_queries[0] not in _sub_svc_map:
-            _sub_svc_map[sub_queries[0]] = list(_sub_svc_map.values())[0]
-
-        def check_one_condition(sq):
+        def check_one_condition(execution_spec):
             """Check all files for one sub-condition using pre-computed analysis."""
             t0 = time.time()
+            sq = execution_spec.text
+            execution_key = execution_spec.execution_key
 
-            # ── Use understand_query results directly (no 2nd routing LLM call) ──
-            cond_a = _cond_analysis_map.get(sq, {})
-            sq_docs = cond_a.get("target_docs", [])
-            sq_sections = cond_a.get("target_sections", [])
-            sq_targets = cond_a.get("targets", {}) if isinstance(cond_a.get("targets", {}), dict) else {}
+            # Consume normalized IR fields directly. Only legacy analysis is
+            # allowed to use text-trigger compatibility fallback below.
+            cond_a = execution_spec.condition_dict()
+            sq_docs = list(execution_spec.target_docs)
+            sq_sections = list(execution_spec.target_sections)
+            sq_targets = execution_spec.targets_dict()
             ir_docs = list(sq_docs or [])
             ir_sections = list(sq_sections or [])
             ir_targets = dict(sq_targets or {})
-            ir_services = list(cond_a.get("target_skills") or [])
-            route_source = "ir"
-            sq_keyword = cond_a.get("keyword", sq)
-            _clean_sq_keyword = _extract_core_keyword(str(sq_keyword))
-            if _clean_sq_keyword and len(_clean_sq_keyword) < len(str(sq_keyword)):
-                sq_keyword = _clean_sq_keyword
-            sq_modifiers = cond_a.get("modifiers", [])
-            sq_is_numeric = cond_a.get("is_numeric", False)
-            sq_semantic_class = cond_a.get("semantic_class", "")
+            ir_services = list(execution_spec.target_services)
+            route_source = execution_spec.execution_source
+            sq_keyword = execution_spec.keyword
+            sq_modifiers = list(execution_spec.modifiers)
+            if execution_spec.outcome_state and not sq_modifiers:
+                sq_modifiers = [execution_spec.outcome_state]
+            sq_numeric_required = execution_spec.numeric_execution_required
+            sq_semantic_class = execution_spec.semantic_class
+            sq_primary_entity = execution_spec.canonical_entity
+            sq_entity_candidates = list(execution_spec.entity_candidates)
+            sq_execution_entity = sq_primary_entity or sq_keyword or sq
 
             route_availability = _resolve_executable_route_sources(
                 sq_docs,
-                _sub_svc_map.get(sq, []),
+                _sub_svc_map.get(execution_key, []),
                 query_document_catalog,
                 services,
                 _TM,
             )
             sq_docs = route_availability["documents"]
             executable_service_ids = set(route_availability["services"])
-            _sub_svc_map[sq] = [
-                svc for svc in _sub_svc_map.get(sq, [])
+            _sub_svc_map[execution_key] = [
+                svc for svc in _sub_svc_map.get(execution_key, [])
                 if isinstance(svc, dict)
                 and (svc.get("id") or svc.get("name")) in executable_service_ids
             ]
@@ -4100,6 +4302,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 fallback_skills = fallback_route.get("target_services", [])
                 if fallback_skills:
                     _ensure_services_for_query(
+                        execution_key,
                         sq,
                         [
                             {**services[fsid], "id": fsid}
@@ -4110,7 +4313,12 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                     )
                 metadata_services = match_services(sq, services=services, model=None)
                 if metadata_services:
-                    _ensure_services_for_query(sq, metadata_services, source="metadata")
+                    _ensure_services_for_query(
+                        execution_key,
+                        sq,
+                        metadata_services,
+                        source="metadata",
+                    )
             else:
                 log(f"  [Step2-理解] 子问题: {sq}")
                 log(f"  [Step2-理解]   → 文档: {sq_docs}")
@@ -4127,7 +4335,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
             # mapped to a local table. Keep those diagnostics out of DB execution.
             fallback_availability = _resolve_executable_route_sources(
                 sq_docs,
-                _sub_svc_map.get(sq, []),
+                _sub_svc_map.get(execution_key, []),
                 query_document_catalog,
                 services,
                 _TM,
@@ -4141,14 +4349,18 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
 
             route_services = [
                 svc.get("id") or svc.get("name", "")
-                for svc in _sub_svc_map.get(sq, [])
+                for svc in _sub_svc_map.get(execution_key, [])
                 if isinstance(svc, dict)
             ]
             route_services = [s for s in dict.fromkeys(route_services) if s]
-            primary_service = _primary_service_for_condition(sq, cond_a)
+            primary_service = _primary_service_for_condition(
+                sq,
+                cond_a,
+                allow_text_fallback=execution_spec.legacy_fallback_allowed,
+            )
             if primary_service and primary_service in route_services:
-                _sub_svc_map[sq] = [
-                    svc for svc in _sub_svc_map.get(sq, [])
+                _sub_svc_map[execution_key] = [
+                    svc for svc in _sub_svc_map.get(execution_key, [])
                     if (svc.get("id") or svc.get("name")) == primary_service
                 ]
                 route_services = [primary_service]
@@ -4156,6 +4368,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 svc = services.get(primary_service)
                 if isinstance(svc, dict):
                     added_services = _ensure_services_for_query(
+                        execution_key,
                         sq,
                         [{**svc, "id": primary_service}],
                         source="semantic_primary",
@@ -4163,14 +4376,18 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                     if added_services:
                         route_services = [primary_service]
             if primary_service:
-                _sub_svc_map[sq] = [
-                    svc for svc in _sub_svc_map.get(sq, [])
+                _sub_svc_map[execution_key] = [
+                    svc for svc in _sub_svc_map.get(execution_key, [])
                     if (svc.get("id") or svc.get("name")) == primary_service
                 ]
-                if _sub_svc_map.get(sq):
+                if _sub_svc_map.get(execution_key):
                     route_services = [primary_service]
 
-            anchor_docs, anchor_sections = _event_anchor_route(sq)
+            anchor_docs, anchor_sections = _event_anchor_route(
+                sq,
+                temporal=execution_spec.temporal,
+                allow_text_fallback=execution_spec.legacy_fallback_allowed,
+            )
             if anchor_docs:
                 sq_docs = list(dict.fromkeys(list(sq_docs or []) + anchor_docs))
             if anchor_sections:
@@ -4185,6 +4402,8 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 sq_docs,
                 sq_sections,
                 route_services,
+                temporal=execution_spec.temporal,
+                allow_text_fallback=execution_spec.legacy_fallback_allowed,
             )
             if sq_docs != pre_prune_docs or sq_sections != pre_prune_sections:
                 sq_targets = {}
@@ -4211,9 +4430,15 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 "_decomposed_keyword": sq_keyword if sq_keyword != sq else None,
                 "_decomposed_modifiers": sq_modifiers if sq_modifiers else None,
                 "_semantic_class": sq_semantic_class,
+                "_entity_type": cond_a.get("entity_type", ""),
+                "_canonical_entity": sq_primary_entity,
+                "_entity_candidates": sq_entity_candidates,
+                "_entity_aliases": list(cond_a.get("aliases") or []),
+                "_entity_confidence": cond_a.get("entity_confidence"),
+                "_normalization_source": cond_a.get("normalization_source", ""),
             }
             sq_xml = sq_route.get("target_xml_paths", [])
-            cond_no = _sub_index.get(sq, "?")
+            cond_no = execution_spec.position
             log(
                 "[完整路由][执行前] "
                 + json.dumps(
@@ -4221,12 +4446,22 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                         "条件序号": cond_no,
                         "条件": sq,
                         "路由来源": route_source,
+                        "执行输入来源": execution_spec.execution_source,
                         "IR": {
                             "keyword": cond_a.get("keyword", ""),
                             "entity": cond_a.get("entity", ""),
+                            "canonical_entity": sq_primary_entity,
+                            "aliases": list(cond_a.get("aliases") or []),
+                            "entity_candidates": sq_entity_candidates,
+                            "entity_confidence": cond_a.get("entity_confidence"),
+                            "normalization_source": cond_a.get("normalization_source", ""),
                             "entity_type": cond_a.get("entity_type", ""),
                             "predicate": cond_a.get("predicate", ""),
                             "semantic_class": cond_a.get("semantic_class", ""),
+                            "outcome_state": execution_spec.outcome_state,
+                            "outcome_phase": execution_spec.outcome_phase,
+                            "history_context": execution_spec.history_context,
+                            "internal_negation": execution_spec.internal_negation,
                             "target_docs": ir_docs,
                             "target_sections": ir_sections,
                             "targets": ir_targets,
@@ -4254,22 +4489,113 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 f"章节={sq_sections[:4] or ['无']} | 服务={route_services or ['无']}"
             )
 
-            sq_matched = False
-            sq_reason = ""
             sq_files = []
 
             # Query DB for THIS sub-condition's route
             relevant_files = query_db_for_route(sq_route)
 
+            from microharness.medical.clinical_phase import (
+                infer_document_source_phase,
+            )
+            for source in relevant_files:
+                if not isinstance(source, dict) or source.get('service_id'):
+                    continue
+                source_name = str(source.get('file') or '')
+                template_name = str(source.get('template') or '')
+                document_name = next(
+                    (
+                        name
+                        for name in query_document_catalog
+                        if source_name.startswith(str(name)) or template_name == str(name)
+                    ),
+                    '',
+                )
+                document_metadata = query_document_catalog.get(document_name)
+                if not isinstance(document_metadata, dict):
+                    continue
+                binding_sections = [
+                    str(binding.get('html_field') or '').strip()
+                    for binding in source.get('bindings', [])
+                    if isinstance(binding, dict)
+                    and str(binding.get('html_field') or '').strip()
+                ]
+                phase_profile = infer_document_source_phase(
+                    document_metadata,
+                    binding_sections,
+                )
+                semantic = dict(source.get('semantic') or {})
+                semantic.update(phase_profile.to_dict())
+                semantic['document_name'] = document_name
+                source['semantic'] = semantic
+
             # Add pre-fetched external service results for this sub-condition
-            for svc in _sub_svc_map.get(sq, []):
+            for svc in _sub_svc_map.get(execution_key, []):
                 sid = svc.get("id", svc.get("name", ""))
                 results = _svc_results.get(sid)
                 if results:
                     relevant_files.extend(results)
                     log(f"  [Step2-外部]   → {sid}: {_service_result_summary(results)}")
+            if execution_spec.is_outcome_condition:
+                from microharness.medical.clinical_phase import (
+                    classify_outcome_source_role,
+                    resolve_outcome_target_phase,
+                    source_supports_outcome_state,
+                )
+
+                phase_profiles = [
+                    source.get('semantic') or {}
+                    for source in relevant_files
+                    if isinstance(source, dict)
+                    and not source.get('service_id')
+                ]
+                target_outcome_phase = resolve_outcome_target_phase(
+                    execution_spec.outcome_phase,
+                    phase_profiles,
+                )
+                for source in relevant_files:
+                    if not isinstance(source, dict):
+                        continue
+                    semantic = dict(source.get('semantic') or {})
+                    explicit_role = (
+                        source.get('source_role')
+                        or source.get('evidence_role')
+                        or semantic.get('source_role')
+                        or semantic.get('evidence_role')
+                    )
+                    source_kind = 'service' if source.get('service_id') else 'document'
+                    role = classify_outcome_source_role(
+                        semantic,
+                        target_phase=target_outcome_phase,
+                        source_kind=source_kind,
+                        supports_outcome_state=source_supports_outcome_state(source),
+                        explicit_role=explicit_role,
+                    )
+                    semantic['source_role'] = role
+                    semantic['target_outcome_phase'] = target_outcome_phase
+                    semantic['outcome_phase_policy'] = (
+                        execution_spec.attributes.get('outcome_phase_policy')
+                        or ('explicit' if execution_spec.outcome_phase else '')
+                    )
+                    source['semantic'] = semantic
+                    source['source_role'] = role
+                phase_label = target_outcome_phase or '未解析'
+                policy_label = (
+                    execution_spec.attributes.get('outcome_phase_policy')
+                    or 'explicit'
+                )
+                log(
+                    f'  [Step2-转归阶段] 目标阶段={phase_label} | '
+                    f'策略={policy_label}'
+                )
+
             from microharness.medical.time_window import resolve_time_window
-            time_window = resolve_time_window(sq, _svc_results, relevant_files)
+            time_window = resolve_time_window(
+                sq,
+                _svc_results,
+                relevant_files,
+                temporal=execution_spec.temporal,
+                allow_text_fallback=execution_spec.legacy_fallback_allowed,
+            )
             if time_window and route_services and time_window.resolved:
                 log(f"  [Step2-时间窗] {time_window.scope}: {time_window.describe()} ({time_window.source})")
             elif time_window and route_services and time_window.required:
@@ -4321,9 +4647,26 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                         "cot_response": "",
                     }
 
+                from microharness.medical.domain_execution import (
+                    ConditionSemanticType,
+                    DomainExecutionRequest,
+                    execute_document_domain,
+                    execute_numeric_domain,
+                    execute_recalled_document_domain,
+                    execute_structured_domain,
+                )
+
+                domain_request = DomainExecutionRequest.from_execution_spec(
+                    execution_spec,
+                    ab.get("bindings", []),
+                    time_window=time_window,
+                    semantic=ab.get("semantic", {}),
+                    temporal_semantics=ab.get("temporal_semantics", {}),
+                )
                 is_external = ab.get("template", "") not in ("AdmissionRecord","DischargeRecord",
                     "OutpatientAndEmergency","FirstMedicalRecord","DailyMedicalRecord","SurgeryRecord")
 
+                semantic_source_truncated = False
                 if is_external:
                     # ── Compact format: one line per record, | separated ──
                     _recs = {}  # prefix → list of "field: value"
@@ -4356,6 +4699,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                             unique = list(dict.fromkeys(vs))  # preserve order, remove dups
                             line = f"{k}: {'; '.join(unique)}"
                             if len(line) > 800:
+                                semantic_source_truncated = True
                                 line = line[:797] + "..."
                             _judge_fields.append(line)
                         # Also include diagnosis type info if present (pairs name with type)
@@ -4390,66 +4734,43 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                             for dtype, names in _type_name_map.items():
                                 line = f"{dtype}诊断名称: {'; '.join(names)}"
                                 if len(line) > 800:
+                                    semantic_source_truncated = True
                                     line = line[:797] + "..."
                                 _judge_fields.append(line)
                     else:
                         _judge_fields = sub_fields[:10]
+                        semantic_source_truncated = len(sub_fields) > 10
                     judge_summary = "\n".join(_judge_fields)
                     debug_log(f"    [LLM入参] {ab['file']}: {len(_judge_fields)}行/{len(sub_fields)}记录行 →\n{judge_summary[:800]}")
-                    try:
-                        from microharness.medical.lab_rules import judge_lab_condition
-                        lab_judge = judge_lab_condition(
-                            sq,
-                            ab.get("bindings", []),
-                            time_window=time_window,
-                        )
-                    except Exception as _lab_e:
-                        lab_judge = {"applicable": False, "error": str(_lab_e)}
-                    if lab_judge.get("applicable"):
-                        result = {
-                            "file": ab["file"],
-                            "matched": bool(lab_judge.get("matched")),
-                            "reason": lab_judge.get("reason", "检验结构化判断完成"),
-                            "fields": lab_judge.get("fields", sub_summary)[:4000],
-                            "cot_response": "",
+                    domain_judge = execute_structured_domain(
+                        domain_request,
+                        on_error=lambda executor, exc: debug_log(
+                            f"    [Step4-领域执行器异常] {executor}: {exc}"
+                        ),
+                    )
+                    if domain_judge is not None:
+                        domain_labels = {
+                            "laboratory": "检验规则",
+                            "medication": "用药规则",
+                            "diagnosis": "诊断规则",
                         }
-                        if lab_judge.get("candidate_records"):
-                            result["候选记录"] = lab_judge.get("candidate_records")
-                            result["候选记录数"] = lab_judge.get("candidate_count", len(lab_judge.get("candidate_records") or []))
+                        result = domain_judge.to_file_result(
+                            ab["file"],
+                            fallback_fields=sub_summary,
+                        )
+                        domain_status = result.get("status") or (
+                            "MATCHED" if result["matched"] else "NOT_MATCHED"
+                        )
+                        missing_capabilities = result.get("missing_capabilities") or []
+                        capability_suffix = (
+                            f" | 缺失能力={missing_capabilities}"
+                            if missing_capabilities else ""
+                        )
                         log(
-                            f"    [Step4-检验规则] {ab['file']}: "
-                            f"{'✓ 符合' if result['matched'] else '✗ 不符合'} — {result['reason'][:80]}"
+                            f"    [Step4-{domain_labels.get(domain_judge.domain, '领域规则')}] "
+                            f"{ab['file']}: {domain_status} — {result['reason'][:80]}"
+                            f"{capability_suffix}"
                         )
-                        return result
-                    try:
-                        from microharness.medical.medication_rules import judge_medication_condition
-                        medication_judge = judge_medication_condition(
-                            sq,
-                            ab.get("bindings", []),
-                            entity=(sq_route.get("_decomposed_keyword") or _extract_core_keyword(sq)),
-                            time_window=time_window,
-                            semantic=ab.get("semantic", {}),
-                        )
-                    except Exception as _medication_e:
-                        medication_judge = {"applicable": False, "error": str(_medication_e)}
-                    if medication_judge.get("applicable"):
-                        result = {
-                            "file": ab["file"],
-                            "matched": bool(medication_judge.get("matched")),
-                            "status": medication_judge.get("status"),
-                            "reason_code": medication_judge.get("reason_code"),
-                            "reason": medication_judge.get("reason", "用药结构化判断完成"),
-                            "fields": medication_judge.get("fields", sub_summary)[:4000],
-                            "cot_response": "",
-                        }
-                        if medication_judge.get("candidate_records"):
-                            result["候选记录"] = medication_judge.get("candidate_records")
-                            result["候选记录数"] = medication_judge.get(
-                                "candidate_count",
-                                len(medication_judge.get("candidate_records") or []),
-                            )
-                        med_status = result.get("status") or ("MATCHED" if result["matched"] else "NOT_MATCHED")
-                        log(f"    [Step4-用药规则] {ab['file']}: {med_status} — {result['reason'][:80]}")
                         return result
                     if time_window and time_window.required and not time_window.resolved:
                         try:
@@ -4494,6 +4815,7 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                             include = any(tp in path or xml_tag in tp or tp in xml_tag for tp in sq_xml)
                         if not sq_sections and not sq_xml: include = True
                         if include:
+                            semantic_source_truncated = semantic_source_truncated or len(str(val)) > 500
                             sub_fields.append(f"  {label}: {str(val)[:500]}")
                     sub_summary = "\n".join(sub_fields) if sub_fields else "(无匹配字段)"
                     judge_summary = sub_summary
@@ -4511,15 +4833,26 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 # 这样短词变体不会漏，长词不匹配可安全跳过 LLM。
                 # ═══════════════════════════════════════════════════════════
                 # 优先使用 LLM 语义拆解的关键字，更准确（如"背痛治好"→"背痛"）
-                outcome_modifiers = _extract_outcome_modifiers(sq) if _is_outcome_state_condition(sq) else []
-                outcome_keyword = _extract_outcome_keyword(sq) if outcome_modifiers else ""
-                kw_pre = outcome_keyword or sq_route.get("_decomposed_keyword") or _extract_core_keyword(sq)
+                outcome_modifiers = (
+                    list(execution_spec.modifiers)
+                    if execution_spec.is_outcome_condition
+                    else []
+                )
+                kw_pre = sq_execution_entity
+                semantic_recall_required = False
+                lexical_entity = kw_pre
+                prefilter_candidates = []
+                for candidate in [kw_pre, *(sq_route.get("_entity_candidates") or [])]:
+                    candidate = str(candidate or "").strip()
+                    if len(candidate) >= 2 and candidate not in prefilter_candidates:
+                        prefilter_candidates.append(candidate)
                 active_external_prefixes = None
                 # 数值/日期条件不走预筛：关键字如"住院天数"不会字面出现在字段值中，
-                # 这类条件由 _prejudge（Python数值比较）和 hints 处理。
-                if kw_pre and len(kw_pre) >= 2 and not _is_numeric_only_condition(sq):
+                # 这类条件由 IR 数值执行器和预计算 hints 确定性处理。
+                if prefilter_candidates and not sq_numeric_required:
                     filtered_fields = []
                     filtered_prefixes = set()
+                    matched_candidates = []
                     for line in sub_fields:
                         match_text = line
                         if is_external:
@@ -4528,7 +4861,14 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                             # concept matching, otherwise "白细胞计数" can falsely match
                             # unrelated rows through label text.
                             match_text = re.sub(r'(^|\|)\s*[^:：|]{1,20}[:：]\s*', ' ', line)
-                        if _char_overlap_match(kw_pre, match_text):
+                        line_candidates = [
+                            candidate for candidate in prefilter_candidates
+                            if _char_overlap_match(candidate, match_text)
+                        ]
+                        if line_candidates:
+                            for candidate in line_candidates:
+                                if candidate not in matched_candidates:
+                                    matched_candidates.append(candidate)
                             if is_external:
                                 _pm = re.match(r"\s*(\[[^\]]+\])", line)
                                 if _pm:
@@ -4539,14 +4879,19 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                                 fname, fvals = line.split(': ', 1)
                                 if '; ' in fvals:
                                     matching_vals = [v.strip() for v in fvals.split('; ')
-                                                     if _char_overlap_match(kw_pre, v)]
+                                                     if any(_char_overlap_match(candidate, v)
+                                                            for candidate in line_candidates)]
                                     if matching_vals:
                                         filtered_fields.append(f"{fname}: {'; '.join(matching_vals)}")
                                     continue
                             filtered_fields.append(line)
                     if filtered_fields:
+                        lexical_entity = matched_candidates[0] if matched_candidates else kw_pre
                         if len(filtered_fields) < len(sub_fields):
-                            log(f"    [预筛] {ab['file']}: {len(sub_fields)}→{len(filtered_fields)}行 (关键字'{kw_pre}')")
+                            log(
+                                f"    [预筛] {ab['file']}: {len(sub_fields)}→{len(filtered_fields)}行 "
+                                f"(候选实体'{lexical_entity}')"
+                            )
                         sub_fields = filtered_fields
                         sub_summary = "\n".join(sub_fields)
                         judge_summary = sub_summary
@@ -4559,33 +4904,39 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                         # 不让小模型把无关药名/诊断名解释成目标概念。
                         if is_external:
                             log(f"    [预筛] {ab['file']}: 外部数据关键字'{kw_pre}'字符未覆盖 → 跳过LLM")
-                            return {"file": ab["file"], "matched": False,
-                                    "reason": f"关键字'{kw_pre}'未在结构化字段中出现", "fields": sub_summary[:2000],
-                                    "cot_response": ""}
-                        # 短关键字(≤2字)最容易被小模型过度联想。
-                        # 对本地病历字段，如果没有任何候选行能覆盖这些字符，直接判不匹配；
-                        # 需要“发热≈体温升高”这类纯语义/数值映射时，应走结构化规则或服务，
-                        # 不让 LLM 在无字面证据的字段上补证据。
-                        elif len(kw_pre) <= 2:
-                            log(f"    [预筛] {ab['file']}: 短关键字'{kw_pre}'字符未覆盖 → 跳过LLM")
-                            return {"file": ab["file"], "matched": False,
-                                    "reason": f"关键字'{kw_pre}'未在数据中出现", "fields": sub_summary[:2000], "cot_response": ""}
+                            return {
+                                "file": ab["file"],
+                                "matched": False,
+                                "status": "NOT_MENTIONED",
+                                "reason_code": "NO_MATCHING_RECORD",
+                                "data_quality": "COMPLETE",
+                                "reason": f"关键字'{kw_pre}'未在结构化字段中出现",
+                                "fields": sub_summary[:2000],
+                                "cot_response": "",
+                            }
                         else:
-                            log(f"    [预筛] {ab['file']}: 关键字'{kw_pre}'未出现 → 跳过LLM")
-                            return {"file": ab["file"], "matched": False,
-                                    "reason": f"关键字'{kw_pre}'未在数据中出现", "fields": sub_summary[:2000], "cot_response": ""}
+                            # 本地病历可能使用与查询无字符重叠的严格同义表达。
+                            # 仅让 LLM 召回原文实体，最终仍由程序校验证据并判断语义。
+                            semantic_recall_required = True
+                            log(
+                                f"    [预筛] {ab['file']}: 候选实体{prefilter_candidates}字符未覆盖 "
+                                "→ 进入受约束语义召回"
+                            )
 
                 if not sub_fields:
                     log(f"    [Step3-取值] {ab['file']}: 无匹配字段 → 跳过")
                     return {"file": ab["file"], "matched": False, "reason": "无相关字段", "fields": "", "cot_response": ""}
 
+                source_semantic = ab.get("semantic") if isinstance(ab.get("semantic"), dict) else {}
+                temporal_filter_mode = str(
+                    source_semantic.get("temporal_filter_mode") or "generic"
+                ).strip().lower()
                 if (
                     is_external
                     and time_window
                     and time_window.required
                     and time_window.resolved
-                    and "检验指标查询" not in str(ab.get("file", ""))
-                    and "就诊信息查询" not in str(ab.get("file", ""))
+                    and temporal_filter_mode == "generic"
                 ):
                     time_bindings = ab.get("bindings", [])
                     if active_external_prefixes:
@@ -4633,67 +4984,101 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 # Pre-compute date differences & numeric values (on judge_summary for speed)
                 hints = _precompute_hints(judge_summary)
 
-                # Fast path: numeric comparisons in Python (no LLM)
-                py_judge = _prejudge(sq, hints) if hints else None
-                if py_judge:
-                    result = {"file": ab["file"], "matched": py_judge["matched"],
-                              "reason": py_judge["reason"], "fields": sub_summary[:2000], "cot_response": ""}
-                    log(f"    [Step4-判断] {ab['file']}: {'✓ 符合' if result['matched'] else '✗ 不符合'} — {result['reason'][:60]} [Python]")
+                numeric_domain_judge = execute_numeric_domain(
+                    domain_request,
+                    hints,
+                    fields=sub_summary,
+                )
+                if numeric_domain_judge is not None:
+                    result = numeric_domain_judge.to_file_result(
+                        ab["file"],
+                        fallback_fields=sub_summary,
+                    )
+                    log(
+                        f"    [Step4-数值规则] {ab['file']}: {result['status']} — "
+                        f"{result['reason'][:80]}"
+                    )
                     return result
 
-                if _is_age_condition(sq, str(sq_keyword)):
-                    log(f"    [Step4-判断] {ab['file']}: 年龄条件缺少可比较的年龄字段 → 不交给LLM推断")
-                    return {"file": ab["file"], "matched": False,
-                            "reason": "缺少明确年龄字段，无法判断年龄条件", "fields": sub_summary[:2000],
-                            "cot_response": ""}
-
-                # Skip: condition is date/numeric but file has no dates/numbers → irrelevant
-                if _is_numeric_only_condition(sq) and not hints:
-                    log(f"    [Step4-判断] {ab['file']}: 跳过（数值/日期条件但文件中无日期数字）")
-                    return {"file": ab["file"], "matched": False,
-                            "reason": "文件中无相关日期/数值字段，无法判断", "fields": sub_summary[:2000], "cot_response": ""}
-
-                absence_kw = sq_route.get("_decomposed_keyword") or _extract_core_keyword(sq)
-                if absence_kw and (
-                    sq_route.get("_semantic_class") == "入院前/既往存在"
-                    or any(token in sq for token in ("入院前", "入院时", "既往", "病史"))
-                ):
-                    from microharness.medical.semantic_rules import judge_explicit_absence
-                    absence_judge = judge_explicit_absence(absence_kw, judge_summary)
-                    if absence_judge is not None:
-                        result = {"file": ab["file"], "matched": absence_judge["matched"],
-                                  "reason": absence_judge["reason"], "fields": sub_summary[:2000],
-                                  "cot_response": ""}
-                        log(f"    [Step4-判断] {ab['file']}: ✗ 不符合 — {result['reason']} [规则]")
-                        return result
-
-                if absence_kw and sq_route.get("_decomposed_modifiers") and any(
-                    "病史" in str(m) and "年" in str(m)
-                    for m in sq_route.get("_decomposed_modifiers", [])
-                ):
-                    from microharness.medical.semantic_rules import judge_history_duration
-                    history_judge = judge_history_duration(
-                        absence_kw,
-                        sq_route.get("_decomposed_modifiers", []),
-                        judge_summary,
+                document_domain_judge = None
+                semantic_kw = lexical_entity or sq_execution_entity
+                semantic_modifiers = sq_route.get("_decomposed_modifiers") or []
+                has_internal_negation_modifier = execution_spec.internal_negation
+                if (
+                    not is_external
+                    and semantic_kw
+                    and not sq_numeric_required
+                    and (
+                        not has_internal_negation_modifier
+                        or execution_spec.is_outcome_condition
                     )
-                    if history_judge is not None:
-                        result = {"file": ab["file"], "matched": history_judge["matched"],
-                                  "reason": history_judge["reason"], "fields": sub_summary[:2000],
-                                  "cot_response": ""}
-                        log(f"    [Step4-判断] {ab['file']}: {'✓ 符合' if result['matched'] else '✗ 不符合'} — {result['reason']} [病史规则]")
-                        return result
+                ):
+                    from microharness.medical.structured_time import (
+                        first_labeled_record_time_from_bindings,
+                    )
+                    document_request = replace(domain_request, entity=semantic_kw)
+                    document_domain_judge = execute_document_domain(
+                        document_request,
+                        judge_summary,
+                        record_time=first_labeled_record_time_from_bindings(
+                            ab.get("bindings", [])
+                        ),
+                    )
+                    if (
+                        document_domain_judge is not None
+                        and (
+                            document_domain_judge.status.value != "MATCHED"
+                            or document_domain_judge.semantic_type in {
+                                ConditionSemanticType.HISTORY_DURATION,
+                                ConditionSemanticType.OUTCOME_STATE,
+                            }
+                        )
+                    ):
+                        if (
+                            semantic_recall_required
+                            and document_domain_judge.status.value == "NOT_MENTIONED"
+                        ):
+                            log(
+                                f"    [Step4-文档语义] {ab['file']}: 字面实体未提及 "
+                                "→ 继续受约束语义召回"
+                            )
+                        else:
+                            result = document_domain_judge.to_file_result(
+                                ab["file"],
+                                fallback_fields=sub_summary,
+                            )
+                            semantic_label = (
+                                "无法判断" if result["status"] == "UNKNOWN"
+                                else "未提及" if result["status"] == "NOT_MENTIONED"
+                                else "不符合"
+                            )
+                            log(
+                                f"    [Step4-文档语义] {ab['file']}: {semantic_label} — "
+                                f"{document_domain_judge.reason[:80]}"
+                            )
+                            return result
 
                 try:
                     from microharness.ollama import OllamaClient as JOC2
                     from microharness.ollama.model_profile import get_profile
-                    from microharness.ollama.prompt_adapter import build_judge_prompt
+                    from microharness.ollama.prompt_adapter import (
+                        build_judge_prompt,
+                        build_semantic_candidate_retry_prompt,
+                        build_semantic_equivalence_prompt,
+                        build_semantic_symptom_relation_prompt,
+                    )
                     judge_profile = get_profile(judge_model)
+                    judge_options = {"num_predict": judge_profile.num_predict}
+                    if semantic_recall_required:
+                        judge_options["seed"] = 0
                     j = JOC2(model=judge_model, timeout=120,
-                             num_predict=judge_profile.num_predict,
-                             format_json=(judge_profile.json_mode == "format_json"))
+                             format_json=(
+                                 semantic_recall_required
+                                 or judge_profile.json_mode == "format_json"
+                             ),
+                             **judge_options)
                     # ── 注入预提取的关键词，避免LLM自己提词时被字段值带偏 ──
-                    pre_kw = sq_route.get("_decomposed_keyword") or _extract_core_keyword(sq)
+                    pre_kw = sq_execution_entity
                     kw_hint = ""
                     if pre_kw and pre_kw != sq:
                         kw_hint = f"\n核心关键词（已提取好，直接使用，不要自己重新提取）：{pre_kw}"
@@ -4707,14 +5092,318 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
 
                     prompt = build_judge_prompt(judge_profile, sq, kw_hint,
                                                 judge_summary, hints,
-                                                modifiers=sq_route.get("_decomposed_modifiers"))
-                    resp = j.chat([{"role":"user","content": prompt}], temperature=0.1)
+                                                modifiers=sq_route.get("_decomposed_modifiers"),
+                                                semantic_recall=semantic_recall_required,
+                                                query_entity=(sq_route.get("_canonical_entity") or kw_pre or ""),
+                                                entity_candidates=sq_route.get("_entity_candidates") or None,
+                                                entity_type=sq_route.get("_entity_type", ""))
+                    resp = j.chat(
+                        [{"role": "user", "content": prompt}],
+                        temperature=0.0 if semantic_recall_required else 0.1,
+                    )
                     log(f"    [CoT响应] {ab['file']} ({len(resp)}字):\n{resp[:1000]}")
                     from microharness.medical.query_router import parse_llm_json
                     jd = parse_llm_json(resp, context=f"条件:{sq[:30]} 文件:{ab['file']}")
                     # ── 修复嵌套JSON: LLM偶尔把 matched/reason 包在 reasoning 字段里 ──
                     if isinstance(jd.get("reasoning"), dict):
                         jd = {**jd["reasoning"], **{k:v for k,v in jd.items() if k != "reasoning"}}
+                    if semantic_recall_required:
+                        from microharness.medical.semantic_entity_recall import (
+                            aggregate_semantic_entity_decisions,
+                            assess_semantic_entity_recall,
+                            candidate_needing_equivalence,
+                            parse_semantic_candidate_batch,
+                            semantic_candidate_retry_required,
+                            symptom_relation_review_required,
+                        )
+                        from microharness.medical.structured_time import (
+                            first_labeled_record_time_from_bindings,
+                        )
+                        semantic_query_entity = (
+                            sq_route.get("_canonical_entity") or kw_pre or ""
+                        )
+                        if 'candidates' in jd:
+                            semantic_batch = parse_semantic_candidate_batch(jd)
+                            candidate_decisions = []
+                            review_blocks = []
+                            semantic_file_name = ab.get('file', '')
+                            if semantic_candidate_retry_required(
+                                semantic_batch,
+                                judge_summary,
+                                source_complete=not semantic_source_truncated,
+                            ):
+                                log(
+                                    f'    [语义候选完整性重试] {semantic_file_name}: '
+                                    f'{semantic_batch.reason}'
+                                )
+                                try:
+                                    retry_prompt = build_semantic_candidate_retry_prompt(
+                                        sq,
+                                        semantic_query_entity,
+                                        judge_summary,
+                                        semantic_batch.reason,
+                                    )
+                                    retry_response = j.chat(
+                                        [{'role': 'user', 'content': retry_prompt}],
+                                        temperature=0.0,
+                                    )
+                                    review_blocks.append(
+                                        f'[语义候选完整性重试]\n{retry_response}'
+                                    )
+                                    log(
+                                        f'    [语义候选完整性重试响应] '
+                                        f'{semantic_file_name} ({len(retry_response)}字):\n'
+                                        f'{retry_response[:1000]}'
+                                    )
+                                    retry_payload = parse_llm_json(
+                                        retry_response,
+                                        context=f'语义候选完整性重试:{sq[:30]}',
+                                    )
+                                    retry_batch = parse_semantic_candidate_batch(
+                                        retry_payload
+                                    )
+                                    if retry_batch.valid and retry_batch.complete:
+                                        jd = retry_payload
+                                        semantic_batch = retry_batch
+                                        log(
+                                            f'    [语义候选完整性重试采用] '
+                                            f'{semantic_file_name}: 候选数='
+                                            f'{len(retry_batch.candidates)}'
+                                        )
+                                    else:
+                                        log(
+                                            f'    [语义候选完整性重试拒绝] '
+                                            f'{semantic_file_name}: '
+                                            f'{retry_batch.reason or "结果仍不完整或无效"}'
+                                        )
+                                except Exception as retry_error:
+                                    log(
+                                        f'    [语义候选完整性重试失败] '
+                                        f'{semantic_file_name}: {retry_error}'
+                                    )
+                            record_time = first_labeled_record_time_from_bindings(
+                                ab.get('bindings', [])
+                            )
+                            for candidate_index, candidate_payload in enumerate(
+                                semantic_batch.candidates, start=1
+                            ):
+                                equivalence_payload = None
+                                symptom_relation_payload = None
+                                semantic_candidate = candidate_needing_equivalence(
+                                    candidate_payload,
+                                    query_entity=semantic_query_entity,
+                                    entity_candidates=sq_route.get('_entity_candidates') or None,
+                                    source_text=judge_summary,
+                                )
+                                if semantic_candidate:
+                                    equivalence_prompt = build_semantic_equivalence_prompt(
+                                        semantic_query_entity,
+                                        semantic_candidate,
+                                        sq_route.get('_entity_type', ''),
+                                    )
+                                    equivalence_response = j.chat(
+                                        [{'role': 'user', 'content': equivalence_prompt}],
+                                        temperature=0.0,
+                                    )
+                                    log(
+                                        f'    [临床蕴含审核#{candidate_index}] '
+                                        f'{semantic_file_name} ({len(equivalence_response)}字):\n'
+                                        f'{equivalence_response[:1000]}'
+                                    )
+                                    review_blocks.append(
+                                        f'[候选{candidate_index}严格等价审核]\n{equivalence_response}'
+                                    )
+                                    equivalence_payload = parse_llm_json(
+                                        equivalence_response,
+                                        context=(
+                                            f'临床蕴含:{semantic_query_entity[:20]}'
+                                            f'<-{semantic_candidate[:20]}'
+                                        ),
+                                    )
+                                    if symptom_relation_review_required(equivalence_payload):
+                                        symptom_prompt = build_semantic_symptom_relation_prompt(
+                                            semantic_query_entity,
+                                            semantic_candidate,
+                                        )
+                                        symptom_response = j.chat(
+                                            [{'role': 'user', 'content': symptom_prompt}],
+                                            temperature=0.0,
+                                        )
+                                        log(
+                                            f'    [症状同一性复核#{candidate_index}] '
+                                            f'{semantic_file_name} ({len(symptom_response)}字):\n'
+                                            f'{symptom_response[:1000]}'
+                                        )
+                                        review_blocks.append(
+                                            f'[候选{candidate_index}症状同一性复核]\n{symptom_response}'
+                                        )
+                                        symptom_relation_payload = parse_llm_json(
+                                            symptom_response,
+                                            context=(
+                                                f'症状同一性:{semantic_query_entity[:20]}'
+                                                f'<-{semantic_candidate[:20]}'
+                                            ),
+                                        )
+                                candidate_decisions.append(
+                                    assess_semantic_entity_recall(
+                                        candidate_payload,
+                                        query_entity=semantic_query_entity,
+                                        entity_candidates=sq_route.get('_entity_candidates') or None,
+                                        source_text=judge_summary,
+                                        equivalence_payload=equivalence_payload,
+                                        symptom_relation_payload=symptom_relation_payload,
+                                        condition=sq,
+                                        time_window=time_window,
+                                        record_time=record_time,
+                                    )
+                                )
+                            semantic_recall_decision = aggregate_semantic_entity_decisions(
+                                candidate_decisions,
+                                query_entity=semantic_query_entity,
+                                batch=semantic_batch,
+                            )
+                            recalled_request = replace(
+                                domain_request,
+                                entity=semantic_query_entity,
+                            )
+                            recalled_domain_result = execute_recalled_document_domain(
+                                recalled_request,
+                                judge_summary,
+                                semantic_recall_decision,
+                                candidate_decisions=tuple(candidate_decisions),
+                                candidates_complete=semantic_batch.complete,
+                                record_time=record_time,
+                            )
+                            if recalled_domain_result is None:
+                                raise RuntimeError("语义召回结果无法进入病历领域执行器")
+                            result = recalled_domain_result.to_file_result(
+                                semantic_file_name,
+                                fallback_fields=sub_summary,
+                            )
+                            result['cot_response'] = '\n'.join(
+                                [resp, *review_blocks]
+                            )[:5000]
+                            semantic_status = result['status']
+                            semantic_label = {
+                                'MATCHED': '符合',
+                                'NOT_MATCHED': '不符合',
+                                'NOT_MENTIONED': '未提及',
+                                'UNKNOWN': '无法判断',
+                            }.get(semantic_status, '无法判断')
+                            log(
+                                f'    [Step4-多候选语义召回] {semantic_file_name}: '
+                                f'{semantic_label} — {result["reason"][:80]}'
+                            )
+                            return result
+                        equivalence_payload = None
+                        equivalence_response = ""
+                        symptom_relation_payload = None
+                        symptom_relation_response = ""
+                        semantic_candidate = candidate_needing_equivalence(
+                            jd,
+                            query_entity=semantic_query_entity,
+                            entity_candidates=sq_route.get("_entity_candidates") or None,
+                            source_text=judge_summary,
+                        )
+                        if semantic_candidate:
+                            equivalence_prompt = build_semantic_equivalence_prompt(
+                                semantic_query_entity,
+                                semantic_candidate,
+                                sq_route.get("_entity_type", ""),
+                            )
+                            equivalence_response = j.chat(
+                                [{"role": "user", "content": equivalence_prompt}],
+                                temperature=0.0,
+                            )
+                            log(
+                                f"    [临床蕴含审核] {ab['file']} ({len(equivalence_response)}字):\n"
+                                f"{equivalence_response[:1000]}"
+                            )
+                            equivalence_payload = parse_llm_json(
+                                equivalence_response,
+                                context=(
+                                    f"临床蕴含:{semantic_query_entity[:20]}"
+                                    f"<-{semantic_candidate[:20]}"
+                                ),
+                            )
+                            if symptom_relation_review_required(equivalence_payload):
+                                symptom_relation_prompt = build_semantic_symptom_relation_prompt(
+                                    semantic_query_entity,
+                                    semantic_candidate,
+                                )
+                                symptom_relation_response = j.chat(
+                                    [{"role": "user", "content": symptom_relation_prompt}],
+                                    temperature=0.0,
+                                )
+                                log(
+                                    f"    [症状同一性复核] {ab['file']} "
+                                    f"({len(symptom_relation_response)}字):\n"
+                                    f"{symptom_relation_response[:1000]}"
+                                )
+                                symptom_relation_payload = parse_llm_json(
+                                    symptom_relation_response,
+                                    context=(
+                                        f"症状同一性:{semantic_query_entity[:20]}"
+                                        f"<-{semantic_candidate[:20]}"
+                                    ),
+                                )
+                        semantic_record_time = first_labeled_record_time_from_bindings(
+                            ab.get("bindings", [])
+                        )
+                        semantic_recall_decision = assess_semantic_entity_recall(
+                            jd,
+                            query_entity=semantic_query_entity,
+                            entity_candidates=sq_route.get("_entity_candidates") or None,
+                            source_text=judge_summary,
+                            equivalence_payload=equivalence_payload,
+                            symptom_relation_payload=symptom_relation_payload,
+                            condition=sq,
+                            time_window=time_window,
+                            record_time=semantic_record_time,
+                        )
+                        recalled_request = replace(
+                            domain_request,
+                            entity=semantic_query_entity,
+                        )
+                        recalled_domain_result = execute_recalled_document_domain(
+                            recalled_request,
+                            judge_summary,
+                            semantic_recall_decision,
+                            candidate_decisions=(semantic_recall_decision,),
+                            candidates_complete=True,
+                            record_time=semantic_record_time,
+                        )
+                        if recalled_domain_result is None:
+                            raise RuntimeError("语义召回结果无法进入病历领域执行器")
+                        result = recalled_domain_result.to_file_result(
+                            ab["file"],
+                            fallback_fields=sub_summary,
+                        )
+                        result["cot_response"] = (
+                            resp
+                            + (
+                                "\n[严格等价审核]\n" + equivalence_response
+                                if equivalence_response
+                                else ""
+                            )
+                            + (
+                                "\n[症状同一性复核]\n" + symptom_relation_response
+                                if symptom_relation_response
+                                else ""
+                            )
+                        )[:5000]
+                        semantic_status = result["status"]
+                        semantic_label = {
+                            "MATCHED": "符合",
+                            "NOT_MATCHED": "不符合",
+                            "NOT_MENTIONED": "未提及",
+                            "UNKNOWN": "无法判断",
+                        }.get(semantic_status, "无法判断")
+                        log(
+                            f"    [Step4-语义召回] {ab['file']}: {semantic_label} — "
+                            f"{result['reason'][:80]}"
+                        )
+                        return result
                     # ── reason 字段缺失时用 reasoning 兜底（native thinking 模型习惯不加reason）──
                     _reason = jd.get("reason", "")
                     if not _reason and jd.get("reasoning"):
@@ -4739,27 +5428,10 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                     result = {"file": ab["file"], "matched": jd.get("matched",False),
                               "reason": _reason, "fields": sub_summary[:2000],
                               "cot_response": resp[:5000]}
-                    outcome_polarity = _judge_outcome_polarity(
-                        sq_route.get("_decomposed_modifiers", []),
-                        judge_summary
-                    )
-                    if outcome_polarity is not None:
-                        result["matched"] = outcome_polarity["matched"]
-                        result["reason"] = outcome_polarity["reason"]
-                    elif result["matched"] and sq_route.get("_semantic_class") == "出院/治疗转归" \
-                         and sq_route.get("_decomposed_modifiers") \
-                         and is_external and "诊断" in str(ab.get("template", "")):
-                        result["matched"] = False
-                        result["reason"] = "诊断接口仅证明存在相关诊断/症状，未提供好转、缓解或改善等转归证据"
-                    if result["matched"] and is_external and sq_route.get("_decomposed_modifiers") \
-                       and _has_outcome_phase(f"{sq} {condition}") \
-                       and "诊断" in str(ab.get("template", "")):
-                        explicit_discharge_diagnosis_query = any(
-                            token in sq for token in ("出院诊断", "仍诊断", "仍为", "仍是", "仍有")
+                    if document_domain_judge is not None:
+                        result["semantic_trace"] = list(
+                            document_domain_judge.extra.get("semantic_trace", [])
                         )
-                        if "出院诊断" not in judge_summary or not explicit_discharge_diagnosis_query:
-                            result["matched"] = False
-                            result["reason"] = "诊断接口仅作为候选证据，未提供出院转归状态证据"
                     # ═══════════════════════════════════════════════════════════
                     # 字符重叠安全网：LLM 漏判时 Python 兜底
                     #
@@ -4772,12 +5444,27 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                     # 修饰词不满足时会反转子条件结果并更新per-file原因。
                     # ═══════════════════════════════════════════════════════════
                     if not result["matched"] and not sq_route.get("_decomposed_modifiers"):
-                        kw = sq_route.get("_decomposed_keyword") or _extract_core_keyword(sq)
-                        if kw and len(kw) >= 2:
+                        kw = sq_execution_entity
+                        semantic_allows_literal_match = (
+                            is_external
+                            or (
+                                document_domain_judge is not None
+                                and document_domain_judge.status.value == "MATCHED"
+                            )
+                        )
+                        if kw and len(kw) >= 2 and semantic_allows_literal_match:
                             if _char_overlap_match(kw, judge_summary):
                                 result["matched"] = True
-                                result["reason"] = f"[字面纠正] LLM未识别，但关键字'{kw}'存在于字段值中"
-                                log(f"    [Step4-判断] {ab['file']}: ✗→✓ 字面纠正 — '{kw}'在字段值中")
+                                if document_domain_judge is not None:
+                                    result["reason"] = document_domain_judge.reason
+                                    result["reason_code"] = document_domain_judge.reason_code
+                                    log(
+                                        f"    [Step4-判断] {ab['file']}: ✗→✓ 文档语义纠正 — "
+                                        f"'{kw}'存在肯定性患者语境"
+                                    )
+                                else:
+                                    result["reason"] = f"[字面纠正] LLM未识别，但关键字'{kw}'存在于字段值中"
+                                    log(f"    [Step4-判断] {ab['file']}: ✗→✓ 字面纠正 — '{kw}'在字段值中")
                     # ── 清理原因：LLM未输出JSON时，原因可能是原始推理文本 ──
                     if not result["matched"] and not result["reason"].startswith("失败:") \
                        and not result["reason"].startswith("从CoT文本推断") \
@@ -4803,34 +5490,36 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                 futures = {ex.submit(check_one_file, ab): ab for ab in relevant_files}
                 for f in as_completed(futures):
                     r = f.result()
-                    from microharness.medical.evidence import attach_native_evidence_records
+                    from microharness.medical.evidence import (
+                        annotate_evidence_source,
+                        attach_native_evidence_records,
+                    )
+                    annotate_evidence_source(
+                        r,
+                        futures[f],
+                        primary_source_id=primary_service,
+                        time_source_id=getattr(time_window, "source", "") if time_window else "",
+                        routed_documents=sq_docs,
+                        anchor_documents=anchor_docs,
+                        anchor_sections=anchor_sections,
+                        time_window_required=bool(time_window and time_window.required),
+                        time_window_resolved=bool(time_window and time_window.resolved),
+                    )
                     attach_native_evidence_records(
                         r,
                         futures[f],
                         condition=sq,
-                        entity=(sq_route.get("_decomposed_keyword") or _extract_core_keyword(sq)),
+                        entity=sq_execution_entity,
                         target_sections=sq_sections,
                         target_xml=sq_xml,
                         is_numeric=bool(sq_route.get("is_numeric")),
                     )
                     sq_files.append(r)
-                    if r["matched"]:
-                        sq_matched = True
-                        # Clean reason: strip internal pipeline markers
-                        clean = r["reason"]
-                        for tag in ("[字面纠正] ", "[Python] ", "[CoT推断] "):
-                            clean = clean.replace(tag, "")
-                        sq_reason = (sq_reason + "；" if sq_reason else "") + clean
-
-            # ── 修饰词验证已合并到 judge 阶段（build_judge_prompt 传入 modifiers）──
-            # 不再需要独立的修饰词验证 LLM 调用，减少 N 次 LLM 调用
-            modifiers = sq_route.get("_decomposed_modifiers", [])
-            mod_reason = ""
 
             # ═══════════════════════════════════════════════════════════
             # 清理 per-file 原因：去掉内部标记，换成用户能懂的描述
             # ═══════════════════════════════════════════════════════════
-            kw_label = sq_route.get("_decomposed_keyword") or _extract_core_keyword(sq)
+            kw_label = sq_execution_entity
             for sf in sq_files:
                 raw = sf.get("reason", "")
                 if raw.startswith("从CoT文本推断") or raw.startswith("LLM未识别") or raw.startswith("LLM未输出有效JSON"):
@@ -4838,101 +5527,28 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                         sf["reason"] = f"关键字'{kw_label}'匹配"
                     else:
                         sf["reason"] = "未匹配"
-                source_name = str(sf.get("file", ""))
-                if "检验指标查询" in source_name:
-                    sf["证据角色"] = "主证据"
-                    sf["用途"] = "用于判断检验项目、结果值、异常标志和检测时间"
-                elif primary_service == "drug-interaction" and "用药医嘱查询" in source_name:
-                    sf["证据角色"] = "主证据"
-                    sf["用途"] = "用于判断药物名称、医嘱开立时间和用药方式"
-                elif primary_service == "diagnosis-query" and "诊断查询" in source_name:
-                    sf["证据角色"] = "主证据"
-                    sf["用途"] = "用于判断诊断名称、诊断类型和诊断时间"
-                elif sq_semantic_class == "住院时长比较" and "就诊信息查询" in source_name:
-                    sf["证据角色"] = "主证据"
-                    sf["用途"] = "用于判断入院时间、出院时间和住院时长"
-                elif time_window and time_window.source and str(time_window.source).split(".", 1)[0] in source_name:
-                    sf["证据角色"] = "时间范围依据"
+                source_role = str(sf.get("source_role") or sf.get("evidence_role") or "CANDIDATE")
+                role_labels = {
+                    "PRIMARY": "主证据",
+                    "SUPPORTING": "辅助证据",
+                    "CONTEXT": "上下文",
+                    "TIME_ANCHOR": "时间范围依据",
+                    "CANDIDATE": "候选证据",
+                }
+                role_purposes = {
+                    "PRIMARY": "用于直接判断当前条件",
+                    "SUPPORTING": "用于补充或交叉验证当前条件",
+                    "CONTEXT": "用于提供当前条件的上下文",
+                    "CANDIDATE": "作为当前条件的候选证据",
+                }
+                sf["证据角色"] = role_labels.get(source_role, "候选证据")
+                sf.setdefault("用途", role_purposes.get(source_role, "作为当前条件的候选证据"))
+                if source_role == "TIME_ANCHOR" and time_window:
                     sf["用途"] = f"用于限定{time_window.scope}的起止时间"
                     if time_window.resolved:
                         sf["reason"] = f"{time_window.scope}范围：{time_window.describe()}"
                     elif time_window.reason:
                         sf["reason"] = f"{time_window.scope}范围未解析：{time_window.reason}"
-                elif time_window and time_window.source == "encounter-info" and "就诊信息查询" in source_name:
-                    sf["证据角色"] = "时间范围依据"
-                    sf["用途"] = f"用于限定{time_window.scope}的起止时间"
-                    if time_window.resolved:
-                        sf["reason"] = f"{time_window.scope}范围：{time_window.describe()}"
-                    elif time_window.reason:
-                        sf["reason"] = f"{time_window.scope}范围未解析：{time_window.reason}"
-                elif "接口失败" in source_name or "查询" in source_name:
-                    sf.setdefault("证据角色", "候选证据")
-
-            # Build clean summary reason
-            if sq_matched:
-                if modifiers:
-                    sq_reason = sq_reason if sq_reason else "条件满足"
-                else:
-                    # 无修饰词的简单关键词查询：逐文件展示详细理由
-                    matched_files = [f for f in sq_files if f.get("matched")]
-                    if matched_files:
-                        detail_lines = []
-                        for f in matched_files:
-                            fn = f["file"]
-                            fr = f.get("reason", "匹配")
-                            detail_lines.append(f"{fn} {fr}")
-                        sq_reason = "; ".join(detail_lines)
-                    else:
-                        sq_reason = "条件满足"
-            else:
-                if mod_reason:
-                    sq_reason = f"症状存在但{mod_reason}"
-                elif sq_reason:
-                    sq_reason = sq_reason
-                else:
-                    negative_files = [
-                        f for f in sq_files
-                        if not f.get("matched") and str(f.get("reason", "")).strip()
-                        and f.get("证据角色") != "时间范围依据"
-                    ]
-                    def _negative_reason_priority(item):
-                        reason_text = str(item.get("reason", ""))
-                        source_text = str(item.get("file", ""))
-                        if "外部数据源调用失败" in reason_text:
-                            return 0
-                        if "找到检验项目但结果不符合" in reason_text:
-                            return 1
-                        if "未找到检验项目" in reason_text:
-                            return 2
-                        if "检验" in source_text:
-                            return 3
-                        if "未在结构化字段中出现" in reason_text:
-                            return 5
-                        if "关键字" in reason_text and "未在数据中出现" in reason_text:
-                            return 6
-                        return 4
-                    if negative_files:
-                        unavailable = [
-                            f for f in negative_files
-                            if any(token in str(f.get("reason", "")) for token in ("未取得数据", "未取得病历", "未取得接口"))
-                            or "未取得数据" in str(f.get("file", ""))
-                        ]
-                        concrete = [f for f in negative_files if f not in unavailable]
-                        selected = []
-                        if concrete:
-                            selected.append(sorted(concrete, key=_negative_reason_priority)[0])
-                        if unavailable:
-                            selected.append(sorted(unavailable, key=_negative_reason_priority)[0])
-                        if not selected:
-                            selected = [sorted(negative_files, key=_negative_reason_priority)[0]]
-                        detail_parts = []
-                        for item in selected[:2]:
-                            source = item.get("file", "")
-                            reason = item.get("reason", "不符合")
-                            detail_parts.append(f"{source}: {reason}" if source else reason)
-                        sq_reason = "；".join(detail_parts)
-                    else:
-                        sq_reason = "无匹配"
 
             elapsed = round((time.time() - t0) * 1000)
             # Collect full evidence from matched files (read complete binding)
@@ -4970,71 +5586,142 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
                     evidence[fn] = "\\n".join(full_fields) if full_fields else "(无匹配字段)"
                 else:
                     evidence[fn] = "(未找到绑定数据)"
-            from microharness.medical.evidence import build_evidence_items, assess_condition_confidence
-            condition_result = {"condition": sq, "matched": sq_matched, "reason": sq_reason or "无匹配",
+            from microharness.medical.evidence import (
+                adjudicate_condition_result,
+                assess_condition_confidence,
+                build_evidence_items,
+                sync_condition_result,
+            )
+            condition_result = {"condition": sq, "matched": False, "status": "UNKNOWN", "reason": "",
                                 "files": sq_files, "docs": sq_docs, "sections": sq_sections,
                                 "elapsed_ms": elapsed, "evidence": evidence,
                                 "证据明细": build_evidence_items(sq_files)}
             if time_window:
-                condition_result["时间范围"] = time_window.to_dict()
+                time_window_data = time_window.to_dict()
+                time_window_data["source_label"] = _source_display_label(
+                    time_window.source,
+                    _service_catalog_for_evidence_plan,
+                )
+                condition_result["时间范围"] = time_window_data
+            from microharness.medical.encounter_consistency import (
+                assess_encounter_consistency,
+                requires_encounter_consistency,
+            )
+            if requires_encounter_consistency(sq_files):
+                encounter_consistency = assess_encounter_consistency(
+                    sq_files,
+                    relevant_files,
+                ).to_dict()
+                condition_result["encounter_consistency"] = encounter_consistency
+                condition_result["\u5c31\u8bca\u4e00\u81f4\u6027"] = encounter_consistency
+                log(
+                    f"  [Step4-\u5c31\u8bca\u4e00\u81f4\u6027] \u6761\u4ef6{cond_no}: "
+                    f"\u72b6\u6001={encounter_consistency['status']} | "
+                    f"\u963b\u65ad={'\u662f' if encounter_consistency['blocks_adjudication'] else '\u5426'} | "
+                    f"\u539f\u56e0={encounter_consistency['reason']}"
+                )
+            unified_condition = adjudicate_condition_result(condition_result, f"c{cond_no}")
+            sync_condition_result(condition_result, unified_condition)
+            if unified_condition.conflict_level.value != "NONE":
+                log(
+                    f"  [Step4-证据裁决] 条件{cond_no}: "
+                    f"状态={unified_condition.status.value} | "
+                    f"冲突={unified_condition.conflict_level.value}"
+                )
             condition_result["置信评估"] = assess_condition_confidence(condition_result)
             condition_result.update(condition_result["置信评估"])
             return condition_result
 
         # Run sub-conditions in PARALLEL
         per_condition_results = {}
+        _condition_text_counts = {
+            text: sum(1 for spec in _execution_specs if spec.text == text)
+            for text in sub_queries
+        }
         _condition_execution_started = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=min(3, len(sub_queries))) as cex:
-            futures = {cex.submit(check_one_condition, sq): sq for sq in sub_queries}
+        with ThreadPoolExecutor(max_workers=min(3, len(_execution_specs))) as cex:
+            futures = {
+                cex.submit(check_one_condition, spec): spec
+                for spec in _execution_specs
+            }
             for f in as_completed(futures):
                 r = f.result()
-                sq = futures[f]
-                per_condition_results[sq] = r
-                log(f"  [Step4-小结] {'✓' if r['matched'] else '✗'} 子条件「{sq[:30]}」 {r['reason'][:100]}")
+                spec = futures[f]
+                result_key = spec.text
+                if _condition_text_counts.get(spec.text, 0) > 1:
+                    result_key = f"{spec.text} [{spec.condition_id}@{spec.position}]"
+                per_condition_results[result_key] = r
+                log(
+                    f"  [Step4-小结] {'✓' if r['matched'] else '✗'} "
+                    f"子条件「{spec.text[:30]}」 {r['reason'][:100]}"
+                )
         _record_stage("condition_execution_ms", _condition_execution_started)
 
-        # ── Meta-judge: 组合多个子条件的判断结果 ──
-        # 这里不用 LLM，因为 AND/OR 是布尔运算，不是语义判断。
-        # 之前用 LLM 做 meta-judge 出现过幻觉：两个子条件是 AND 关系，
-        # 只有一个满足却返回 true。Python 的 all()/any() 是确定性的。
-        if len(per_condition_results) > 1:
-            # 从原始条件文本检测连接词，判断是 AND 还是 OR 组合
-            # Use connector from query analysis (not keyword regex)
-            use_and = _use_and
-            sub_results = list(per_condition_results.values())
-            # 核心：Python 确定性布尔运算，零幻觉
-            matched = all(v["matched"] for v in sub_results) if use_and else any(v["matched"] for v in sub_results)
-            # ── 用户友好原因 ──
-            if use_and:
-                if matched:
-                    conds = "、".join(f"「{v['condition'][:40]}」" for v in sub_results)
-                    reason = f"该患者满足全部筛选条件：{conds}"
-                else:
-                    failed = [v for v in sub_results if not v["matched"]]
-                    passed = [v for v in sub_results if v["matched"]]
-                    reason = "、".join(f"不满足「{v['condition'][:40]}」" for v in failed)
-                    if passed:
-                        reason += "（已满足" + "、".join(f"「{v['condition'][:40]}」" for v in passed) + "）"
+        # ── Meta-judge: 确定性组合四态子条件 ──
+        from microharness.medical.evidence import (
+            EvidenceStatus,
+            combine_condition_statuses,
+            status_label,
+        )
+        use_and = _use_and
+        sub_results = list(per_condition_results.values())
+        overall_status = combine_condition_statuses(
+            [v.get("status") or v.get("判断状态") for v in sub_results],
+            use_and=use_and,
+        )
+        matched = overall_status == EvidenceStatus.MATCHED
+        status_groups = {
+            label: [v for v in sub_results if v.get("判断状态") == label]
+            for label in ("符合", "不符合", "未提及", "无法判断")
+        }
+        if len(sub_results) == 1:
+            reason = sub_results[0]["reason"]
+        elif use_and:
+            if overall_status == EvidenceStatus.MATCHED:
+                conds = "、".join(f"「{v['condition'][:40]}」" for v in sub_results)
+                reason = f"该患者满足全部筛选条件：{conds}"
+            elif overall_status == EvidenceStatus.NOT_MATCHED:
+                rejected = "、".join(
+                    f"「{v['condition'][:40]}」" for v in status_groups["不符合"]
+                )
+                reason = f"AND条件存在明确不满足项：{rejected}"
+            elif overall_status == EvidenceStatus.NOT_MENTIONED:
+                missing = "、".join(
+                    f"「{v['condition'][:40]}」" for v in status_groups["未提及"]
+                )
+                reason = f"AND条件中以下目标在已查询数据中未提及：{missing}"
             else:
-                if matched:
-                    hit = [v for v in sub_results if v["matched"]]
-                    reason = "该患者满足以下条件之一：" + "、".join(f"「{v['condition'][:40]}」" for v in hit)
-                else:
-                    reason = "该患者不满足任何筛选条件"
-            # ── 日志保留旧格式便于调试 ──
-            op_word = "AND(全部满足)" if use_and else "OR(任一满足)"
-            parts = []
-            for v in sub_results:
-                icon = "✓" if v["matched"] else "✗"
-                parts.append(f"{icon} {v['condition'][:40]}")
-            debug_reason = f"[{op_word}] " + " | ".join(parts)
-            log(f"  [Step5-整合] 布尔组合: {op_word} → {'✓符合' if matched else '✗不符合'}")
-            log(f"  [Step5-整合] 用户原因: {reason[:120]}")
+                unknown = "、".join(
+                    f"「{v['condition'][:40]}」" for v in status_groups["无法判断"]
+                )
+                reason = f"AND条件中以下项目证据不足，当前无法判断：{unknown}"
         else:
-            # 只有一个子条件，直接取它的结果
-            only = list(per_condition_results.values())[0]
-            matched = only["matched"]
-            reason = only["reason"]
+            if overall_status == EvidenceStatus.MATCHED:
+                hit = "、".join(
+                    f"「{v['condition'][:40]}」" for v in status_groups["符合"]
+                )
+                reason = f"该患者满足以下条件之一：{hit}"
+            elif overall_status == EvidenceStatus.NOT_MATCHED:
+                reason = "所有OR条件均有相关证据，但均明确不满足"
+            elif overall_status == EvidenceStatus.NOT_MENTIONED:
+                missing = "、".join(
+                    f"「{v['condition'][:40]}」" for v in status_groups["未提及"]
+                )
+                reason = f"未发现满足的OR条件，且以下目标在已查询数据中未提及：{missing}"
+            else:
+                unknown = "、".join(
+                    f"「{v['condition'][:40]}」" for v in status_groups["无法判断"]
+                )
+                reason = f"未发现满足的OR条件，且以下项目证据不足：{unknown}"
+
+        op_word = "AND(全部满足)" if use_and else "OR(任一满足)"
+        parts = [
+            f"{v.get('判断状态', '无法判断')} {v['condition'][:40]}"
+            for v in sub_results
+        ]
+        debug_reason = f"[{op_word}] " + " | ".join(parts)
+        log(f"  [Step5-整合] 四态组合: {op_word} → {status_label(overall_status)}")
+        log(f"  [Step5-整合] 用户原因: {reason[:120]}")
 
         execution_elapsed_ms = int((time.perf_counter() - _full_query_start) * 1000)
         # ── Negation flip ──
@@ -5042,52 +5729,30 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
         # Do NOT flip when negation is INTERNAL and already handled by judge
         # (e.g. "术中没有输血" — modifiers=["没有"], judge already checked "输血" not found → matched=true)
         if _negate:
-            _has_internal_negation = False
-            for cond_a in analysis.get("conditions", []):
-                for mod in cond_a.get("modifiers", []):
-                    if any(neg in mod for neg in ("没有", "无", "不", "未", "没")):
-                        _has_internal_negation = True
-                        break
+            _has_internal_negation = any(
+                spec.internal_negation for spec in _execution_specs
+            )
             if _has_internal_negation:
                 log(f"  [Step5-取反] 跳过取反：否定已在judge阶段处理(modifiers含否定词)")
             else:
-                matched = not matched
+                if overall_status == EvidenceStatus.MATCHED:
+                    overall_status = EvidenceStatus.NOT_MATCHED
+                elif overall_status == EvidenceStatus.NOT_MATCHED:
+                    overall_status = EvidenceStatus.MATCHED
+                matched = overall_status == EvidenceStatus.MATCHED
                 reason = f"[取反] {reason}"
-                log(f"  [Step5-取反] 外部否定 → 结果取反")
+                log(f"  [Step5-取反] 外部否定 → {status_label(overall_status)}")
         from microharness.medical.evidence import assess_patient_confidence
-        patient_confidence = assess_patient_confidence(matched, reason, per_condition_results)
-        status = patient_confidence["判断状态"]
-        conclusive = patient_confidence["可判定"]
-        if _use_and and not matched:
-            rejected = [
-                item for item in per_condition_results.values()
-                if isinstance(item, dict) and item.get("判断状态") == "不符合"
-            ]
-            if rejected:
-                status = "不符合"
-                conclusive = True
-                patient_confidence = {
-                    **patient_confidence,
-                    "判断状态": status,
-                    "可判定": True,
-                    "置信度": max(
-                        [float(item.get("置信度") or 0.0) for item in rejected] or [0.62]
-                    ),
-                    "置信等级": max(
-                        [str(item.get("置信等级") or "低") for item in rejected],
-                        key=lambda x: {"低": 1, "中": 2, "高": 3}.get(x, 0),
-                    ),
-                    "依据等级": "AND条件存在明确反证",
-                }
-                rejected_text = "、".join(f"「{item.get('condition', '')[:40]}」" for item in rejected)
-                unknown_text = "、".join(
-                    f"「{item.get('condition', '')[:40]}」"
-                    for item in per_condition_results.values()
-                    if isinstance(item, dict) and item.get("判断状态") == "无法判断"
-                )
-                reason = f"AND条件已确定不满足{rejected_text}"
-                if unknown_text:
-                    reason += f"；另有条件证据不足：{unknown_text}"
+        patient_confidence = assess_patient_confidence(
+            matched,
+            reason,
+            per_condition_results,
+            use_and=use_and,
+        )
+        status = status_label(overall_status)
+        conclusive = overall_status != EvidenceStatus.UNKNOWN
+        patient_confidence["判断状态"] = status
+        patient_confidence["可判定"] = conclusive
         if status == "无法判断":
             unknown_reasons = []
             for item in per_condition_results.values():
@@ -5116,6 +5781,8 @@ def _run_medical_query(condition: str, register_no: str, visit_no: str,
             summary_label = "✓ 患者符合"
         elif status == "不符合":
             summary_label = "✗ 患者不符合"
+        elif status == "未提及":
+            summary_label = "- 病历未提及"
         else:
             summary_label = "? 无法判断"
         log(f"  [Step5-整合] {summary_label} | {reason[:120]}")

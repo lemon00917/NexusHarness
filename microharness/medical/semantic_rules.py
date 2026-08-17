@@ -142,6 +142,79 @@ OUTCOME_PATTERNS = [
     r"尚未(?:恢复|缓解|好转)",
 ]
 
+OUTCOME_STATES = {
+    "improved",
+    "resolved",
+    "not_improved",
+    "persistent",
+    "worsened",
+    "recurred",
+}
+
+OUTCOME_PHASES = {
+    "admission",
+    "hospitalization",
+    "discharge",
+    "post_discharge",
+    "post_treatment",
+    "postoperative",
+    "follow_up",
+}
+
+
+def normalize_outcome_state(value: object) -> str:
+    """Normalize generic outcome grammar without using medical concepts."""
+    if isinstance(value, (list, tuple, set)):
+        text = " ".join(str(item or "") for item in value)
+    else:
+        text = str(value or "")
+    normalized = text.strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized in OUTCOME_STATES:
+        return normalized
+
+    compact = re.sub(r"[\s_]+", "", text).lower()
+    if re.search(r"没有(?:明显)?(?:好转|缓解|改善)|未(?:见)?(?:明显)?(?:好转|缓解|改善)|无(?:明显)?(?:好转|缓解|改善)|不见好|尚未(?:恢复|缓解|好转)", compact):
+        return "not_improved"
+    if re.search(r"加重|恶化|进展|worsen|deteriorat|progress", compact, re.I):
+        return "worsened"
+    if re.search(r"复发|再发|recur|relapse", compact, re.I):
+        return "recurred"
+    if re.search(r"持续(?:存在)?|仍(?:然)?(?:存在|有|为)?|persistent|ongoing", compact, re.I):
+        return "persistent"
+    if re.search(r"治愈|痊愈|恢复|resolved|cured|recovered", compact, re.I):
+        return "resolved"
+    if re.search(r"好转|改善|缓解|减轻|improved|improving|relieved", compact, re.I):
+        return "improved"
+    return ""
+
+
+def normalize_outcome_phase(value: object) -> str:
+    """Normalize a structured or legacy outcome phase to a generic value."""
+    text = str(value or "").strip()
+    normalized = text.lower().replace("-", "_").replace(" ", "_")
+    if normalized in OUTCOME_PHASES:
+        return normalized
+    if re.search(r"出院后|离院后|post.?discharge", text, re.I):
+        return "post_discharge"
+    if re.search(r"出院时|离院时|出院|离院|discharge", text, re.I):
+        return "discharge"
+    if re.search(r"入院时|入院|admission", text, re.I):
+        return "admission"
+    if re.search(r"住院期间|住院后|hospitalization|inpatient", text, re.I):
+        return "hospitalization"
+    if re.search(r"术后|手术后|post.?operative|post.?surgery", text, re.I):
+        return "postoperative"
+    if re.search(r"治疗后|用药后|post.?treatment", text, re.I):
+        return "post_treatment"
+    if re.search(r"复查时|随访|follow.?up", text, re.I):
+        return "follow_up"
+    return ""
+
+
+def extract_outcome_phase(text: str) -> str:
+    """Legacy-only phase extraction kept outside the executor."""
+    return normalize_outcome_phase(text)
+
 
 def append_unique(seq: list, values: list) -> list:
     out = list(seq or [])
@@ -151,6 +224,20 @@ def append_unique(seq: list, values: list) -> list:
             out.append(value)
             seen.add(value)
     return out
+
+
+def uses_deterministic_medication_pipeline(analysis: dict) -> bool:
+    # Deterministic medication evidence must not be bypassed by the scheduler.
+    conditions = (analysis or {}).get('conditions') or []
+    if not conditions or not all(isinstance(item, dict) for item in conditions):
+        return False
+    return all(
+        str(item.get('entity_type') or '').lower() == 'drug'
+        or str(item.get('domain') or '').lower() == 'medication'
+        or item.get('semantic_class') == DRUG_USE_CLASS.name
+        or 'drug-interaction' in (item.get('target_skills') or [])
+        for item in conditions
+    )
 
 
 def extract_outcome_modifiers(condition: str) -> list[str]:
@@ -175,7 +262,7 @@ def extract_outcome_modifiers(condition: str) -> list[str]:
 
 
 def has_outcome_phase(text: str) -> bool:
-    return bool(re.search(r"(出院|离院|治疗后|用药后|术后|手术后|住院期间|住院后|复查时)", text or ""))
+    return bool(extract_outcome_phase(text))
 
 
 def is_outcome_state_condition(condition: str, context: str = "") -> bool:
@@ -345,11 +432,15 @@ def extract_outcome_keyword(condition: str, fallback_keyword_fn=None) -> str:
     return fallback_keyword_fn(condition) if fallback_keyword_fn else ""
 
 
-def judge_outcome_polarity(modifiers: list, text: str) -> Optional[dict]:
+def judge_outcome_polarity(
+    modifiers: list,
+    text: str,
+    expected_state: str = "",
+) -> Optional[dict]:
     """Deterministic polarity check for outcome/state modifiers."""
-    if not modifiers or not text:
+    expected = normalize_outcome_state(expected_state or modifiers)
+    if not expected or not text:
         return None
-    mod_text = " ".join(modifiers)
     positive_words = ("好转", "改善", "缓解", "减轻", "恢复", "治愈", "痊愈", "无不适", "未见明显不适")
     no_improve_words = (
         "没有好转",
@@ -383,40 +474,71 @@ def judge_outcome_polarity(modifiers: list, text: str) -> Optional[dict]:
         "进展",
     )
     worsen_words = ("加重", "恶化", "进展")
+    recurrent_words = ("复发", "再发")
+    persistent_words = ("仍存在", "仍有", "持续存在", "持续")
 
-    wants_no_improve = any(
-        word in mod_text
-        for word in (
-            "没有好转",
-            "未好转",
-            "无好转",
-            "不见好",
-            "未缓解",
-            "无缓解",
-            "没有缓解",
-            "未改善",
-            "无改善",
-            "没有改善",
-        )
-    )
-    wants_positive = any(word in mod_text for word in ("好转", "改善", "缓解", "恢复", "治愈", "痊愈")) and not wants_no_improve
-    wants_worse = any(word in mod_text for word in worsen_words)
-
-    if wants_no_improve:
+    if expected in {"not_improved", "persistent"}:
         if any(word in text for word in no_improve_words):
-            return {"matched": True, "reason": "转归记录提示未缓解/仍存在，符合没有好转"}
+            label = "持续存在" if expected == "persistent" else "没有好转"
+            return {
+                "matched": True,
+                "status": "MATCHED",
+                "reason_code": "OUTCOME_STATE_MET",
+                "reason": f"转归记录提示未缓解/仍存在，符合{label}",
+            }
         if any(word in text for word in positive_words):
-            return {"matched": False, "reason": "转归记录提示已有好转/改善，不符合没有好转"}
-    if wants_positive:
+            label = "持续存在" if expected == "persistent" else "没有好转"
+            return {
+                "matched": False,
+                "status": "NOT_MATCHED",
+                "reason_code": "OUTCOME_STATE_NOT_MET",
+                "reason": f"转归记录提示已有好转/改善，不符合{label}",
+            }
+    if expected in {"improved", "resolved"}:
         if any(word in text for word in no_improve_words):
-            return {"matched": False, "reason": "转归记录提示未缓解/仍存在，不符合好转"}
+            return {
+                "matched": False,
+                "status": "NOT_MATCHED",
+                "reason_code": "OUTCOME_STATE_NOT_MET",
+                "reason": "转归记录提示未缓解/仍存在，不符合好转",
+            }
         if any(word in text for word in positive_words):
-            return {"matched": True, "reason": "转归记录提示好转/改善"}
-    if wants_worse:
+            return {
+                "matched": True,
+                "status": "MATCHED",
+                "reason_code": "OUTCOME_STATE_MET",
+                "reason": "转归记录提示好转/改善",
+            }
+    if expected == "worsened":
         if any(word in text for word in worsen_words):
-            return {"matched": True, "reason": "转归记录提示加重/恶化"}
+            return {
+                "matched": True,
+                "status": "MATCHED",
+                "reason_code": "OUTCOME_STATE_MET",
+                "reason": "转归记录提示加重/恶化",
+            }
         if any(word in text for word in positive_words):
-            return {"matched": False, "reason": "转归记录提示好转/改善，不符合加重"}
+            return {
+                "matched": False,
+                "status": "NOT_MATCHED",
+                "reason_code": "OUTCOME_STATE_NOT_MET",
+                "reason": "转归记录提示好转/改善，不符合加重",
+            }
+    if expected == "recurred":
+        if any(word in text for word in recurrent_words):
+            return {
+                "matched": True,
+                "status": "MATCHED",
+                "reason_code": "OUTCOME_STATE_MET",
+                "reason": "转归记录提示复发/再发",
+            }
+        if any(word in text for word in positive_words + persistent_words):
+            return {
+                "matched": False,
+                "status": "NOT_MATCHED",
+                "reason_code": "OUTCOME_STATE_NOT_MET",
+                "reason": "转归记录未提示复发/再发",
+            }
     return None
 
 
@@ -433,7 +555,12 @@ def judge_explicit_absence(keyword: str, text: str) -> Optional[dict]:
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
-            return {"matched": False, "reason": f"原文明确否认{keyword}相关病史"}
+            return {
+                "matched": False,
+                "status": "NOT_MATCHED",
+                "reason_code": "DOCUMENT_EXPLICIT_NEGATION",
+                "reason": f"原文明确否认{keyword}相关病史",
+            }
     return None
 
 
@@ -489,7 +616,12 @@ def judge_history_duration(keyword: str, modifiers: list, text: str) -> Optional
         if keyword in s and any(tag in s for tag in ("病史", "既往", "患", "诊断", "确诊", "史"))
     ]
     if not sentences:
-        return {"matched": False, "reason": f"未找到{keyword}病史证据"}
+        return {
+            "matched": False,
+            "status": "NOT_MENTIONED",
+            "reason_code": "NO_HISTORY_MENTION",
+            "reason": f"未找到{keyword}病史证据",
+        }
 
     duration_patterns = [
         r"(?:超过|大于|多于)\s*(\d+(?:\.\d+)?|[零〇一二两三四五六七八九十百千万亿]+)\s*年",
@@ -514,11 +646,20 @@ def judge_history_duration(keyword: str, modifiers: list, text: str) -> Optional
             display_threshold = int(threshold) if float(threshold).is_integer() else threshold
             return {
                 "matched": bool(ok),
+                "status": "MATCHED" if ok else "NOT_MATCHED",
+                "reason_code": (
+                    "HISTORY_DURATION_MET" if ok else "HISTORY_DURATION_NOT_MET"
+                ),
                 "reason": f"{keyword}病史年限={display_years}年 {operator} {display_threshold}年",
             }
 
     if found_keyword_only:
-        return {"matched": False, "reason": f"找到{keyword}病史，但未找到明确年限证据"}
+        return {
+            "matched": False,
+            "status": "UNKNOWN",
+            "reason_code": "MISSING_HISTORY_DURATION",
+            "reason": f"找到{keyword}病史，但未找到明确年限证据",
+        }
     return None
 
 
@@ -572,6 +713,29 @@ def augment_analysis_routes(analysis: dict, original_condition: str, fallback_ke
             cond["modifiers"] = append_unique(cond.get("modifiers", []), outcome_mods)
             cond["semantic_class"] = OUTCOME_CLASS.name
 
+            if outcome_kw:
+                cond['entity'] = outcome_kw
+                cond['canonical_entity'] = outcome_kw
+            cond['predicate'] = 'outcome'
+            cond['entity_type'] = cond.get('entity_type') or 'symptom'
+            attributes = cond.get('attributes')
+            if not isinstance(attributes, dict):
+                attributes = {}
+            outcome_state = normalize_outcome_state(
+                attributes.get('outcome_state') or outcome_mods or sq
+            )
+            if outcome_state:
+                attributes['outcome_state'] = outcome_state
+            outcome_phase = normalize_outcome_phase(attributes.get('outcome_phase'))
+            if not outcome_phase:
+                outcome_phase = extract_outcome_phase(sq)
+            if outcome_phase:
+                attributes['outcome_phase'] = outcome_phase
+                attributes.pop('outcome_phase_policy', None)
+            else:
+                attributes['outcome_phase_policy'] = 'latest_available_outcome'
+            cond['attributes'] = attributes
+
         has_pre_admission_context = is_pre_admission_condition(sq) or (
             is_pre_admission_condition(original_condition)
             and bool(re.match(r"^(就)?(有|患有|存在|诊断为|确诊为|得过|有过)", sq or ""))
@@ -608,6 +772,9 @@ def augment_analysis_routes(analysis: dict, original_condition: str, fallback_ke
                 cond["semantic_class"] = DIAGNOSIS_EXISTENCE_CLASS.name
 
         if is_drug_use_condition(sq, cond):
+            cond['domain'] = 'medication'
+            if any(token in str(sq) for token in ('住院期间', '本次住院', '入院', '出院')):
+                cond['target_skills'] = append_unique(cond.get('target_skills', []), ['encounter-info'])
             from .medication_rules import infer_medication_predicate
 
             drug_semantic = _service_metadata("drug-interaction").get("semantic") or {}
@@ -636,6 +803,9 @@ def augment_analysis_routes(analysis: dict, original_condition: str, fallback_ke
             cond["entity_type"] = drug_semantic.get("entity_type") or "drug"
             cond["predicate"] = infer_medication_predicate(sq, cond.get("predicate") or drug_semantic.get("predicate"))
             cond["semantic_class"] = drug_semantic.get("semantic_class") or DRUG_USE_CLASS.name
+
+        if cond.get('semantic_class'):
+            cond['semantic_class'] = re.sub(r'\s+', '', str(cond['semantic_class']))
 
         if lab_result_condition:
             cond["target_skills"] = [

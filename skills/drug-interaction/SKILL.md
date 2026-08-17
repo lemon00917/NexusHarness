@@ -9,15 +9,20 @@ metadata:
   semantic:
     entity_type: drug
     domain: medication
-    semantic_class: 用药医嘱
+    semantic_class: 用药  医嘱
     evidence_types: [medication_evidence]
     predicate: administered
     evidence_capabilities:
       ordered: true
       administered: true
       status: true
+    presentation:
+      record_type: medication_order
+      record_identity:
+        label: 医嘱号
+        fields: [hosOrdId, hdcOrdId]
     fields:
-      record_id: [medPrescNo, 处方号]
+      record_id: [hosOrdId, hdcOrdId, 医嘱号]
       entity: [orderName, 药物名称, 药品名称, 医嘱名称]
       category: [ordCatDesc, ordSubCatDesc, 医嘱大类, 医嘱子类]
       ordered_at: [开立日期时间, orderDateTime, orderDate, 开立时间]
@@ -34,6 +39,11 @@ metadata:
       quantity: [orderQuantity, 数量]
       remarks: [orderRemarks, 医嘱备注, 备注]
     predicate_policies:
+      ordered:
+        event_time_role: ordered_at
+        required_status: true
+        accepted_status_values: [核实, 执行]
+        rejected_status_values: [作废, 撤销]
       administered:
         event_time_role: ordered_at
         required_status: true
@@ -101,6 +111,6 @@ metadata:
 ## 判断规则
 
 1. **药物匹配**: 药物名称与查询关键词做语义匹配，不要求字面完全一致
-2. **“使用过”业务口径**: 目标药品医嘱的开立时间命中目标时间窗，且医嘱状态描述属于当前项目配置的有效状态
+2. **“开过/使用过”业务口径**: 目标药品医嘱的开立时间命中目标时间窗，且医嘱状态描述属于当前项目配置的有效状态
 3. **时间筛选**: 使用"开立日期时间"字段与参考时间比较；请求执行时间仅作为原始字段保留，不视为实际给药时间
 4. **注意**: 此服务返回患者所有用药记录，需结合时间窗口和医嘱状态共同判断

@@ -134,6 +134,7 @@
         }
         .mf-badge.ok { color: var(--accent-green); background: rgba(34,197,94,.1); border-color: rgba(34,197,94,.25); }
         .mf-badge.no { color: var(--accent-red); background: rgba(239,68,68,.1); border-color: rgba(239,68,68,.25); }
+        .mf-badge.mentioned { color: var(--text-secondary); background: var(--bg-tertiary); border-color: var(--border-color); }
         .mf-badge.unknown { color: var(--accent-amber); background: rgba(245,158,11,.1); border-color: rgba(245,158,11,.25); }
         .mf-condition-grid { display: grid; gap: 12px; }
         .mf-condition-card {
@@ -157,6 +158,8 @@
         .mf-evidence-card.aux { border-left: 3px solid var(--accent-amber); }
         .mf-evidence-card.support { border-left: 3px solid var(--accent-green); }
         .mf-evidence-card.reject { border-left: 3px solid var(--accent-red); }
+        .mf-evidence-card.mentioned { border-left: 3px solid var(--border-color); }
+        .mf-evidence-card.unknown { border-left: 3px solid var(--accent-amber); }
         .mf-evidence-card.error { border-left: 3px solid var(--accent-red); background: rgba(239,68,68,.06); }
         .mf-evidence-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; margin-bottom: 6px; }
         .mf-evidence-name { font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: normal; line-height: 1.4; }
@@ -1183,7 +1186,7 @@ function renderConditionCard(title, info, index) {
             <span class="mf-badge">时间范围: ${esc(tw.scope || '')}</span>
             <span class="mf-badge">开始: ${esc(tw.start || '未知')}</span>
             <span class="mf-badge">结束: ${esc(tw.end || '未出院/开放')}</span>
-            <span class="mf-badge">来源: ${esc(sourceName(tw.source || ''))}</span>
+            <span class="mf-badge">来源: ${esc(sourceName(tw.source || '', tw.source_label || ''))}</span>
         </div>` : '';
     const files = (info.files || []).slice().sort((a, b) => roleOrder(a) - roleOrder(b));
     return `
@@ -1217,7 +1220,11 @@ function renderEvidenceSections(files) {
 function renderEvidenceCard(file) {
     const role = evidenceRole(file);
     const cls = roleClass(file, role);
-    const status = role === '数据源状态' ? '需检查' : (['时间范围依据','时间锚点','辅助依据'].includes(role) ? '辅助依据' : (file.matched ? '支持' : '未支持'));
+    const status = role === '数据源状态'
+        ? '需检查'
+        : (['时间范围依据','时间锚点','辅助依据'].includes(role)
+            ? '辅助依据'
+            : evidenceStatusLabel(file));
     const fields = String(file.fields || '').trim();
     const candidates = renderCandidateRecords(file);
     const raw = fields ? `
@@ -1253,30 +1260,49 @@ function renderCandidateRecords(file) {
     const type = candidateRecordType(file, rows);
     if (type === 'drug') return renderDrugCandidateRecords(file, shown, more);
     if (type === 'diagnosis') return renderDiagnosisCandidateRecords(file, shown, more);
-    if (type === 'lab') return renderLabCandidateRecords(shown, more);
+    if (type === 'lab') return renderLabCandidateRecords(file, shown, more);
+    if (type === 'encounter') return renderEncounterCandidateRecords(file, shown, more);
     return renderGenericCandidateRecords(file, shown, more);
 }
 
 function candidateRecordType(file, rows) {
-    const name = String(file.file || '');
-    if (name.includes('用药医嘱查询')) return 'drug';
-    if (name.includes('诊断查询')) return 'diagnosis';
-    if (name.includes('检验指标查询')) return 'lab';
+    const machineTypes = [
+        file.record_type,
+        file.entity_type,
+        file.domain,
+        file.evidence_type,
+        ...(Array.isArray(file.evidence_types) ? file.evidence_types : []),
+    ].filter(Boolean).map(value => String(value).toLowerCase());
+    if (machineTypes.some(value => value === 'drug' || value.includes('medication'))) return 'drug';
+    if (machineTypes.some(value => value.includes('diagnosis'))) return 'diagnosis';
+    if (machineTypes.some(value => value === 'lab' || value.includes('laboratory'))) return 'lab';
+    if (machineTypes.some(value => value.includes('encounter'))) return 'encounter';
     const keys = new Set();
     (rows || []).forEach(r => Object.keys(r || {}).forEach(k => keys.add(k)));
     if (keys.has('药物名称') || keys.has('医嘱名称') || keys.has('用药途径') || keys.has('开立日期时间')) return 'drug';
     if (keys.has('诊断名称') || keys.has('诊断类型') || keys.has('诊断时间')) return 'diagnosis';
     if (keys.has('检测时间') || keys.has('数值判断') || keys.has('数值是否满足')) return 'lab';
+    if (keys.has('就诊类型') || keys.has('入院日期时间') || keys.has('出院日期时间')) return 'encounter';
     return 'generic';
 }
 
-function renderLabCandidateRecords(shown, more) {
+function candidateRecordIdentity(row) {
+    return String((row && (row['记录ID'] || row.record_id || row['记录'])) || '').trim();
+}
+
+function candidateRecordIdentityLabel(file, rows, fallback = '记录') {
+    const row = (rows || []).find(item => item && item['记录标识名称']);
+    return String((row && row['记录标识名称']) || (file && file.record_id_label) || fallback);
+}
+
+function renderLabCandidateRecords(file, shown, more) {
+    const identityLabel = candidateRecordIdentityLabel(file, shown, '检验报告号');
     return `<div class="mf-candidates">
         <table>
-            <thead><tr><th>记录</th><th>项目</th><th>检测时间</th><th>结果</th><th>时间窗</th><th>数值</th></tr></thead>
+            <thead><tr><th>${esc(identityLabel)}</th><th>项目</th><th>检测时间</th><th>结果</th><th>时间窗</th><th>数值</th></tr></thead>
             <tbody>
                 ${shown.map(r => `<tr>
-                    <td>${esc(r['记录'] || '')}</td>
+                    <td>${esc(candidateRecordIdentity(r) || '-')}</td>
                     <td>${esc(r['项目'] || '')}</td>
                     <td>${esc(r['检测时间'] || '缺失')}</td>
                     <td>${esc([r['结果'], r['单位']].filter(Boolean).join(''))}</td>
@@ -1290,9 +1316,10 @@ function renderLabCandidateRecords(shown, more) {
 }
 
 function renderDrugCandidateRecords(file, shown, more) {
+    const identityLabel = candidateRecordIdentityLabel(file, shown, '医嘱号');
     return `<div class="mf-candidates">
         <table>
-            <thead><tr><th>记录</th><th>药物名称</th><th>开立时间</th><th>用药途径</th><th>剂量/频次</th><th>时间窗</th></tr></thead>
+            <thead><tr><th>${esc(identityLabel)}</th><th>药物名称</th><th>开立时间</th><th>用药途径</th><th>剂量/频次</th><th>时间窗</th></tr></thead>
             <tbody>
                 ${shown.map(r => {
                     const drug = candidateValue(file, r, ['药物名称', '医嘱名称', '项目']);
@@ -1304,7 +1331,7 @@ function renderDrugCandidateRecords(file, shown, more) {
                     ].filter(Boolean).join('');
                     const freq = candidateValue(file, r, ['频次']);
                     return `<tr>
-                        <td>${esc(r['记录'] || '')}</td>
+                        <td>${esc(candidateRecordIdentity(r) || '-')}</td>
                         <td>${esc(drug || '-')}</td>
                         <td>${esc(time || '缺失')}</td>
                         <td>${esc(route || '-')}</td>
@@ -1319,12 +1346,13 @@ function renderDrugCandidateRecords(file, shown, more) {
 }
 
 function renderDiagnosisCandidateRecords(file, shown, more) {
+    const identityLabel = candidateRecordIdentityLabel(file, shown, '诊断ID');
     return `<div class="mf-candidates">
         <table>
-            <thead><tr><th>记录</th><th>诊断名称</th><th>诊断类型</th><th>诊断时间</th><th>时间窗</th></tr></thead>
+            <thead><tr><th>${esc(identityLabel)}</th><th>诊断名称</th><th>诊断类型</th><th>诊断时间</th><th>时间窗</th></tr></thead>
             <tbody>
                 ${shown.map(r => `<tr>
-                    <td>${esc(r['记录'] || '')}</td>
+                    <td>${esc(candidateRecordIdentity(r) || '-')}</td>
                     <td>${esc(candidateValue(file, r, ['诊断名称', '项目']) || '-')}</td>
                     <td>${esc(candidateValue(file, r, ['诊断类型', '诊断类别']) || '-')}</td>
                     <td>${esc(candidateValue(file, r, ['诊断时间', '诊断日期', '记录时间']) || '缺失')}</td>
@@ -1336,9 +1364,28 @@ function renderDiagnosisCandidateRecords(file, shown, more) {
     </div>`;
 }
 
+function renderEncounterCandidateRecords(file, shown, more) {
+    const identityLabel = candidateRecordIdentityLabel(file, shown, '就诊号');
+    return `<div class="mf-candidates">
+        <table>
+            <thead><tr><th>${esc(identityLabel)}</th><th>就诊类型</th><th>入院时间</th><th>出院时间</th><th>科室</th></tr></thead>
+            <tbody>
+                ${shown.map(r => `<tr>
+                    <td>${esc(candidateRecordIdentity(r) || '-')}</td>
+                    <td>${esc(candidateValue(file, r, ['就诊类型']) || '-')}</td>
+                    <td>${esc(candidateValue(file, r, ['入院日期时间', '入院时间']) || '缺失')}</td>
+                    <td>${esc(candidateValue(file, r, ['出院日期时间', '出院时间']) || '缺失')}</td>
+                    <td>${esc(candidateValue(file, r, ['就诊科室', '科室']) || '-')}</td>
+                </tr>`).join('')}
+            </tbody>
+        </table>
+        ${more}
+    </div>`;
+}
+
 function renderGenericCandidateRecords(file, shown, more) {
     const keys = Array.from(new Set(shown.flatMap(r => Object.keys(r || {}))))
-        .filter(k => !['数值是否满足', '数值判断'].includes(k))
+        .filter(k => !['记录序号', '记录标识名称', '记录标识字段', '数值是否满足', '数值判断'].includes(k))
         .slice(0, 6);
     if (!keys.length) return '';
     return `<div class="mf-candidates">
@@ -1366,7 +1413,7 @@ function candidateValue(file, row, keys) {
 }
 
 function parseCandidateRawFields(file, row) {
-    const record = String((row && row['记录']) || '').trim();
+    const record = String((row && (row['记录序号'] || row['记录'])) || '').trim();
     const fields = String((file && file.fields) || '');
     if (!record || !fields) return {};
     const line = fields.split(/\r?\n/).find(l => l.includes(record)) || '';
@@ -1428,19 +1475,32 @@ function renderReasonDetails(reason) {
 
 function evidenceRole(file) {
     if (file['证据角色']) return file['证据角色'];
+    const role = String(file.source_role || file.evidence_role || '').toUpperCase();
+    const roleLabels = {
+        PRIMARY: '主证据',
+        SUPPORTING: '辅助依据',
+        CONTEXT: '上下文',
+        TIME_ANCHOR: '时间范围依据',
+        CANDIDATE: '候选证据',
+    };
+    if (roleLabels[role]) return roleLabels[role];
     const name = String(file.file || '');
     if (file.service_error || name.includes('接口失败') || name.includes('不可用') || name.includes('未取得数据')) return '数据源状态';
-    if (name.includes('检验指标查询')) return '主证据';
-    if (name.includes('数据库查询')) return '时间锚点';
-    if (name.includes('就诊信息查询')) return '辅助依据';
     return file.matched ? '支持证据' : '候选证据';
 }
 
 function roleClass(file, role) {
     if (role === '数据源状态') return 'error';
-    if (role === '主证据') return file.matched ? 'main support' : 'main reject';
     if (role === '时间范围依据' || role === '时间锚点' || role === '辅助依据') return 'aux';
-    return file.matched ? 'support' : 'reject';
+    const status = evidenceStatusLabel(file);
+    const statusClass = status === '支持'
+        ? 'support'
+        : status === '不支持'
+            ? 'reject'
+            : status === '未提及'
+                ? 'mentioned'
+                : 'unknown';
+    return role === '主证据' ? `main ${statusClass}` : statusClass;
 }
 
 function roleOrder(file) {
@@ -1453,8 +1513,18 @@ function roleOrder(file) {
 
 function statusTone(status) {
     if (status === '符合') return 'ok';
+    if (status === '未提及') return 'mentioned';
     if (status === '无法判断') return 'unknown';
     return 'no';
+}
+
+function evidenceStatusLabel(file) {
+    const status = String(file.status || file['判断状态'] || '').toUpperCase();
+    if (status === 'MATCHED' || status === '符合') return '支持';
+    if (status === 'NOT_MATCHED' || status === '不符合') return '不支持';
+    if (status === 'NOT_MENTIONED' || status === '未提及') return '未提及';
+    if (status === 'UNKNOWN' || status === '无法判断') return '无法判断';
+    return file.matched ? '支持' : '未支持';
 }
 
 function formatConfidence(value) {
@@ -1463,9 +1533,8 @@ function formatConfidence(value) {
     return Number.isFinite(num) ? `${Math.round(num * 100)}%` : String(value);
 }
 
-function sourceName(source) {
-    const names = {'encounter-info': '就诊信息查询', 'lab-results': '检验指标查询'};
-    return names[source] || source;
+function sourceName(source, label) {
+    return String(label || source || '').trim();
 }
 
 // ── Utils ──────────────────────────────────

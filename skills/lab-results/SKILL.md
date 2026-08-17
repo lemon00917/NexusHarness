@@ -10,6 +10,12 @@ metadata:
     entity_type: laboratory
     domain: laboratory
     evidence_types: [laboratory_evidence]
+    temporal_filter_mode: domain
+    presentation:
+      record_type: laboratory_result
+      record_identity:
+        label: 检验报告号
+        fields: [inspRptId, hdcInspRptId]
   triggers: ["检验","化验","检验指标","化验指标","指标","结果","异常","偏高","偏低","升高","降低","高于","低于","参考范围","血常规","生化","肝功","肾功","电解质","白细胞","白细胞计数","WBC","中性粒","血红蛋白","血小板","CRP","C反应蛋白","血糖","肌酐","尿素","钾","钠","氯"]
   api:
     url: SerachQuery/MES0023

@@ -46,6 +46,45 @@ class TimeWindow:
         return data
 
 
+_CANONICAL_EVENT_ALIASES = {
+    "surgery": ("手术", "术"),
+    "admission": ("入院",),
+    "discharge": ("出院",),
+    "encounter": ("住院", "就诊"),
+}
+
+
+def _temporal_value(temporal: object, name: str, default: Any = "") -> Any:
+    if temporal is None:
+        return default
+    if isinstance(temporal, dict):
+        return temporal.get(name, default)
+    return getattr(temporal, name, default)
+
+
+def _canonical_event_name(event: object) -> str:
+    value = str(event or "").strip()
+    lower = value.lower()
+    aliases = {
+        "operation": "surgery",
+        "手术": "surgery",
+        "术": "surgery",
+        "入院": "admission",
+        "出院": "discharge",
+        "住院": "encounter",
+        "就诊": "encounter",
+    }
+    return aliases.get(lower, aliases.get(value, lower))
+
+
+def _event_aliases(event: object) -> list[str]:
+    canonical = _canonical_event_name(event)
+    if canonical in _CANONICAL_EVENT_ALIASES:
+        return list(_CANONICAL_EVENT_ALIASES[canonical])
+    value = str(event or "").strip()
+    return [value] if value else []
+
+
 def _normalize_datetime_text(text: str) -> str:
     text = str(text or "").strip()
     text = re.sub(r"(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日?", lambda m: f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}", text)
@@ -164,6 +203,11 @@ def _anchor_specs() -> list[dict[str, Any]]:
                     "doc": doc_name,
                     "label": section.get("name", ""),
                     "aliases": aliases,
+                    "event": str(
+                        section.get("anchor_event")
+                        or section.get("event")
+                        or ""
+                    ).strip(),
                     "source": f"{doc_name}.{section.get('name', '')}",
                     "time_role": section.get("time_role", "range"),
                 })
@@ -198,12 +242,34 @@ def _condition_mentions_encounter_anchor(condition: str) -> bool:
     ))
 
 
-def get_anchor_route_for_condition(condition: str) -> tuple[list[str], list[str]]:
+def _spec_matches_event(spec: dict[str, Any], event: object) -> bool:
+    canonical_event = _canonical_event_name(event)
+    declared_event = _canonical_event_name(spec.get("event"))
+    if declared_event and declared_event == canonical_event:
+        return True
+    expected_aliases = set(_event_aliases(canonical_event))
+    return bool(expected_aliases & set(spec.get("aliases") or []))
+
+
+def get_anchor_route_for_condition(
+    condition: str = "",
+    *,
+    temporal: object = None,
+    allow_text_fallback: bool = True,
+) -> tuple[list[str], list[str]]:
     """Return document/section route required to resolve event-relative time."""
     docs: list[str] = []
     sections: list[str] = []
     for spec in _anchor_specs():
-        if not _condition_mentions_anchor(condition, spec.get("aliases", [])):
+        structured_match = bool(temporal) and _spec_matches_event(
+            spec,
+            _temporal_value(temporal, "event"),
+        )
+        text_match = allow_text_fallback and _condition_mentions_anchor(
+            condition,
+            spec.get("aliases", []),
+        )
+        if not structured_match and not text_match:
             continue
         if spec["doc"] not in docs:
             docs.append(spec["doc"])
@@ -212,8 +278,17 @@ def get_anchor_route_for_condition(condition: str) -> tuple[list[str], list[str]
     return docs, sections
 
 
-def condition_needs_event_anchor(condition: str) -> bool:
-    docs, sections = get_anchor_route_for_condition(condition)
+def condition_needs_event_anchor(
+    condition: str,
+    *,
+    temporal: object = None,
+    allow_text_fallback: bool = True,
+) -> bool:
+    docs, sections = get_anchor_route_for_condition(
+        condition,
+        temporal=temporal,
+        allow_text_fallback=allow_text_fallback,
+    )
     return bool(docs and sections)
 
 
@@ -262,13 +337,23 @@ def extract_encounter_window(service_results: list[dict[str, Any]]) -> TimeWindo
     return TimeWindow(scope="住院期间", start=start, end=end, source="encounter-info", required=True)
 
 
-def extract_event_anchor_window(condition: str, records: list[dict[str, Any]], preferred_aliases: list[str] | None = None) -> TimeWindow:
+def extract_event_anchor_window(
+    condition: str,
+    records: list[dict[str, Any]],
+    preferred_aliases: list[str] | None = None,
+    *,
+    preferred_event: object = "",
+    selection: str = "unspecified",
+) -> TimeWindow:
     specs = _anchor_specs()
-    if preferred_aliases:
-        specs = [s for s in specs if set(s.get("aliases", [])) & set(preferred_aliases)] or specs
+    if preferred_event:
+        specs = [s for s in specs if _spec_matches_event(s, preferred_event)]
+    elif preferred_aliases:
+        specs = [s for s in specs if set(s.get("aliases", [])) & set(preferred_aliases)]
     elif condition:
         specs = [s for s in specs if _condition_mentions_anchor(condition, s.get("aliases", []))]
 
+    candidates: list[TimeWindow] = []
     for spec in specs:
         for item in records or []:
             if not isinstance(item, dict) or item.get("service_error"):
@@ -287,15 +372,35 @@ def extract_event_anchor_window(condition: str, records: list[dict[str, Any]], p
                 if values:
                     start = values[0]
                     end = values[1] if len(values) > 1 else values[0]
-                    return TimeWindow(scope="事件期间", start=start, end=end, source=spec.get("source", ""), required=True)
+                    candidates.append(TimeWindow(
+                        scope="事件期间",
+                        start=start,
+                        end=end,
+                        source=spec.get("source", ""),
+                        required=True,
+                    ))
+    if candidates:
+        normalized_selection = str(selection or "unspecified").strip().lower()
+        if normalized_selection == "first":
+            return min(candidates, key=lambda item: item.start or datetime.max)
+        if normalized_selection == "last":
+            return max(candidates, key=lambda item: item.start or datetime.min)
+        return candidates[0]
     source = specs[0].get("source", "") if specs else ""
-    return TimeWindow(scope="事件期间", source=source, required=True, reason="缺少事件时间锚点")
+    reason = "缺少事件时间锚点" if specs else "未找到事件对应的时间锚点元数据"
+    return TimeWindow(scope="事件期间", source=source, required=True, reason=reason)
 
 
-def extract_encounter_anchor_window(condition: str, service_results: dict[str, list]) -> TimeWindow:
+def extract_encounter_anchor_window(
+    condition: str,
+    service_results: dict[str, list],
+    *,
+    event: object = "",
+) -> TimeWindow:
     start, end = _extract_encounter_bounds((service_results or {}).get("encounter-info", []))
     text = condition or ""
-    if "入院" in text:
+    canonical_event = _canonical_event_name(event)
+    if canonical_event == "admission" or (not canonical_event and "入院" in text):
         if not start:
             return TimeWindow(scope="入院时间锚点", source="encounter-info", required=True, reason="缺少入院时间")
         return TimeWindow(
@@ -306,7 +411,7 @@ def extract_encounter_anchor_window(condition: str, service_results: dict[str, l
             required=True,
             reason="使用就诊信息的入院日期时间",
         )
-    if "出院" in text:
+    if canonical_event == "discharge" or (not canonical_event and "出院" in text):
         if not end:
             return TimeWindow(scope="出院时间锚点", source="encounter-info", required=True, reason="缺少出院时间，可能仍在住院")
         return TimeWindow(
@@ -318,6 +423,125 @@ def extract_encounter_anchor_window(condition: str, service_results: dict[str, l
             reason="使用就诊信息的出院日期时间",
         )
     return TimeWindow(scope="就诊时间锚点", source="encounter-info", required=True, reason="未识别入院/出院锚点")
+
+
+def _normalize_temporal_relation(relation: object) -> str:
+    value = str(relation or "").strip().lower()
+    aliases = {
+        "前": "before",
+        "之前": "before",
+        "后": "after",
+        "之后": "after",
+        "期间": "during",
+        "中": "during",
+        "时": "during",
+    }
+    return aliases.get(value, value)
+
+
+def _offset_window_from_temporal(temporal: object, event: TimeWindow) -> TimeWindow:
+    if not event.start and not event.end:
+        return TimeWindow(
+            scope="锚点相对时间",
+            source=event.source,
+            required=True,
+            reason=event.reason or "缺少事件时间锚点",
+        )
+
+    relation = _normalize_temporal_relation(_temporal_value(temporal, "relation"))
+    duration = _temporal_value(temporal, "duration", None)
+    unit = str(_temporal_value(temporal, "unit") or "").strip()
+    event_start = event.start or event.end
+    event_end = event.end or event.start
+
+    if relation == "during":
+        return TimeWindow(
+            scope="事件期间",
+            start=event_start,
+            end=event_end,
+            source=event.source,
+            required=True,
+        )
+    if relation not in {"before", "after"}:
+        return TimeWindow(
+            scope="锚点相对时间",
+            source=event.source,
+            required=True,
+            reason="结构化时间关系缺失或不支持",
+        )
+
+    if duration is None:
+        if relation == "before":
+            return TimeWindow(
+                scope="事件前",
+                start=None,
+                end=event_start,
+                source=event.source,
+                required=True,
+            )
+        return TimeWindow(
+            scope="事件后",
+            start=event_end,
+            end=None,
+            source=event.source,
+            required=True,
+        )
+
+    try:
+        numeric_duration = float(duration)
+    except (TypeError, ValueError):
+        numeric_duration = -1
+    if numeric_duration < 0:
+        return TimeWindow(
+            scope="锚点相对时间",
+            source=event.source,
+            required=True,
+            reason="结构化时间时长无效",
+        )
+    if not unit:
+        return TimeWindow(
+            scope="锚点相对时间",
+            source=event.source,
+            required=True,
+            reason="结构化时间单位缺失",
+        )
+
+    from microharness.medical.temporal_parser import normalize_time_unit, convert_numeric_unit
+
+    normalized_unit = normalize_time_unit(unit)
+    if normalized_unit not in {"分钟", "小时", "天", "周", "月"}:
+        return TimeWindow(
+            scope="锚点相对时间",
+            source=event.source,
+            required=True,
+            reason=f"不支持的结构化时间单位：{unit}",
+        )
+    try:
+        delta = timedelta(
+            hours=convert_numeric_unit(numeric_duration, normalized_unit, "小时")
+        )
+    except (TypeError, ValueError):
+        return TimeWindow(
+            scope="锚点相对时间",
+            source=event.source,
+            required=True,
+            reason=f"不支持的结构化时间单位：{unit}",
+        )
+    if relation == "before":
+        return TimeWindow(
+            scope="事件前时间窗",
+            start=event_start - delta,
+            end=event_start,
+            source=event.source,
+            required=True,
+        )
+    return TimeWindow(
+        scope="事件后时间窗",
+        start=event_end,
+        end=event_end + delta,
+        source=event.source,
+        required=True,
+    )
 
 
 def _offset_window_from_event(condition: str, event: TimeWindow, aliases: list[str] | None = None) -> TimeWindow:
@@ -399,7 +623,61 @@ def _offset_window_from_event(condition: str, event: TimeWindow, aliases: list[s
     return TimeWindow(scope="事件后时间窗", start=event_end, end=event_end + delta, source=event.source, required=True)
 
 
-def resolve_time_window(condition: str, service_results: dict[str, list], records: list[dict[str, Any]] | None = None) -> Optional[TimeWindow]:
+def resolve_time_window(
+    condition: str,
+    service_results: dict[str, list],
+    records: list[dict[str, Any]] | None = None,
+    *,
+    temporal: object = None,
+    allow_text_fallback: bool = True,
+) -> Optional[TimeWindow]:
+    if temporal is not None:
+        scope = str(_temporal_value(temporal, "scope") or "").strip().lower()
+        event = _canonical_event_name(_temporal_value(temporal, "event"))
+        relation = _normalize_temporal_relation(_temporal_value(temporal, "relation"))
+
+        if scope == "encounter" or (event == "encounter" and relation == "during"):
+            return extract_encounter_window(
+                (service_results or {}).get("encounter-info", [])
+            )
+
+        if event in {"admission", "discharge"}:
+            anchor = extract_encounter_anchor_window(
+                "",
+                service_results or {},
+                event=event,
+            )
+            return _offset_window_from_temporal(temporal, anchor)
+
+        if event:
+            anchor_docs, _ = get_anchor_route_for_condition(
+                temporal=temporal,
+                allow_text_fallback=False,
+            )
+            if not anchor_docs:
+                return TimeWindow(
+                    scope="锚点相对时间",
+                    required=True,
+                    reason=f"未找到事件{event}对应的时间锚点元数据",
+                )
+            anchor = extract_event_anchor_window(
+                "",
+                records or [],
+                preferred_event=event,
+                selection=str(_temporal_value(temporal, "selection") or "unspecified"),
+            )
+            return _offset_window_from_temporal(temporal, anchor)
+
+        raw_scope = str(_temporal_value(temporal, "scope") or "结构化时间约束")
+        return TimeWindow(
+            scope=raw_scope,
+            required=True,
+            reason="结构化时间约束缺少可解析的事件锚点",
+        )
+
+    if not allow_text_fallback:
+        return None
+
     scope = detect_period_scope(condition)
     if not scope:
         return None

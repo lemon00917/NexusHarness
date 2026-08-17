@@ -30,6 +30,7 @@ logs/*.log
 # Configs (runtime, not committed)
 configs/config.json
 configs/rag_config.json
+configs/template_binding_database.json
 
 # Session data
 sessions/conversations/*.json
@@ -59,6 +60,8 @@ Thumbs.db
 /test_fixed_result.json
 /workdevelopAINexusHarnesstest_burn.json
 /artifacts/manual-runs/
+/evaluation/medical_filter/reports/
+/evaluation/medical_filter/responses/
 
 # Documentation (generated)
 docs/

@@ -1,0 +1,13 @@
+{
+  "type": "opengauss",
+  "host": "127.0.0.1",
+  "port": 5432,
+  "database": "dmp_database",
+  "schema": "sm_dmp",
+  "user": "dmp_user",
+  "password": "",
+  "pool_min": 1,
+  "pool_max": 10,
+  "connect_timeout_seconds": 10,
+  "statement_timeout_seconds": 30
+}

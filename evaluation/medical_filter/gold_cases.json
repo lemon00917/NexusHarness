@@ -1,0 +1,292 @@
+{
+  "version": "1.2.0",
+  "updated_at": "2026-07-28",
+  "defaults": {
+    "router_model": "qwen2.5:3b",
+    "judge_model": "qwen2.5:3b",
+    "planner_model": "deepseek-r1:1.5b"
+  },
+  "cases": [
+    {
+      "id": "length_of_stay_and_back_pain",
+      "title": "住院天数与背痛复合条件",
+      "category": ["encounter", "symptom", "compound", "verified_outcome"],
+      "condition": "住院天数小于5天并且背痛的患者",
+      "patient": {
+        "register_no": "0000000120",
+        "visit_no": "174",
+        "global_patient_id": "00001_120",
+        "global_visit_id": "00001_174"
+      },
+      "expected": {
+        "query_type": "compound",
+        "connector": "and",
+        "overall_status": "符合",
+        "condition_count": 2,
+        "required_condition_contains": ["住院天数小于5天", "背痛"],
+        "condition_statuses": [
+          {"condition_contains": "住院天数小于5天", "status": "符合"},
+          {"condition_contains": "背痛", "status": "符合"}
+        ],
+        "condition_ir": [
+          {
+            "condition_contains": "住院天数小于5天",
+            "fields": {
+              "领域": "encounter",
+              "数值比较.operator": "小于",
+              "数值比较.threshold": 5.0,
+              "数值比较.unit": "天"
+            }
+          }
+        ],
+        "required_services": ["encounter-info", "diagnosis-query"],
+        "required_documents": ["入院记录", "出院记录"],
+        "required_evidence_sources": ["出院记录"],
+        "forbidden_reason_contains": ["符合。未取得", "符合但无法判断"]
+      },
+      "review": {
+        "status": "verified",
+        "reviewed_by": "project-owner",
+        "reviewed_at": "2026-07-28",
+        "note": "已人工确认总体及两个子条件结论；结构化服务不可用时，不能覆盖病历文档中的有效证据。"
+      }
+    },
+    {
+      "id": "aspirin_and_neutrophil_low_preop",
+      "title": "术前阿司匹林与中性粒细胞偏低",
+      "category": ["medication", "laboratory", "preop", "routing"],
+      "condition": "术前24小时使用过阿司匹林且术前48小时内中性粒细胞数偏低的患者",
+      "patient": {
+        "register_no": "0000000120",
+        "visit_no": "174",
+        "global_patient_id": "00001_120",
+        "global_visit_id": "00001_174"
+      },
+      "expected": {
+        "query_type": "compound",
+        "connector": "and",
+        "condition_count": 2,
+        "required_condition_contains": ["阿司匹林", "中性粒细胞数偏低"],
+        "required_services": ["drug-interaction", "lab-results"],
+        "condition_ir": [
+          {"condition_contains": "阿司匹林", "fields": {"领域": "medication"}},
+          {"condition_contains": "中性粒细胞数", "fields": {"领域": "laboratory"}}
+        ],
+        "temporal_assertions": [
+          {
+            "condition_contains": "阿司匹林",
+            "fields": {"事件": "surgery", "关系": "before", "时长": 24.0, "单位": "小时"}
+          },
+          {
+            "condition_contains": "中性粒细胞数",
+            "fields": {"事件": "surgery", "关系": "before", "时长": 48.0, "单位": "小时"}
+          }
+        ]
+      },
+      "review": {
+        "status": "routing_only",
+        "note": "患者结论未纳入金标准，只校验拆分和来源规划。"
+      }
+    },
+    {
+      "id": "aspirin_and_neutrophil_numeric_preop",
+      "title": "术前阿司匹林与中性粒细胞数值阈值",
+      "category": ["medication", "laboratory", "numeric", "preop", "routing"],
+      "condition": "术前24小时使用过阿司匹林且术前48小时内中性粒细胞数＞1.5×10⁹/L的患者",
+      "patient": {
+        "register_no": "0000000120",
+        "visit_no": "174",
+        "global_patient_id": "00001_120",
+        "global_visit_id": "00001_174"
+      },
+      "expected": {
+        "query_type": "compound",
+        "connector": "and",
+        "condition_count": 2,
+        "required_condition_contains": ["阿司匹林", "中性粒细胞数"],
+        "required_services": ["drug-interaction", "lab-results"],
+        "condition_ir": [
+          {"condition_contains": "阿司匹林", "fields": {"领域": "medication"}},
+          {
+            "condition_contains": "中性粒细胞数",
+            "fields": {
+              "领域": "laboratory",
+              "数值比较.operator": ">",
+              "数值比较.threshold": 1500000000.0
+            }
+          }
+        ],
+        "temporal_assertions": [
+          {
+            "condition_contains": "阿司匹林",
+            "fields": {"事件": "surgery", "关系": "before", "时长": 24.0, "单位": "小时"}
+          },
+          {
+            "condition_contains": "中性粒细胞数",
+            "fields": {"事件": "surgery", "关系": "before", "时长": 48.0, "单位": "小时"}
+          }
+        ]
+      },
+      "review": {
+        "status": "routing_only",
+        "note": "患者结论未纳入金标准，只校验拆分和来源规划。"
+      }
+    },
+    {
+      "id": "age_back_pain_inpatient_hemoglobin",
+      "title": "年龄、背痛与住院期间血红蛋白异常",
+      "category": ["demographic", "symptom", "laboratory", "inpatient", "routing"],
+      "condition": "40岁以上并且背痛，住院期间血红蛋白指标异常",
+      "patient": {
+        "register_no": "0000000120",
+        "visit_no": "174",
+        "global_patient_id": "00001_120",
+        "global_visit_id": "00001_174"
+      },
+      "expected": {
+        "query_type": "compound",
+        "connector": "and",
+        "condition_count": 3,
+        "required_condition_contains": ["40岁以上", "背痛", "血红蛋白"],
+        "required_services": ["diagnosis-query", "lab-results", "encounter-info"],
+        "required_documents": ["入院记录", "出院记录"],
+        "condition_ir": [
+          {
+            "condition_contains": "40岁以上",
+            "fields": {
+              "领域": "demographic",
+              "数值比较.threshold": 40.0,
+              "数值比较.unit": "岁"
+            }
+          },
+          {"condition_contains": "血红蛋白", "fields": {"领域": "laboratory"}}
+        ],
+        "temporal_assertions": [
+          {"condition_contains": "血红蛋白", "fields": {"范围": "encounter", "关系": "during"}}
+        ]
+      },
+      "review": {
+        "status": "routing_only",
+        "note": "校验三条件拆分和多来源规划。"
+      }
+    },
+    {
+      "id": "length_of_stay_and_burn",
+      "title": "住院天数与烧伤",
+      "category": ["encounter", "diagnosis", "symptom", "routing"],
+      "condition": "住院天数小于5天并且烧伤的患者",
+      "patient": {
+        "register_no": "0000000120",
+        "visit_no": "174",
+        "global_patient_id": "00001_120",
+        "global_visit_id": "00001_174"
+      },
+      "expected": {
+        "query_type": "compound",
+        "connector": "and",
+        "condition_count": 2,
+        "required_condition_contains": ["住院天数小于5天", "烧伤"],
+        "required_services": ["encounter-info", "diagnosis-query"],
+        "condition_ir": [
+          {
+            "condition_contains": "住院天数小于5天",
+            "fields": {
+              "领域": "encounter",
+              "数值比较.operator": "小于",
+              "数值比较.threshold": 5.0,
+              "数值比较.unit": "天"
+            }
+          }
+        ]
+      },
+      "review": {
+        "status": "routing_only",
+        "note": "验证裸疾病或症状可进入诊断和文档证据规划。"
+      }
+    },
+    {
+      "id": "age_back_pain_post_discharge_hemoglobin",
+      "title": "年龄、背痛与出院后检验事件窗",
+      "category": ["demographic", "symptom", "laboratory", "post_discharge", "routing"],
+      "condition": "40岁以上并且背痛，出院后10天内血红蛋白指标异常",
+      "patient": {
+        "register_no": "0000000120",
+        "visit_no": "174",
+        "global_patient_id": "00001_120",
+        "global_visit_id": "00001_174"
+      },
+      "expected": {
+        "query_type": "compound",
+        "connector": "and",
+        "condition_count": 3,
+        "required_condition_contains": ["40岁以上", "背痛", "血红蛋白"],
+        "required_services": ["diagnosis-query", "lab-results", "encounter-info"],
+        "condition_ir": [
+          {
+            "condition_contains": "40岁以上",
+            "fields": {
+              "领域": "demographic",
+              "数值比较.threshold": 40.0,
+              "数值比较.unit": "岁"
+            }
+          },
+          {"condition_contains": "血红蛋白", "fields": {"领域": "laboratory"}}
+        ],
+        "temporal_assertions": [
+          {
+            "condition_contains": "血红蛋白",
+            "fields": {"事件": "discharge", "关系": "after", "时长": 10.0, "单位": "天"}
+          }
+        ]
+      },
+      "review": {
+        "status": "routing_only",
+        "note": "校验出院事件锚点和检验来源规划。"
+      }
+    },
+    {
+      "id": "pantoprazole_and_wbc_preop",
+      "title": "术前泮托拉唑与白细胞阈值",
+      "category": ["medication", "laboratory", "numeric", "preop", "routing"],
+      "condition": "术前48小时使用过泮托拉唑钠肠溶片且术前48小时内白细胞＞1.5×10⁹/L的患者",
+      "patient": {
+        "register_no": "0004925901",
+        "visit_no": "18759371",
+        "global_patient_id": "00001_4927021",
+        "global_visit_id": "00001_18759371"
+      },
+      "expected": {
+        "query_type": "compound",
+        "connector": "and",
+        "condition_count": 2,
+        "required_condition_contains": ["泮托拉唑钠肠溶片", "白细胞"],
+        "required_services": ["drug-interaction", "lab-results"],
+        "condition_ir": [
+          {"condition_contains": "泮托拉唑钠肠溶片", "fields": {"领域": "medication"}},
+          {
+            "condition_contains": "白细胞",
+            "fields": {
+              "领域": "laboratory",
+              "数值比较.operator": ">",
+              "数值比较.threshold": 1500000000.0
+            }
+          }
+        ],
+        "temporal_assertions": [
+          {
+            "condition_contains": "泮托拉唑钠肠溶片",
+            "fields": {"事件": "surgery", "关系": "before", "时长": 48.0, "单位": "小时"}
+          },
+          {
+            "condition_contains": "白细胞",
+            "fields": {"事件": "surgery", "关系": "before", "时长": 48.0, "单位": "小时"}
+          }
+        ]
+      },
+      "review": {
+        "status": "routing_only",
+        "note": "同时验证患者身份参数不能在结构化服务调用中丢失。"
+      }
+    }
+  ]
+}

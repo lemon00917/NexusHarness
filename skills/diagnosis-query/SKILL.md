@@ -10,6 +10,11 @@ metadata:
     entity_type: diagnosis
     domain: diagnosis
     evidence_types: [diagnosis_evidence, disease_symptom_evidence, symptom_evidence]
+    presentation:
+      record_type: diagnosis
+      record_identity:
+        label: 诊断ID
+        fields: [hosDiagId, hdcDiagId]
   triggers: ["诊断","确诊","疑诊","入院诊断","出院诊断","是什么病","得了","患有","存在","疾病","病症"]
   api:
     url: SerachQuery/MES0004

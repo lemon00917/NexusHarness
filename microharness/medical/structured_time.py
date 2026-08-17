@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from microharness.medical.record_identity import display_record_reference, identity_from_binding
 from microharness.medical.time_window import TimeWindow, parse_datetime_value, parse_datetime_values
 
 
@@ -47,7 +48,7 @@ def _is_time_label(label: str, eng: str) -> bool:
     return ("时间" in label and "日期时间" not in label) or lower.endswith("time")
 
 
-def _first_record_time(fields: list[dict[str, str]]):
+def _first_record_time(fields: list[dict[str, str]], *, allow_value_fallback: bool = True):
     date_value = ""
     time_value = ""
 
@@ -80,11 +81,32 @@ def _first_record_time(fields: list[dict[str, str]]):
     if parsed:
         return parsed
 
-    for item in fields:
-        values = parse_datetime_values(item.get("value", ""))
-        if values:
-            return values[0]
+    if allow_value_fallback:
+        for item in fields:
+            values = parse_datetime_values(item.get("value", ""))
+            if values:
+                return values[0]
     return None
+
+
+def first_labeled_record_time_from_bindings(bindings: list[dict[str, Any]]):
+    """Return only an explicitly labeled date/time field from one document record."""
+    fields: list[dict[str, str]] = []
+    for binding in bindings or []:
+        if not isinstance(binding, dict):
+            continue
+        _, label = _split_prefixed_label(str(binding.get("html_field") or ""))
+        value = str(binding.get("html_value") or binding.get("value") or "").strip()
+        if not value:
+            continue
+        fields.append(
+            {
+                "label": label,
+                "value": value,
+                "eng": str(binding.get("eng_field") or binding.get("xml_path", "").split("/")[-1] or ""),
+            }
+        )
+    return _first_record_time(fields, allow_value_fallback=False)
 
 
 def _format_record_line(prefix: str, fields: list[dict[str, str]]) -> str:
@@ -107,6 +129,37 @@ def _field_value(fields: list[dict[str, str]], names: tuple[str, ...]) -> str:
     return ""
 
 
+def _record_identity(fields: list[dict[str, str]]) -> dict[str, str]:
+    return next((
+        {
+            "record_id": str(item.get("record_id") or ""),
+            "record_id_label": str(item.get("record_id_label") or ""),
+            "record_id_field": str(item.get("record_id_field") or ""),
+        }
+        for item in fields if item.get("record_id")
+    ), {})
+
+
+def _item_reference(item: dict[str, Any]) -> str:
+    identity = _record_identity(item.get("fields") or [])
+    return display_record_reference(
+        item.get("prefix") or "[记录]",
+        identity.get("record_id", ""),
+        identity.get("record_id_label", ""),
+    )
+
+
+def _candidate_identity(item: dict[str, Any]) -> dict[str, str]:
+    identity = _record_identity(item.get("fields") or [])
+    return {
+        "记录": _item_reference(item),
+        "记录序号": str(item.get("prefix") or "[记录]"),
+        "记录ID": identity.get("record_id", ""),
+        "记录标识名称": identity.get("record_id_label", ""),
+        "记录标识字段": identity.get("record_id_field", ""),
+    }
+
+
 def _candidate_detail(
     item: dict[str, Any],
     *,
@@ -114,8 +167,13 @@ def _candidate_detail(
     time_window: TimeWindow,
 ) -> dict[str, Any]:
     fields = item.get("fields") or []
+    identity = _record_identity(fields)
     detail: dict[str, Any] = {
-        "记录": item["prefix"],
+        "记录": display_record_reference(item["prefix"], identity.get("record_id", ""), identity.get("record_id_label", "")),
+        "记录序号": item["prefix"],
+        "记录ID": identity.get("record_id", ""),
+        "记录标识名称": identity.get("record_id_label", ""),
+        "记录标识字段": identity.get("record_id_field", ""),
         "记录时间": _format_time(item["time"]),
         "是否在时间窗": in_window,
         "时间窗": time_window.describe(),
@@ -176,14 +234,14 @@ def _candidate_time_example(item: dict[str, Any], time_window: TimeWindow, *, in
     time_label, display_time = _first_display_time(fields)
     _, route = _first_field_with_label(fields, ("途径", "方式"))
     if display_name:
-        parts = [f"{item['prefix']} {name_label or '项目'}={display_name}"]
+        parts = [f"{_item_reference(item)} {name_label or '项目'}={display_name}"]
         parts.append(f"{time_label or '记录时间'}={display_time or _format_time(item['time'])}")
         if route:
             parts.append(f"途径/方式={route}")
         judgement = "在" if in_window else "不在"
         parts.append(f"{judgement}{time_window.scope}（范围：{time_window.describe()}）")
         return "，".join(parts)
-    return f"{item['prefix']} 记录时间={_format_time(item['time'])}"
+    return f"{_item_reference(item)} 记录时间={_format_time(item['time'])}"
 
 
 def _semantic_time_match(
@@ -244,11 +302,13 @@ def filter_bindings_by_time_window(
         value = str(binding.get("html_value") or binding.get("value") or "").strip()
         if not value:
             continue
+        identity = identity_from_binding(binding)
         records.setdefault(prefix, []).append(
             {
                 "label": label,
                 "value": value,
                 "eng": str(binding.get("eng_field") or binding.get("xml_path", "").split("/")[-1] or ""),
+                **identity,
             }
         )
 
@@ -293,8 +353,7 @@ def filter_bindings_by_time_window(
             "filtered_lines": [item["line"] for item in semantic_window],
             "reason": "；".join(dict.fromkeys(item["semantic_reason"] for item in semantic_window if item.get("semantic_reason"))),
             "candidate_records": [
-                {
-                    "记录": item["prefix"],
+                _candidate_identity(item) | {
                     "记录时间": _format_time(item["time"]),
                     "是否在时间窗": True,
                     "时间判断": item.get("semantic_reason") or "诊断类型符合时间语义",
@@ -349,7 +408,7 @@ def filter_bindings_by_time_window(
             "reason": reason,
             "fields": "\n".join(item["line"] for item in missing_time[:20]),
             "candidate_records": [
-                {"记录": item["prefix"], "记录时间": "未取得", "是否在时间窗": False}
+                _candidate_identity(item) | {"记录时间": "未取得", "是否在时间窗": False}
                 for item in missing_time
             ],
         }

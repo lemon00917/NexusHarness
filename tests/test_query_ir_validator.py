@@ -42,3 +42,12 @@ def test_validator_preserves_numeric_unit_clause_text():
     assert "numeric_threshold_changed" in issue_codes
     assert "unit_missing" in issue_codes
 
+
+def test_validator_repairs_changed_temporal_quantity():
+    original = "出院二十天内血红蛋白指标异常"
+    analysis = {"conditions": [{"text": "出院后十天内血红蛋白指标异常", "keyword": "血红蛋白"}]}
+
+    repaired = validate_and_repair_analysis(analysis, original, fallback_keyword_fn=_kw)
+
+    assert repaired["conditions"][0]["text"] == original
+    assert any(i["code"] == "temporal_quantity_changed" for i in repaired["ir_validation"]["issues"])

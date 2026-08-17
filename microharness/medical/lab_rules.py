@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
+from microharness.medical.entity_normalization import entity_candidates as normalized_entity_candidates
 from microharness.medical.temporal_parser import (
     compare_values,
     normalize_numeric_text,
@@ -22,6 +23,7 @@ from microharness.medical.temporal_parser import (
 )
 from microharness.medical.query_ir_validator import parse_executable_numeric_comparison
 from microharness.medical.display_text import display_status
+from microharness.medical.record_identity import display_record_reference, identity_from_binding
 from microharness.medical.time_window import TimeWindow, parse_datetime_value, requires_period_window
 
 
@@ -59,6 +61,9 @@ _RESULT_FIELDS = {
 @dataclass
 class LabRecord:
     prefix: str
+    record_id: str = ""
+    record_id_label: str = ""
+    record_id_field: str = ""
     fields: dict[str, str] = field(default_factory=dict)
     display_fields: dict[str, str] = field(default_factory=dict)
     lines: list[str] = field(default_factory=list)
@@ -97,6 +102,9 @@ class LabRecord:
 
     def compact_line(self) -> str:
         return " | ".join(self.lines)
+
+    def display_reference(self) -> str:
+        return display_record_reference(self.prefix or "检验记录", self.record_id, self.record_id_label)
 
     def inspection_datetime(self) -> Optional[datetime]:
         raw = " ".join(
@@ -144,6 +152,11 @@ def lab_records_from_bindings(bindings: list[dict[str, Any]]) -> list[LabRecord]
         field_label = _strip_prefix(label)
         eng = str(b.get("eng_field") or b.get("xml_path", "").split("/")[-1] or field_label)
         rec = records.setdefault(prefix, LabRecord(prefix=prefix))
+        identity = identity_from_binding(b)
+        if identity and not rec.record_id:
+            rec.record_id = identity["record_id"]
+            rec.record_id_label = identity["record_id_label"]
+            rec.record_id_field = identity["record_id_field"]
         rec.fields[eng] = val
         rec.display_fields[field_label] = val
         rec.lines.append(f"{label}: {val}" if label else val)
@@ -272,6 +285,33 @@ def _select_candidate_records(keyword: str, records: list[LabRecord]) -> list[La
     if best >= 85:
         return [rec for score, rec in scored if score >= 85]
     return [rec for _, rec in scored]
+
+
+def _select_candidate_records_for_entities(
+    keywords: list[str],
+    records: list[LabRecord],
+) -> tuple[list[LabRecord], dict[int, str]]:
+    """Select records by the best canonical-name or exact-alias candidate."""
+    scored: list[tuple[int, LabRecord, str]] = []
+    for record in records:
+        candidate_scores = [
+            (_item_match_score(keyword, record), keyword)
+            for keyword in keywords
+            if keyword
+        ]
+        if not candidate_scores:
+            continue
+        score, matched_entity = max(candidate_scores, key=lambda item: item[0])
+        if score > 0:
+            scored.append((score, record, matched_entity))
+    if not scored:
+        return [], {}
+    best = max(score for score, _, _ in scored)
+    selected = [item for item in scored if best < 85 or item[0] >= 85]
+    return (
+        [record for _, record, _ in selected],
+        {id(record): matched_entity for _, record, matched_entity in selected},
+    )
 
 
 def _unit_has_scientific_volume(unit: str) -> bool:
@@ -473,7 +513,7 @@ def _record_evidence_line(record: LabRecord, condition: str) -> str:
     flag = record.get("inspAbnoFlag", "异常标志") or "无"
     _, status_reason = _record_satisfies(record, condition)
     return (
-        f"{record.prefix or '检验记录'} 检测时间={inspected_text}，"
+        f"{record.display_reference()} 检测时间={inspected_text}，"
         f"结果：{_display_measurement(value, unit)}，异常标志：{flag}，{status_reason}"
     )
 
@@ -498,7 +538,7 @@ def _record_judgment_summary(record: LabRecord, judgment: str) -> str:
     reference = record.get("inspResultRange", "参考范围") or "未提供"
     item = record.get("inspItemDesc", "化验项目描述") or record.get("inspItemAbbr", "缩写") or "检验项目"
     return (
-        f"{record.prefix or '检验记录'} 项目={item}，检测时间={inspected_text}，"
+        f"{record.display_reference()} 项目={item}，检测时间={inspected_text}，"
         f"结果={_display_measurement(value, unit)}，异常标志={flag}，参考范围={reference}，{judgment}"
     )
 
@@ -513,8 +553,19 @@ def _record_candidate_detail(
     in_window: Optional[bool] = None
     if time_window and time_window.resolved and time_window.start and inspected_at:
         in_window = time_window.contains(inspected_at)
+    if time_window and time_window.required:
+        if not time_window.resolved or inspected_at is None:
+            scope_status = "UNKNOWN"
+        else:
+            scope_status = "IN_SCOPE" if in_window else "OUT_OF_SCOPE"
+    else:
+        scope_status = "NOT_REQUIRED"
     return {
-        "记录": record.prefix or "检验记录",
+        "记录": record.display_reference(),
+        "记录序号": record.prefix or "检验记录",
+        "记录ID": record.record_id,
+        "记录标识名称": record.record_id_label,
+        "记录标识字段": record.record_id_field,
         "项目": record.get("inspItemDesc", "化验项目描述"),
         "缩写": record.get("inspItemAbbr", "缩写"),
         "检测时间": inspected_at.strftime("%Y-%m-%d %H:%M:%S") if inspected_at else "",
@@ -525,6 +576,11 @@ def _record_candidate_detail(
         "数值判断": value_reason,
         "数值是否满足": bool(ok),
         "是否在时间窗": in_window,
+        "record_status": "MATCHED" if ok else "NOT_MATCHED",
+        "record_reason_code": "VALUE_CONDITION_MET" if ok else "VALUE_CONDITION_NOT_MET",
+        "record_reason": value_reason,
+        "scope_status": scope_status,
+        "event_time": inspected_at.strftime("%Y-%m-%d %H:%M:%S") if inspected_at else "",
     }
 
 
@@ -532,26 +588,45 @@ def _candidate_details(
     records: list[LabRecord],
     condition: str,
     time_window: Optional[TimeWindow] = None,
+    matched_entities: dict[int, str] | None = None,
 ) -> list[dict[str, Any]]:
-    return [
-        _record_candidate_detail(rec, condition, time_window)
-        for rec in sorted(records or [], key=lambda r: r.inspection_datetime() or datetime.max)
-    ]
+    details = []
+    for record in sorted(records or [], key=lambda r: r.inspection_datetime() or datetime.max):
+        detail = _record_candidate_detail(record, condition, time_window)
+        if matched_entities and id(record) in matched_entities:
+            detail["匹配实体"] = matched_entities[id(record)]
+        details.append(detail)
+    return details
 
 
 def judge_lab_condition(
     condition: str,
     bindings: list[dict[str, Any]],
     time_window: Optional[TimeWindow] = None,
+    *,
+    entity_candidates: list[str] | None = None,
 ) -> dict[str, Any]:
     if not is_lab_bindings(bindings):
         return {"applicable": False}
 
     records = lab_records_from_bindings(bindings)
     if not records:
-        return {"applicable": True, "matched": False, "reason": "检验结果为空", "fields": ""}
+        return {
+            "applicable": True,
+            "matched": False,
+            "status": "NOT_MENTIONED",
+            "reason_code": "NO_MATCHING_RECORD",
+            "reason": "检验数据源查询成功，但未返回检验记录",
+            "fields": "",
+            "candidate_count": 0,
+            "candidate_records": [],
+        }
 
     keyword = extract_lab_keyword(condition)
+    keywords = normalized_entity_candidates(
+        keyword,
+        {"entity_candidates": entity_candidates or []},
+    )
     value_condition = _condition_without_time_scope(condition)
     has_lab_predicate = bool(
         parse_executable_numeric_comparison(value_condition)
@@ -560,8 +635,13 @@ def judge_lab_condition(
     )
     if len(keyword) < 2 and not has_lab_predicate:
         return {"applicable": False}
-    candidate_records = _select_candidate_records(keyword, records)
+    candidate_records, matched_entities = _select_candidate_records_for_entities(keywords, records)
     candidate_records = _filter_by_numeric_dimension(condition, candidate_records)
+    matched_entities = {
+        id(record): matched_entities[id(record)]
+        for record in candidate_records
+        if id(record) in matched_entities
+    }
     all_fields = "\n".join(r.compact_line() for r in records)[:4000]
 
     if not candidate_records:
@@ -569,19 +649,25 @@ def judge_lab_condition(
         return {
             "applicable": True,
             "matched": False,
+            "status": "NOT_MENTIONED",
+            "reason_code": "NO_MATCHING_RECORD",
             "reason": reason,
             "fields": all_fields,
             "matched_prefixes": [],
             "keyword": keyword,
+            "candidate_count": 0,
+            "candidate_records": [],
         }
 
     all_candidate_records = list(candidate_records)
     if requires_period_window(condition):
         if not time_window or not time_window.resolved or not time_window.start:
-            details = _candidate_details(candidate_records, condition, time_window)
+            details = _candidate_details(candidate_records, condition, time_window, matched_entities)
             return {
                 "applicable": True,
                 "matched": False,
+                "status": "UNKNOWN",
+                "reason_code": "MISSING_EVENT_TIME",
                 "reason": (
                     f"共找到{len(candidate_records)}条检验项目'{keyword}'记录，"
                     f"但缺少{time_window.scope if time_window else '时间范围'}锚点，"
@@ -609,10 +695,12 @@ def judge_lab_condition(
         if not in_window_records:
             window_text = time_window.describe()
             if missing_time_records and not outside_records:
-                details = _candidate_details(candidate_records, condition, time_window)
+                details = _candidate_details(candidate_records, condition, time_window, matched_entities)
                 return {
                     "applicable": True,
                     "matched": False,
+                    "status": "UNKNOWN",
+                    "reason_code": "MISSING_EVENT_TIME",
                     "reason": (
                         f"共找到{len(candidate_records)}条检验项目'{keyword}'记录，"
                         f"但均缺少检测日期时间，无法判断是否在{time_window.scope}"
@@ -626,10 +714,12 @@ def judge_lab_condition(
                     "candidate_records": details,
                 }
             outside_text = _record_evidence_summary(outside_records + missing_time_records, condition)
-            details = _candidate_details(candidate_records, condition, time_window)
+            details = _candidate_details(candidate_records, condition, time_window, matched_entities)
             return {
                 "applicable": True,
                 "matched": False,
+                "status": "NOT_MATCHED",
+                "reason_code": "TIME_OUTSIDE_WINDOW",
                 "reason": (
                     f"共找到{len(candidate_records)}条检验项目'{keyword}'记录，"
                     f"其中{len(outside_records)}条检测时间不在{time_window.scope}"
@@ -666,6 +756,8 @@ def judge_lab_condition(
         return {
             "applicable": True,
             "matched": True,
+            "status": "MATCHED",
+            "reason_code": "MATCH_CONFIRMED",
             "reason": (
                 f"共找到{len(all_candidate_records)}条检验项目'{keyword}'记录，"
                 + (f"其中{in_window_count}条在{time_window.scope}内，" if requires_period_window(condition) and time_window else "")
@@ -675,12 +767,14 @@ def judge_lab_condition(
             "matched_prefixes": prefixes,
             "keyword": keyword,
             "candidate_count": len(all_candidate_records),
-            "candidate_records": _candidate_details(all_candidate_records, condition, time_window),
+            "candidate_records": _candidate_details(all_candidate_records, condition, time_window, matched_entities),
         }
 
     return {
         "applicable": True,
         "matched": False,
+        "status": "NOT_MATCHED",
+        "reason_code": "VALUE_CONDITION_NOT_MET",
         "reason": (
             f"共找到{len(all_candidate_records)}条检验项目'{keyword}'记录，"
             "但结果均不符合：" + "；".join(failed_reasons[:20])
@@ -689,5 +783,5 @@ def judge_lab_condition(
         "matched_prefixes": [],
         "keyword": keyword,
         "candidate_count": len(all_candidate_records),
-        "candidate_records": _candidate_details(all_candidate_records, condition, time_window),
+        "candidate_records": _candidate_details(all_candidate_records, condition, time_window, matched_entities),
     }

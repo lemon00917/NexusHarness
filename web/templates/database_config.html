@@ -29,6 +29,9 @@
         .dc-help { margin: -4px 0 12px 112px; color: var(--text-dim); font-size: 11px; line-height: 1.6; }
         .dc-help a { color: var(--accent); text-decoration: none; }
         .dc-help a:hover { text-decoration: underline; }
+        .dc-check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
+        .dc-check input { width: auto; flex: none; }
+        .dc-status { font-size: 11px; color: var(--text-dim); line-height: 1.6; }
     </style>
 </head>
 <body>
@@ -67,6 +70,30 @@
         <button class="btn btn-ghost" onclick="testDB('mysql')">测试连接</button>
         <span id="mysqlTest"></span>
     </div>
+    <div class="dc-card" id="dmpConfig">
+        <h3>DMP 数据源</h3>
+        <div class="dc-row"><label>Host</label><input id="dmpHost" placeholder="127.0.0.1"></div>
+        <div class="dc-row"><label>Port</label><input id="dmpPort" placeholder="5432" type="number"></div>
+        <div class="dc-row"><label>Database</label><input id="dmpDatabase" placeholder="dmp"></div>
+        <div class="dc-row"><label>Schema</label><input id="dmpSchema" placeholder="sm_dmp"></div>
+        <div class="dc-row"><label>User</label><input id="dmpUser" autocomplete="username"></div>
+        <div class="dc-row"><label>Password</label><input id="dmpPassword" type="password" autocomplete="new-password" placeholder="未配置"></div>
+        <div class="dc-row">
+            <label></label>
+            <label class="dc-check"><input id="dmpClearPassword" type="checkbox">清除已保存密码</label>
+        </div>
+        <div class="dc-row"><label>最小连接数</label><input id="dmpPoolMin" type="number" min="1" max="100" value="1"></div>
+        <div class="dc-row"><label>最大连接数</label><input id="dmpPoolMax" type="number" min="1" max="100" value="10"></div>
+        <div class="dc-row"><label>连接超时</label><input id="dmpConnectTimeout" type="number" min="1" max="300" value="10"><span class="dc-status">秒</span></div>
+        <div class="dc-row"><label>查询超时</label><input id="dmpStatementTimeout" type="number" min="1" max="3600" value="30"><span class="dc-status">秒</span></div>
+        <div class="dc-row">
+            <button class="btn btn-ghost" onclick="testDmpDatabase()">测试连接</button>
+            <button class="btn btn-primary" onclick="saveDmpDatabase()">保存 DMP</button>
+            <span id="dmpTest"></span>
+        </div>
+        <div id="dmpConfigStatus" class="dc-status"></div>
+        <div class="dc-help"><a href="/template-binding">打开模板绑定工作台</a></div>
+    </div>
     <div class="dc-card" id="servicesCard">
         <h3>🔗 外部服务</h3>
         <div class="dc-row"><label>Base URL</label><input id="svcBaseUrl" placeholder="http://43.143.68.242:9090/emviewdoctor/hdc/" style="flex:1;"></div>
@@ -96,6 +123,23 @@
 <script>
 let _services = { base_url: '', services: {} };
 let _medicalCatalog = { source: 'local', external_url: '' };
+let _dmpConfig = { password_configured: false, environment_overrides: [] };
+
+function readDmpForm() {
+    return {
+        host: document.getElementById('dmpHost').value.trim(),
+        port: parseInt(document.getElementById('dmpPort').value, 10) || 5432,
+        database: document.getElementById('dmpDatabase').value.trim(),
+        schema: document.getElementById('dmpSchema').value.trim() || 'sm_dmp',
+        user: document.getElementById('dmpUser').value.trim(),
+        password: document.getElementById('dmpPassword').value,
+        pool_min: parseInt(document.getElementById('dmpPoolMin').value, 10) || 1,
+        pool_max: parseInt(document.getElementById('dmpPoolMax').value, 10) || 10,
+        connect_timeout_seconds: parseInt(document.getElementById('dmpConnectTimeout').value, 10) || 10,
+        statement_timeout_seconds: parseInt(document.getElementById('dmpStatementTimeout').value, 10) || 30,
+        clear_password: document.getElementById('dmpClearPassword').checked
+    };
+}
 
 async function loadAll() {
     // Load DB config
@@ -115,6 +159,30 @@ async function loadAll() {
     document.getElementById('mysqlUser').value = mc.user||'';
     document.getElementById('mysqlPass').value = mc.password||'';
     onTypeChange();
+    // Load the independent DMP/openGauss data source used by template binding.
+    try {
+        const dr = await fetch('/api/template-binding/database/config');
+        if (!dr.ok) throw new Error(`DMP 数据源配置读取失败 (${dr.status})`);
+        _dmpConfig = await dr.json();
+        document.getElementById('dmpHost').value = _dmpConfig.host || '127.0.0.1';
+        document.getElementById('dmpPort').value = _dmpConfig.port || 5432;
+        document.getElementById('dmpDatabase').value = _dmpConfig.database || '';
+        document.getElementById('dmpSchema').value = _dmpConfig.schema || 'sm_dmp';
+        document.getElementById('dmpUser').value = _dmpConfig.user || '';
+        document.getElementById('dmpPassword').value = '';
+        document.getElementById('dmpPassword').placeholder = _dmpConfig.password_configured ? '已配置，留空保持不变' : '未配置';
+        document.getElementById('dmpClearPassword').checked = false;
+        document.getElementById('dmpPoolMin').value = _dmpConfig.pool_min || 1;
+        document.getElementById('dmpPoolMax').value = _dmpConfig.pool_max || 10;
+        document.getElementById('dmpConnectTimeout').value = _dmpConfig.connect_timeout_seconds || 10;
+        document.getElementById('dmpStatementTimeout').value = _dmpConfig.statement_timeout_seconds || 30;
+        const overrides = _dmpConfig.environment_overrides || [];
+        document.getElementById('dmpConfigStatus').textContent = overrides.length
+            ? `环境变量覆盖字段：${overrides.join('、')}`
+            : (_dmpConfig.configured ? '配置已生效' : '尚未完成配置');
+    } catch (error) {
+        document.getElementById('dmpConfigStatus').textContent = error.message || 'DMP 数据源配置读取失败';
+    }
     // Load services
     const sr = await fetch('/api/external-services/config');
     _services = await sr.json();
@@ -192,6 +260,41 @@ async function testDB(type) {
         el.innerHTML = d.ok ? '<span class="dc-test ok">✓ 连接成功</span>' : '<span class="dc-test fail">✗ '+escapeHtml(d.error||'失败')+'</span>';
     } catch(e) {
         el.innerHTML = '<span class="dc-test fail">✗ '+escapeHtml(e.message)+'</span>';
+    }
+}
+async function testDmpDatabase() {
+    const el = document.getElementById('dmpTest');
+    el.innerHTML = '<span style="color:var(--text-dim);">测试中...</span>';
+    try {
+        const response = await fetch('/api/template-binding/database/test', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(readDmpForm())
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+        el.innerHTML = '<span class="dc-test ok">连接成功</span>';
+    } catch (error) {
+        el.innerHTML = '<span class="dc-test fail">'+escapeHtml(error.message || '连接失败')+'</span>';
+    }
+}
+async function saveDmpDatabase() {
+    try {
+        const response = await fetch('/api/template-binding/database/config', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(readDmpForm())
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+        _dmpConfig = result;
+        document.getElementById('dmpPassword').value = '';
+        document.getElementById('dmpPassword').placeholder = result.password_configured ? '已配置，留空保持不变' : '未配置';
+        document.getElementById('dmpClearPassword').checked = false;
+        document.getElementById('dmpConfigStatus').textContent = '配置已生效';
+        showToast('DMP 数据源已保存并立即生效');
+    } catch (error) {
+        showToast(error.message || 'DMP 数据源保存失败');
     }
 }
 function onTypeChange() {
