@@ -432,9 +432,27 @@ class TemplateBindingCommitService:
             for value in (node.get("selectors") or [])
             if str(value).strip()
         ]
-        if not selectors and node.get("anchor_name"):
-            selectors.append(str(node["anchor_name"]).strip())
-        return cls._canonical_code_selectors(selectors)
+        canonical = cls._canonical_code_selectors(selectors)
+        if canonical:
+            return canonical
+
+        # A value node can inherit its HTML code from the surrounding anchor
+        # range.  The parser exposes those inherited selectors separately so
+        # that matching can use the whole group, but DMP needs one concrete
+        # node code.  Prefer the most specific (deepest) inherited anchor.
+        anchor_name = str(node.get("anchor_name") or "").strip()
+        if anchor_name:
+            canonical = cls._canonical_code_selectors([anchor_name])
+            if canonical:
+                return canonical
+
+        group_selectors = [
+            str(value).strip()
+            for value in (node.get("group_selectors") or [])
+            if str(value).strip()
+        ]
+        canonical = cls._canonical_code_selectors(group_selectors)
+        return canonical[-1:] if canonical else []
 
     @staticmethod
     def _mapping_value_tokens(node: dict[str, Any]) -> list[str]:

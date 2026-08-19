@@ -141,6 +141,35 @@ def test_commit_stores_only_canonical_code_for_binding_metadata_node():
     assert saved_node["html_node_code"] == "code:S0032"
 
 
+def test_commit_uses_deepest_group_selector_for_unannotated_value_node():
+    repository = FakeRepository()
+    html = (
+        '<a name="S001" usage="1" type="start"></a>'
+        '<a name="S001_V006" usage="2" type="start"></a>'
+        '<span>[admissionDateTime]</span>'
+        '<a name="S001_V006" usage="2" type="end"></a>'
+        '<a name="S001" usage="1" type="end"></a>'
+    )
+    repository.get_html_template = lambda template_id, category_id, include_html=False: {
+        "template_id": template_id,
+        "print_template_category_id": category_id,
+        "html_name": "Admission",
+        "html_info": base64.b64encode(html.encode("utf-8")).decode("ascii"),
+    }
+
+    _service(repository).commit(
+        html_template_id="h1",
+        html_category_id="hc1",
+        standard_template_id="s1",
+        node_mappings=[{"standard_node_id": "n1", "html_node_keys": ["html-node-3"]}],
+    )
+
+    saved_node = repository.saved["node_mappings"][0]
+    assert saved_node["html_node_id"] == "code:S001_V006"
+    assert saved_node["html_node_code"] == "code:S001_V006"
+    assert saved_node["mapping_values"] == "[admissionDateTime]"
+
+
 def test_commit_stores_static_text_instead_of_code_as_mapping_value():
     repository = FakeRepository()
     repository.get_html_template = lambda template_id, category_id, include_html=False: {
